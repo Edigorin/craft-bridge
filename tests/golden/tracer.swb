@@ -7,7 +7,7 @@ Dim swDoc As SldWorks.ModelDoc2
 Dim swSketchMgr As SketchManager
 Dim reportPath As String
 Dim gMsg As String
-Dim gSketchName As String
+Dim skName2 As String
 Dim pt2(0 To 7) As SldWorks.SketchPoint
 Dim sl2(0 To 3) As SldWorks.SketchLine
 
@@ -242,7 +242,7 @@ Function BuildExtrude3() As String
     Dim ok As Boolean
     Dim feat As SldWorks.Feature
     Dim dm As SldWorks.Dimension
-    ok = swDoc.Extension.SelectByID2(gSketchName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    ok = swDoc.Extension.SelectByID2(skName2, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If Not ok Then gMsg = "could not select the sketch for the extrude": GoTo ExFail
     Set feat = swDoc.FeatureManager.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.012, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)
     If feat Is Nothing Then gMsg = "the extrude was not created": GoTo ExFail

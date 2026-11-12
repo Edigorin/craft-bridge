@@ -15,6 +15,7 @@ use craft_bridge::swb;
 
 const TRACER: &str = include_str!("fixtures/tracer.json");
 const TRACER_STOP: &str = include_str!("fixtures/tracer-stop.json");
+const TRACER_REVOLVE: &str = include_str!("fixtures/tracer-revolve.json");
 const STEP_FIXTURE: &str = include_str!("fixtures/part.step");
 const GOLDEN_MACRO: &str = include_str!("golden/tracer.swb");
 const GOLDEN_PLAN_JSON: &str = include_str!("golden/tracer-plan.json");
@@ -245,4 +246,40 @@ fn generated_outputs_are_capped() {
     .to_string();
     assert!(err.contains("over the limit"), "unexpected: {err}");
     assert!(!out.exists(), "nothing may be written when the cap trips");
+}
+
+#[test]
+fn revolve_axis_styles_and_full_turns_replay() {
+    let case = Case::new(TRACER_REVOLVE);
+    case.build_to("rev.swb", false).unwrap();
+    let macro_text = fs::read_to_string(case.dir.path().join("rev.swb")).unwrap();
+    assert!(macro_text.contains("FeatureRevolve2"), "no revolve emitted");
+    assert!(
+        macro_text.contains("skName0"),
+        "the sketch binding is missing"
+    );
+    assert!(
+        macro_text.contains("sl0(0).Select"),
+        "the axis is not its sketch line"
+    );
+    assert!(
+        macro_text.contains("sgFix"),
+        "the helper axis is not anchored"
+    );
+    let outcome = case.build_to("rev2.swb", false).unwrap();
+    assert_eq!(outcome.plan.steps[1].status, PlanStatus::Mapped);
+    assert_eq!(outcome.plan.steps[2].status, PlanStatus::Mapped);
+}
+
+#[test]
+fn partial_revolve_needs_the_sketch_normal_convention() {
+    let recipe = TRACER_REVOLVE.replace(
+        "\"convention\": \"sketch_normal\"",
+        "\"convention\": \"legacy_axis_start\"",
+    );
+    let steps = plan_of(&recipe);
+    assert_eq!(steps[1].status, PlanStatus::FallbackPlanned);
+    // The stop rule cascades: the full turn after the stopped step is
+    // not-executed. Its convention-freedom is covered by the fixture test.
+    assert_eq!(steps[2].status, PlanStatus::NotExecuted);
 }

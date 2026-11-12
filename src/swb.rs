@@ -8,7 +8,8 @@
 //! macro. Numbers are emitted locale-independent.
 
 use crate::replay::{
-    DimKind, DimensionT, ExtrudeStep, OriginPlane, PlannedStep, RelationT, SketchStep, Work,
+    AxisSel, DimKind, DimensionT, ExtrudeStep, OriginPlane, PlannedStep, RelationT, RevolveStep,
+    SketchStep, Work,
 };
 
 /// VBA string-literal escaping: quotes doubled, control characters removed,
@@ -99,8 +100,8 @@ pub fn emit(steps: &[PlannedStep], artifact: &str, bridge_version: &str) -> Stri
     out.push_str("Dim swSketchMgr As SketchManager\n");
     out.push_str("Dim reportPath As String\n");
     out.push_str("Dim gMsg As String\n");
-    out.push_str("Dim gSketchName As String\n");
     for (index, sk) in &sketches {
+        out.push_str(&format!("Dim skName{index} As String\n"));
         out.push_str(&format!(
             "Dim pt{index}(0 To {}) As SldWorks.SketchPoint\n",
             sk.slot_count().saturating_sub(1)
@@ -188,9 +189,17 @@ pub fn emit(steps: &[PlannedStep], artifact: &str, bridge_version: &str) -> Stri
                 ));
                 out.push_str("    If st = \"failed\" Then stopModel = True\n\n");
             }
-            Work::Extrude(_) => {
+            Work::Extrude(_) | Work::Revolve(_) => {
                 out.push_str("    If Not stopModel Then\n");
-                out.push_str(&format!("        st = BuildExtrude{}()\n", step.index));
+                out.push_str(&format!(
+                    "        st = Build{}{}()\n",
+                    if matches!(&step.work, Work::Extrude(_)) {
+                        "Extrude"
+                    } else {
+                        "Revolve"
+                    },
+                    step.index
+                ));
                 out.push_str("    Else\n        st = \"not-executed\"\n        gMsg = \"after the first stopped step\"\n    End If\n");
                 out.push_str(&format!(
                     "    WriteStep stepIdx, {}, st, gMsg\n",
@@ -239,6 +248,16 @@ pub fn emit(steps: &[PlannedStep], artifact: &str, bridge_version: &str) -> Stri
     }
     for (index, ex) in &extrudes {
         out.push_str(&emit_extrude_subs(*index, ex));
+    }
+    let revolves: Vec<(usize, &crate::replay::RevolveStep)> = steps
+        .iter()
+        .filter_map(|s| match &s.work {
+            Work::Revolve(rv) => Some((s.index, rv)),
+            _ => None,
+        })
+        .collect();
+    for (index, rv) in &revolves {
+        out.push_str(&emit_revolve_subs(*index, rv));
     }
 
     // ---- shared helpers (the checkpoint's, unchanged in spirit) ----
@@ -623,7 +642,10 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
     out.push_str(&format!(
         "Function BuildExtrude{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n"
     ));
-    out.push_str("    ok = swDoc.Extension.SelectByID2(gSketchName, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n");
+    out.push_str(&format!(
+        "    ok = swDoc.Extension.SelectByID2(skName{}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n",
+        ex.sketch_step
+    ));
     out.push_str(
         "    If Not ok Then gMsg = \"could not select the sketch for the extrude\": GoTo ExFail\n",
     );
@@ -693,6 +715,130 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
     out.push_str(&format!(
         "    gMsg = {}\n    BuildExtrude{index} = \"created\"\n    Exit Function\n\nExFail:\n    BuildExtrude{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    On Error Resume Next\n    gMsg = Err.Description\n    BuildExtrude{index} = \"failed\"\nEnd Function\n\n",
         vb_lit(&message)
+    ));
+    out
+}
+
+/// Revolve builder: reopen the profile sketch only to draw and anchor a
+/// helper axis when the axis is not already a line of the sketch, then select
+/// the sketch plus the axis and call FeatureRevolve2. The revolve verifies
+/// its angle dimension (validated lookup, evaluated expectation); sweep
+/// direction and volume of partial revolves are acceptance checks (ticket #9).
+fn emit_revolve_subs(index: usize, rv: &RevolveStep) -> String {
+    use crate::replay::{DimEquation as DE, RevolveKind as RK};
+    let mut out = String::new();
+    out.push_str(&format!("' Revolve step {index}: {}\n", vb_lit(&rv.name)));
+    out.push_str(&format!(
+        "Function BuildRevolve{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n    Dim ax As SldWorks.SketchLine\n"
+    ));
+    out.push_str(&format!(
+        "    ok = swDoc.Extension.SelectByID2(skName{}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n",
+        rv.sketch_step
+    ));
+    out.push_str(
+        "    If Not ok Then gMsg = \"could not select the profile sketch\": GoTo ExFail\n",
+    );
+    match &rv.axis {
+        AxisSel::Emitted { origin, dir } => {
+            // Draw the helper axis inside the sketch, fix it so it cannot
+            // drift, and leave the sketch again.
+            let l = 0.05f64; // metres each way
+            let (x1, y1) = (
+                origin[0] / 1000.0 - dir[0] * l,
+                origin[1] / 1000.0 - dir[1] * l,
+            );
+            let (x2, y2) = (
+                origin[0] / 1000.0 + dir[0] * l,
+                origin[1] / 1000.0 + dir[1] * l,
+            );
+            out.push_str("    swSketchMgr.InsertSketch True\n");
+            out.push_str(&format!(
+                "    Set ax = swSketchMgr.CreateLine({}, {}, 0#, {}, {}, 0#)\n",
+                vba_num(x1),
+                vba_num(y1),
+                vba_num(x2),
+                vba_num(y2)
+            ));
+            out.push_str("    ax.Construction = True\n");
+            out.push_str("    ax.Select False\n");
+            out.push_str("    swDoc.SketchAddConstraints \"sgFix\"\n");
+            out.push_str("    swDoc.ClearSelection2 True\n");
+        }
+        AxisSel::Line(_) => {}
+    }
+    out.push_str("    swSketchMgr.InsertSketch True\n");
+    // Select the sketch and the axis, then revolve.
+    out.push_str(&format!(
+        "    ok = swDoc.Extension.SelectByID2(skName{}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n",
+        rv.sketch_step
+    ));
+    out.push_str(
+        "    If Not ok Then gMsg = \"could not select the profile sketch\": GoTo ExFail\n",
+    );
+    match &rv.axis {
+        AxisSel::Line(li) => out.push_str(&format!(
+            "    If Not sl{}({li}).Select(True) Then gMsg = \"could not select the revolve axis\": GoTo ExFail\n",
+            rv.sketch_step
+        )),
+        AxisSel::Emitted { .. } => out.push_str(
+            "    If Not ax.Select(True) Then gMsg = \"could not select the helper axis\": GoTo ExFail\n",
+        ),
+    }
+    let (call, verify, message) = match &rv.kind {
+        RK::Blind { angle_rad, reverse } => (
+            format!(
+                "    Set feat = swDoc.FeatureManager.FeatureRevolve2(True, True, False, False, {}, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n",
+                if *reverse { "True" } else { "False" },
+                vba_num(*angle_rad)
+            ),
+            vec![(1usize, *angle_rad)],
+            format!("revolve {} deg", angle_rad.to_degrees()),
+        ),
+        RK::Symmetric { total_rad } => (
+            format!(
+                "    Set feat = swDoc.FeatureManager.FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondMidPlane, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n",
+                vba_num(*total_rad)
+            ),
+            vec![(1, *total_rad)],
+            format!("symmetric revolve {} deg total", total_rad.to_degrees()),
+        ),
+        RK::TwoSided { first_rad, second_rad } => (
+            format!(
+                "    Set feat = swDoc.FeatureManager.FeatureRevolve2(False, True, False, False, False, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, {}, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n",
+                vba_num(*first_rad),
+                vba_num(*second_rad)
+            ),
+            vec![(1, *first_rad), (2, *second_rad)],
+            format!(
+                "two-sided revolve {} + {} deg",
+                first_rad.to_degrees(),
+                second_rad.to_degrees()
+            ),
+        ),
+    };
+    out.push_str(&call);
+    out.push_str(
+        "    If feat Is Nothing Then gMsg = \"the revolve was not created\": GoTo ExFail\n",
+    );
+    for (which, expected) in verify {
+        out.push_str(&format!(
+            "    Set dm = swDoc.Parameter(\"D{which}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the revolve angle dimension D{which} is missing\": GoTo ExFail\n    If Abs(dm.SystemValue - {}) > 0.000001 Then gMsg = \"the revolve angle D{which} does not match\": GoTo ExFail\n",
+            vba_num(expected)
+        ));
+    }
+    let equations: Vec<&DE> = rv.equations.iter().collect();
+    for eq in equations {
+        out.push_str(&format!(
+            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the revolve angle dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}) Then gMsg = \"the revolve angle equation did not evaluate\": GoTo ExFail\n",
+            eq.which,
+            eq.which,
+            vb_lit(&eq.rhs),
+            vba_num(eq.expect_si)
+        ));
+    }
+    out.push_str(&format!(
+        "    gMsg = {}\n    BuildRevolve{index} = \"created\"\n    Exit Function\n\nExFail:\n    BuildRevolve{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    On Error Resume Next\n    gMsg = Err.Description\n    BuildRevolve{index} = \"failed\"\nEnd Function\n\n",
+        vb_lit(&format!("{message}; sweep direction and volume are acceptance checks"))
     ));
     out
 }

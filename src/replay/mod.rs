@@ -116,6 +116,7 @@ pub enum Work {
     },
     Sketch(SketchStep),
     Extrude(ExtrudeStep),
+    Revolve(RevolveStep),
     /// Recorded but not executed and not model work (a text parameter, an
     /// expression outside the supported subset): never triggers the stop rule.
     Note,
@@ -232,6 +233,8 @@ pub enum ExtrudeKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtrudeStep {
     pub name: String,
+    /// The plan index of the sketch step this feature extrudes.
+    pub sketch_step: usize,
     pub kind: ExtrudeKind,
     /// Non-literal depth expressions become dimension equations; the
     /// equation right-hand side and the evaluated expectation travel here.
@@ -249,6 +252,35 @@ pub struct DimEquation {
     pub expect_si: f64,
 }
 
+/// How far a revolve turns.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RevolveKind {
+    Blind { angle_rad: f64, reverse: bool },
+    Symmetric { total_rad: f64 },
+    TwoSided { first_rad: f64, second_rad: f64 },
+}
+
+/// The revolve axis, in sketch space.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AxisSel {
+    /// A line that already exists in the profile sketch (its line index).
+    Line(usize),
+    /// A helper construction line the macro draws through `origin` along
+    /// `dir` (millimetres, unit vector), anchored with a fix relation.
+    Emitted { origin: [f64; 2], dir: [f64; 2] },
+}
+
+/// A revolve over the whole profile sketch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RevolveStep {
+    pub name: String,
+    /// The plan index of the profile sketch step.
+    pub sketch_step: usize,
+    pub kind: RevolveKind,
+    pub axis: AxisSel,
+    pub equations: Vec<DimEquation>,
+}
+
 /// Build the plan from a validated recipe (the artifact's `recipe.json`).
 pub fn plan(recipe: &Value, limits: &Limits) -> Result<Vec<PlannedStep>> {
     let commands = crate::recipe::commands_of(recipe)?;
@@ -257,6 +289,8 @@ pub fn plan(recipe: &Value, limits: &Limits) -> Result<Vec<PlannedStep>> {
     let mut env = ParamEnv::default();
     let mut design_factor = 0.001f64;
     let mut design_text: &'static str = "mm";
+    // Recipe feature id -> plan index of its sketch step.
+    let mut sketch_steps: Vec<(u64, usize)> = Vec::new();
     for (index, entry) in commands.iter().enumerate() {
         let id = entry
             .get("command")
@@ -356,6 +390,8 @@ pub fn plan(recipe: &Value, limits: &Limits) -> Result<Vec<PlannedStep>> {
                 &mut env,
                 design_factor,
                 design_text,
+                &steps,
+                &sketch_steps,
             )?,
             _ => PlannedStep {
                 index,
@@ -366,6 +402,15 @@ pub fn plan(recipe: &Value, limits: &Limits) -> Result<Vec<PlannedStep>> {
                 work: Work::Unmappable,
             },
         };
+        if let Work::Sketch(_) = &planned.work {
+            if let Some(fid) = params
+                .and_then(|p| p.get("feature"))
+                .and_then(|f| f.get("id"))
+                .and_then(Value::as_u64)
+            {
+                sketch_steps.push((fid, index));
+            }
+        }
         let stop_here = matches!(planned.work, Work::Unmappable);
         steps.push(planned);
         if stop_here {
@@ -375,6 +420,7 @@ pub fn plan(recipe: &Value, limits: &Limits) -> Result<Vec<PlannedStep>> {
     Ok(steps)
 }
 
+#[allow(clippy::too_many_arguments)] // the plan context is five call-scoped borrows
 fn plan_feature(
     index: usize,
     id: &str,
@@ -383,6 +429,8 @@ fn plan_feature(
     env: &mut ParamEnv,
     design_factor: f64,
     design_text: &'static str,
+    steps: &[PlannedStep],
+    sketch_steps: &[(u64, usize)],
 ) -> Result<PlannedStep> {
     let feature = params
         .and_then(|p| p.get("feature"))
@@ -470,7 +518,12 @@ fn plan_feature(
             Err(Error::Unsupported(reason)) => unmappable(reason),
             Err(e) => return Err(e),
         },
-        "extrude" => match parse_extrude(name, feature, env, design_factor, design_text) {
+        "extrude" => {
+            let sketch_step = match resolve_sketch(feature, sketch_steps, steps) {
+                Some(i) => i,
+                None => return Ok(unmappable("the extrude's sketch is not in this recipe".to_string())),
+            };
+            match parse_extrude(name, sketch_step, feature, env, design_factor, design_text) {
             Ok(extrude) => {
                 let detail = match &extrude.kind {
                     ExtrudeKind::Blind { depth_m, negative } => format!(
@@ -502,7 +555,54 @@ fn plan_feature(
             Err(reason) => unmappable(format!(
                 "{reason}; a fallback body lands with the hybrid-fallback ticket"
             )),
-        },
+            }
+        }
+        "revolve" => {
+            let sketch_step = match resolve_sketch(feature, sketch_steps, steps) {
+                Some(i) => i,
+                None => return Ok(unmappable("the revolve's sketch is not in this recipe".to_string())),
+            };
+            let sketch = steps.iter().find_map(|s| match &s.work {
+                Work::Sketch(sk) if s.index == sketch_step => Some(sk),
+                _ => None,
+            });
+            let sketch = match sketch {
+                Some(sk) => sk,
+                None => return Ok(unmappable("the revolve's sketch did not replay".to_string())),
+            };
+            match parse_revolve(name, sketch_step, feature, sketch, env, design_factor, design_text)
+            {
+                Ok(revolve) => {
+                    let detail = match &revolve.kind {
+                        RevolveKind::Blind { angle_rad, .. } => {
+                            format!("revolve {} deg", angle_rad.to_degrees())
+                        }
+                        RevolveKind::Symmetric { total_rad } => {
+                            format!("symmetric revolve {} deg total", total_rad.to_degrees())
+                        }
+                        RevolveKind::TwoSided { first_rad, second_rad } => format!(
+                            "two-sided revolve {} + {} deg",
+                            first_rad.to_degrees(),
+                            second_rad.to_degrees()
+                        ),
+                    };
+                    let axis = match &revolve.axis {
+                        AxisSel::Line(_) => "about its sketch line",
+                        AxisSel::Emitted { .. } => "about a helper axis",
+                    };
+                    PlannedStep {
+                        index,
+                        command: id.to_string(),
+                        status: PlanStatus::Mapped,
+                        detail: format!("{detail} {axis}"),
+                        work: Work::Revolve(revolve),
+                    }
+                }
+                Err(reason) => unmappable(format!(
+                    "{reason}; a fallback body lands with the hybrid-fallback ticket"
+                )),
+            }
+        }
         _ => unmappable(format!(
             "feature type {kind:?} has no translation yet; a fallback body lands with the hybrid-fallback ticket"
         )),
@@ -889,6 +989,7 @@ fn parse_sketch(
 /// non-literal expressions travel as dimension equations.
 fn parse_extrude(
     name: String,
+    sketch_step: usize,
     feature: &Value,
     env: &ParamEnv,
     design_factor: f64,
@@ -1009,6 +1110,7 @@ fn parse_extrude(
         };
         return Ok(ExtrudeStep {
             name,
+            sketch_step,
             kind: ExtrudeKind::ThroughAll { negative },
             equations,
         });
@@ -1046,7 +1148,281 @@ fn parse_extrude(
     };
     Ok(ExtrudeStep {
         name,
+        sketch_step,
         kind,
+        equations,
+    })
+}
+
+/// The plan index of the sketch a feature profiles over, resolved by the
+/// recipe's feature id (never "the most recent sketch").
+fn resolve_sketch(
+    feature: &Value,
+    sketch_steps: &[(u64, usize)],
+    steps: &[PlannedStep],
+) -> Option<usize> {
+    let sid = feature.get("sketch").and_then(Value::as_u64)?;
+    let index = sketch_steps
+        .iter()
+        .find(|(f, _)| *f == sid)
+        .map(|(_, i)| *i)?;
+    steps
+        .iter()
+        .find(|s| s.index == index)
+        .filter(|s| matches!(s.work, Work::Sketch(_)))
+        .map(|s| s.index)
+}
+
+/// A revolve over the whole profile sketch. Axis forms: a line of the profile
+/// sketch, the sketch axes, world axes that lie in the sketch plane, or an
+/// explicit in-plane line (replayed as an anchored helper construction line).
+/// Model and construction axes stay outside the subset. Partial angles
+/// require the sketch-normal convention; a full turn is convention-free.
+fn parse_revolve(
+    name: String,
+    sketch_step: usize,
+    feature: &Value,
+    sketch: &SketchStep,
+    env: &ParamEnv,
+    design_factor: f64,
+    design_text: &'static str,
+) -> std::result::Result<RevolveStep, String> {
+    if let Some(v) = feature.get("to") {
+        let _ = v;
+        return Err("revolve to-object is outside the supported subset".to_string());
+    }
+    match feature
+        .get("profiles")
+        .and_then(|p| p.get("type"))
+        .and_then(Value::as_str)
+    {
+        Some("all") => {}
+        _ => {
+            return Err(
+                "revolve profiles other than \"all\" are outside the supported subset".to_string(),
+            )
+        }
+    }
+    match feature
+        .get("operation")
+        .and_then(Value::as_str)
+        .unwrap_or("new_body")
+    {
+        "new_body" | "join" => {}
+        other => {
+            return Err(format!(
+                "revolve operation {other:?} is outside the supported subset"
+            ))
+        }
+    }
+
+    // Axis.
+    let axis_v = feature
+        .get("axis")
+        .ok_or_else(|| "revolve has no axis".to_string())?;
+    let axis_kind = axis_v.get("type").and_then(Value::as_str).unwrap_or("");
+    let axis = match axis_kind {
+        "sketch_line" => {
+            if axis_v
+                .get("sketch")
+                .and_then(Value::as_u64)
+                .map(|s| s != feature.get("id").and_then(Value::as_u64).unwrap_or(0))
+                .unwrap_or(false)
+            {
+                return Err("the revolve axis lives in another sketch".to_string());
+            }
+            let curve = axis_v
+                .get("curve")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "the revolve axis names no curve".to_string())?;
+            let li = sketch
+                .lines
+                .iter()
+                .position(|l| l.id == curve)
+                .ok_or_else(|| format!("the revolve axis {curve} is not a line of the sketch"))?;
+            AxisSel::Line(li)
+        }
+        "sketch_axis" => match axis_v.get("axis").and_then(Value::as_str) {
+            Some("x") => AxisSel::Emitted {
+                origin: [0.0, 0.0],
+                dir: [1.0, 0.0],
+            },
+            Some("y") => AxisSel::Emitted {
+                origin: [0.0, 0.0],
+                dir: [0.0, 1.0],
+            },
+            _ => return Err("the sketch axis is unknown".to_string()),
+        },
+        "world" => {
+            // World axes mapped into the sketch frame (docs/mapping.md):
+            // XY: u=X, v=Y; XZ: u=X, v=Z; YZ: u=Y, v=Z.
+            let dir = match (sketch.plane, axis_v.get("axis").and_then(Value::as_str)) {
+                (OriginPlane::Xy, Some("x")) => [1.0, 0.0],
+                (OriginPlane::Xy, Some("y")) => [0.0, 1.0],
+                (OriginPlane::Xz, Some("x")) => [1.0, 0.0],
+                (OriginPlane::Xz, Some("z")) => [0.0, 1.0],
+                (OriginPlane::Yz, Some("y")) => [1.0, 0.0],
+                (OriginPlane::Yz, Some("z")) => [0.0, 1.0],
+                _ => return Err("the world axis does not lie in the sketch plane".to_string()),
+            };
+            AxisSel::Emitted {
+                origin: [0.0, 0.0],
+                dir,
+            }
+        }
+        "line" => {
+            let origin_v = axis_v
+                .get("origin")
+                .and_then(Value::as_array)
+                .ok_or_else(|| "the axis line has no origin".to_string())?;
+            if origin_v.len() != 3 {
+                return Err("the axis line origin is not three expressions".to_string());
+            }
+            let mut xyz = [0.0f64; 3];
+            for (i, e) in origin_v.iter().enumerate() {
+                let text = e
+                    .as_str()
+                    .ok_or_else(|| "the axis origin is not an expression string".to_string())?;
+                let node = expr::parse(text).map_err(|e| format!("the axis origin: {e}"))?;
+                if !matches!(node, expr::Node::Number { .. }) {
+                    return Err("the axis origin is not a literal in this phase".to_string());
+                }
+                let ctx = expr::Context {
+                    bare_length: 0.001,
+                    bare_angle: 1.0,
+                    bare_dim: expr::Dim::Length,
+                    bare_text: design_text,
+                };
+                let q = expr::eval(&node, &ctx, &env.lookup())
+                    .map_err(|e| format!("the axis origin: {e}"))?;
+                xyz[i] = q.value;
+            }
+            let dir_v = axis_v
+                .get("dir")
+                .and_then(Value::as_array)
+                .ok_or_else(|| "the axis line has no direction".to_string())?;
+            let mut d = [0.0f64; 3];
+            for (i, e) in dir_v.iter().enumerate().take(3) {
+                d[i] = e.as_f64().unwrap_or(0.0);
+            }
+            // The axis must lie in the sketch plane; its sketch-space frame
+            // follows the same world-axis mapping as above.
+            let (origin, dir) = match sketch.plane {
+                OriginPlane::Xy => {
+                    if d[2].abs() > 1e-9 || xyz[2].abs() > 1e-6 {
+                        return Err("the axis line is not in the XY sketch plane".to_string());
+                    }
+                    ([xyz[0], xyz[1]], [d[0], d[1]])
+                }
+                OriginPlane::Xz => {
+                    if d[1].abs() > 1e-9 || xyz[1].abs() > 1e-6 {
+                        return Err("the axis line is not in the XZ sketch plane".to_string());
+                    }
+                    ([xyz[0], xyz[2]], [d[0], d[2]])
+                }
+                OriginPlane::Yz => {
+                    if d[0].abs() > 1e-9 || xyz[0].abs() > 1e-6 {
+                        return Err("the axis line is not in the YZ sketch plane".to_string());
+                    }
+                    ([xyz[1], xyz[2]], [d[1], d[2]])
+                }
+            };
+            let norm = (dir[0] * dir[0] + dir[1] * dir[1]).sqrt();
+            if !norm.is_finite() || norm < 1e-12 {
+                return Err("the axis line direction is zero".to_string());
+            }
+            AxisSel::Emitted {
+                origin,
+                dir: [dir[0] / norm, dir[1] / norm],
+            }
+        }
+        other => {
+            return Err(format!(
+                "revolve axis {other:?} is outside the supported subset"
+            ))
+        }
+    };
+
+    // Angle.
+    let mut equations = Vec::new();
+    let eval_angle = |text: &str,
+                      which: usize,
+                      equations: &mut Vec<DimEquation>|
+     -> std::result::Result<f64, String> {
+        let node = expr::parse(text).map_err(|e| format!("revolve angle: {e}"))?;
+        let literal = matches!(node, expr::Node::Number { .. });
+        let ctx = expr::Context {
+            bare_length: design_factor,
+            bare_angle: 1.0,
+            bare_dim: expr::Dim::Angle,
+            bare_text: design_text,
+        };
+        let q =
+            expr::eval(&node, &ctx, &env.lookup()).map_err(|e| format!("revolve angle: {e}"))?;
+        if q.dim != expr::Dim::Angle {
+            return Err("revolve angle is not an angle".to_string());
+        }
+        if !literal {
+            equations.push(DimEquation {
+                which,
+                rhs: expr::translate(&node, &ctx),
+                expect_si: q.value,
+            });
+        }
+        Ok(q.value)
+    };
+    let angle_text = feature
+        .get("angle")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "revolve angle is not an expression string".to_string())?;
+    let angle = eval_angle(angle_text, 1, &mut equations)?;
+    let symmetric = feature
+        .get("symmetric")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let angle2 = feature
+        .get("angle2")
+        .and_then(Value::as_str)
+        .map(|t| eval_angle(t, 2, &mut equations))
+        .transpose()?;
+
+    let full = (angle - 2.0 * std::f64::consts::PI).abs() < 1e-9 && angle2.is_none() && !symmetric;
+    if !full {
+        match feature
+            .get("convention")
+            .and_then(Value::as_str)
+            .unwrap_or("legacy_axis_start")
+        {
+            "sketch_normal" => {}
+            other => {
+                return Err(format!(
+                "a partial revolve under convention {other:?} needs the sketch-normal convention"
+            ))
+            }
+        }
+    }
+
+    let kind = match (symmetric, angle2) {
+        (true, None) => RevolveKind::Symmetric {
+            total_rad: angle.abs(),
+        },
+        (false, Some(a2)) => RevolveKind::TwoSided {
+            first_rad: angle.abs(),
+            second_rad: a2.abs(),
+        },
+        (true, Some(_)) => {
+            return Err("symmetric revolve with a second angle is contradictory".to_string())
+        }
+        (false, None) => RevolveKind::Blind {
+            angle_rad: angle.abs(),
+            reverse: angle < 0.0,
+        },
+    };
+    Ok(RevolveStep {
+        name,
+        sketch_step,
+        kind,
+        axis,
         equations,
     })
 }

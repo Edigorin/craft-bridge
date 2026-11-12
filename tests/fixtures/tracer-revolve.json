@@ -1,0 +1,85 @@
+{
+  "about": {
+    "design": "Tracer Revolve",
+    "format": "solidcraft/53",
+    "replay": "craft-bridge build",
+    "version": "0.40.0-rc.4"
+  },
+  "commands": [
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "id": 7,
+          "name": "Profile",
+          "plane": { "name": "XY", "type": "origin" },
+          "sketch": {
+            "constraints": [
+              { "id": "k1", "l": 0, "type": "vertical" },
+              { "id": "k2", "l": 1, "type": "horizontal" },
+              { "id": "k3", "l": 2, "type": "vertical" },
+              { "id": "k4", "l": 3, "param": "d1", "type": "length", "value": 10.0 },
+              { "id": "k5", "l": 4, "construction": false, "type": "vertical" }
+            ],
+            "counters": { "k": 5, "l": 5, "p": 10 },
+            "curves": [
+              { "a": 2, "b": 3, "construction": true, "id": "l0", "type": "line" },
+              { "a": 4, "b": 5, "construction": false, "id": "l1", "type": "line" },
+              { "a": 5, "b": 6, "construction": false, "id": "l2", "type": "line" },
+              { "a": 6, "b": 7, "construction": false, "id": "l3", "type": "line" },
+              { "a": 7, "b": 4, "construction": false, "id": "l4", "type": "line" }
+            ],
+            "points": [
+              { "fixed": true, "id": "origin", "pos": [0.0, 0.0] },
+              { "id": "p1", "pos": [1.0, 0.0] },
+              { "id": "p2", "pos": [0.0, -20.0] },
+              { "id": "p3", "pos": [0.0, 20.0] },
+              { "id": "p4", "pos": [5.0, -10.0] },
+              { "id": "p5", "pos": [10.0, -10.0] },
+              { "id": "p6", "pos": [10.0, 10.0] },
+              { "id": "p7", "pos": [5.0, 10.0] }
+            ]
+          },
+          "suppressed": false,
+          "type": "sketch"
+        },
+        "params": [{ "expression": "10 mm", "name": "d1", "unit": "mm" }]
+      }
+    },
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "angle": "270 deg",
+          "axis": { "curve": "l0", "type": "sketch_line" },
+          "convention": "sketch_normal",
+          "id": 8,
+          "name": "Turn",
+          "operation": "new_body",
+          "profiles": { "type": "all" },
+          "sketch": 7,
+          "suppressed": false,
+          "type": "revolve"
+        },
+        "params": []
+      }
+    },
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "angle": "360 deg",
+          "axis": { "axis": "x", "type": "sketch_axis" },
+          "id": 9,
+          "name": "Full",
+          "operation": "new_body",
+          "profiles": { "type": "all" },
+          "sketch": 7,
+          "suppressed": false,
+          "type": "revolve"
+        },
+        "params": []
+      }
+    }
+  ]
+}
