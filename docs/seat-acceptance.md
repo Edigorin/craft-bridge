@@ -42,3 +42,33 @@ Keep reviewed synthetic evidence (screenshots of the tree and the edited
 dimension) attached to the ticket that delivered the feature. Never commit
 real client parts, and never commit SolidWorks-produced files outside
 `corpus/` (AGENTS.md seat-safety and hostile-input rules).
+
+## v1 release checklist
+
+- [ ] Every corpus item's macro runs on the seat (`tools/seat-smoke.ps1`) and
+      its runtime report is complete: header, one line per recipe step,
+      summary last.
+- [ ] Checkpoint-verified column filled in `docs/mapping.md`; every
+      "pending" API member either verified or explicitly recorded as
+      adjusted after a seat finding.
+- [ ] Tested SolidWorks versions recorded in the table above; the "2018 and
+      later" target confirmed or amended in `docs/mapping.md` and the spec.
+- [ ] Equations verified on the seat: a global-variable edit propagates to a
+      sketch dimension and a feature dimension (the parameter-change check).
+- [ ] Fallback verified on the seat: an artifact with a boundary snapshot
+      rebuilds past the unmapped step; a coarse artifact terminates cleanly.
+- [ ] Degradation and failure paths spot-checked: a dropped relation reports
+      `degraded`, an early failure still leaves a complete report.
+- [ ] README and `docs/replay-profile.md` match the shipped behaviour;
+      the disclaimer and the open legal question still stand.
+- [ ] No real client parts anywhere in the repository or its history.
+
+## Corpus coverage (v1)
+
+The synthetic corpus fixtures under `tests/fixtures/` cover: a constrained
+sketch with equations (`tracer`), the stop rule and degradation triggers
+(`tracer-stop`), revolve with both axis styles (`tracer-revolve`), primitives
+with cross-references (`tracer-prim`), the five modification families
+(`tracer-mod`), and mirrors with live seed bindings (`tracer-pat`). Fallback
+paths are exercised in the build tests with packed boundary and final
+snapshots. Anything the seat reports as a correction becomes a new fixture.
