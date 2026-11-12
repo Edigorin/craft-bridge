@@ -75,6 +75,7 @@ archive size and then by the member count, before any member is touched.
 | Recipe commands | 100 000 |
 | Warnings entries | 10 000 |
 | JSON nesting | serde_json's own recursion limit (128); never raised |
+| Fallback snapshots per artifact | 32 |
 
 ## Output policy
 
@@ -83,6 +84,20 @@ destination directory, then renamed into place. Symbolic-link destinations are
 always refused; an existing file is refused unless `--overwrite` is given;
 failures remove the staging file and leave any existing destination unchanged.
 
+## Fallback snapshots
+
+Beyond the three core members an artifact may carry snapshots:
+`snapshots/step_NNNN.step`, the STEP body state after recipe step N has run
+in SolidCraft. Each manifest entry records `step_index`, `member`, `bytes`
+and `scope`: `boundary` (the state after that step; the fallback transaction
+imports it and replay continues) or `final` (one end-of-recipe body; the
+coarse rule — the first fallback imports it and replay terminates there).
+At most 32 snapshots, at most one `final`, names exact, inventory verified.
+Artifacts without snapshots keep the original coarse meaning and say so in
+the plan report. Sidecar files published beside the macro at build time are
+named `fallback-step-NNNN.step` and obey the same safe-output policy as the
+macro itself, which is always published last.
+
 ## Deviations from draft RFC 0001
 
 - The recipe payload is defined here; the draft RFC defines no recipe member.
@@ -90,5 +105,6 @@ failures remove the staging file and leave any existing destination unchanged.
   later tickets and later profile versions.
 - No content-addressed blobs, source identity, revisions or capability
   strings yet; `manifest.json` is a plain member, not a content-addressed one.
-- `geometry/final.step` is one snapshot; the draft's required-parts machinery
-  maps to the per-boundary snapshots planned for ticket #6.
+- `geometry/final.step` is the always-present coarse fallback; the optional
+  `snapshots/` payload is this profile's extension (see above), a step toward
+  the draft's required-parts machinery.

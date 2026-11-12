@@ -32,12 +32,16 @@ v1 plan); macro generation lands next. Built with Rust (`cargo build --release`)
 ```bash
 # Pack a design exported from SolidCraft (recipe JSON + STEP geometry).
 # --warnings takes the exporter's omission warnings as a JSON array of strings;
-# without it the manifest records them as not provided.
+# without it the manifest records them as not provided. Optional fallback
+# snapshots: --snapshot N=file (body state after step N) or --final-snapshot.
 craft-bridge pack --recipe script.json --step part.step \
   --warnings warnings.json --out part.craftx
 
 # Show what an artifact contains (add --json for machine-readable output).
 craft-bridge inspect part.craftx
+
+# Generate the SolidWorks macro and the plan report from an artifact.
+craft-bridge build part.craftx --out part.swb --plan plan.json
 ```
 
 The artifact contract is [docs/replay-profile.md](docs/replay-profile.md).

@@ -26,12 +26,57 @@ Translation to SolidWorks equation syntax preserves the same meaning
 (`40 mm` -> `40mm`, bare numbers stay bare, identifiers -> quoted global
 names) and is escaped for the macro separately from VBA-literal escaping.
 
+## Fallback snapshots (the hybrid contract)
+
+An artifact may carry fallback snapshots: STEP bodies of the model state
+after a recipe step has run in SolidCraft (`snapshots/step_NNNN.step`, scope
+`boundary`) or one end-of-recipe body (scope `final`, the coarse rule). Packed
+with `pack --snapshot N=file` / `--final-snapshot file`, bounded and
+inventory-checked. At an unmappable step the macro runs a transaction:
+restore the pre-step state (delete every created feature and sketch), import
+the boundary body, invalidate every live binding slot, and continue replay
+against the replacement. A final snapshot terminates replay after its import.
+Artifacts without snapshots report their missing coverage and terminate at
+the first unmapped step. API members: `ImportFile` and `EditDelete`
+(checkpoint-pending like the rest).
+
+## Primitives (box, cylinder)
+
+Replayed as generated sketches on the Front plane plus a blind extrude.
+Placement must be literal and on the base plane; sizes keep their
+parametrisation through dimension equations. Off-plane placement and non-Z
+axes stop (they need extrude start-offset work).
+
+## Modifications (fillet, chamfer, shell, draft, hole)
+
+Coordinate picks in model millimetres (identity map per the orientation
+policy) with fail-closed `SelectByID2` type checks. Fillet is constant-radius
+(variant flags become degrade triggers: style, fit, corner, turn, setbacks);
+chamfer is equal-distance (unequal stops); shell honours the direction field
+(default inside); draft needs an origin neutral plane; holes are simple or
+drilled (counterbore, countersink, threads, to-object and sketch-point holes
+stop). Feature-call shapes: `FeatureFillet3`, `FeatureChamfer3`,
+`FeatureShell`, `FeatureDraft`, `SimpleHole2` — all checkpoint-pending.
+
+## Patterns and mirrors
+
+Mirrors replay about origin planes with live seed bindings: seeds must be
+verified native features (registered only after their own verification,
+fail-closed when missing), never fallback bodies. Body mirrors stop. Feature
+patterns (rectangular and circular) currently stop at the plan level: their
+direction and axis selection story needs exact API members, pinned when the
+docs are reachable again; the parser and emitter seams are in place.
+
 ## Equations (this phase)
 
 Parameters become SolidWorks equations: user parameters as global variables
 (`"width"=40mm`), model parameters and non-literal feature inputs as dimension
 equations whose left-hand side is the dimension name **captured at runtime**
 (never assumed D1..Dn) and whose right-hand side is the translated expression.
+A dimension's runtime name is registered in a slot **only after its own
+verification**; cross-references render those names at runtime and dead-slot
+guards fail closed, so a step whose parameter source fell back can never
+silently drive a stale equation.
 Bare length literals are suffixed (`20mm`) so the equation means the same
 thing whatever the part's document units are. An equation is verified by
 evaluation: added, rebuilt, and the dimension's value must match the
