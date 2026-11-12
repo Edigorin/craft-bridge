@@ -16,7 +16,7 @@ use zip::{ZipArchive, ZipWriter};
 
 use crate::error::{Error, Result};
 use crate::limits::Limits;
-use crate::profile::KNOWN_MEMBERS;
+use crate::profile::{is_snapshot_member, KNOWN_MEMBERS, SNAPSHOT_PREFIX};
 
 /// Read a whole input file, bounded by `limit` both by metadata and during the
 /// read, so a lying size cannot cause an unbounded allocation.
@@ -181,9 +181,9 @@ fn census_names(file: &mut File, limits: &Limits) -> Result<Vec<String>> {
 fn check_names(names: &[String]) -> Result<()> {
     let mut seen: Vec<&String> = Vec::new();
     for name in names {
-        if !KNOWN_MEMBERS.contains(&name.as_str()) {
+        if !KNOWN_MEMBERS.contains(&name.as_str()) && !is_snapshot_member(name) {
             return Err(Error::InvalidArtifact(format!(
-                "unknown member {name:?} (allowed: {KNOWN_MEMBERS:?})"
+                "unknown member {name:?} (allowed: {KNOWN_MEMBERS:?} plus {SNAPSHOT_PREFIX}step_NNNN.step)"
             )));
         }
         if name.ends_with('/') {
@@ -221,7 +221,7 @@ pub fn read_member(
     limits: &Limits,
     budget: &mut u64,
 ) -> Result<Vec<u8>> {
-    if !KNOWN_MEMBERS.contains(&name) {
+    if !KNOWN_MEMBERS.contains(&name) && !is_snapshot_member(name) {
         return Err(Error::InvalidArtifact(format!("unknown member {name}")));
     }
     let cap = limits.max_member_bytes.min(*budget);
@@ -268,7 +268,7 @@ pub fn write_archive_atomic(
 ) -> Result<()> {
     let mut seen: Vec<&str> = Vec::new();
     for (name, bytes) in members {
-        if !KNOWN_MEMBERS.contains(name) {
+        if !KNOWN_MEMBERS.contains(name) && !is_snapshot_member(name) {
             return Err(Error::output(
                 out,
                 format!("refusing to write unknown member {name}"),

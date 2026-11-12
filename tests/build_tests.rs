@@ -45,6 +45,8 @@ impl Case {
                 warnings: None,
                 name: None,
                 overwrite: false,
+                snapshots: Vec::new(),
+                final_snapshot: None,
             },
             &Limits::default(),
         )
@@ -78,7 +80,12 @@ fn plan_of(recipe_json: &str) -> Vec<replay::PlannedStep> {
         &Limits::default(),
     )
     .unwrap();
-    replay::plan(&value, &Limits::default()).unwrap()
+    replay::plan(
+        &value,
+        &Limits::default(),
+        &std::collections::BTreeMap::new(),
+    )
+    .unwrap()
 }
 
 // ---- the pinned contract ----
@@ -126,7 +133,7 @@ fn stop_rule_marks_the_boundary_and_everything_after() {
     assert_eq!(plan.steps[2].status, PlanStatus::NotExecuted); // after the boundary
     let macro_text = fs::read_to_string(case.dir.path().join("stop.swb")).unwrap();
     assert!(macro_text.contains("after the first unmapped step"));
-    assert!(macro_text.contains("no translation yet"));
+    assert!(macro_text.contains("no snapshot"));
     // The degraded sketch still generates its builder, with the degraded status.
     assert!(macro_text.contains("BuildSketch0 = \"degraded\""));
 }
@@ -148,7 +155,12 @@ fn malformed_sketch_data_is_rejected() {
     // A curve referencing a point that does not exist.
     let recipe = TRACER.replace("\"a\": 0, \"b\": 1", "\"a\": 99, \"b\": 1");
     let value: serde_json::Value = serde_json::from_str(&recipe).unwrap();
-    let err = replay::plan(&value, &Limits::default()).unwrap_err();
+    let err = replay::plan(
+        &value,
+        &Limits::default(),
+        &std::collections::BTreeMap::new(),
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("point 99"), "unexpected: {err}");
 
     // A non-literal extrude distance is the stop rule, not a hard error.
@@ -408,4 +420,108 @@ fn body_patterns_and_feature_patterns_are_honest_stops() {
     );
     let steps = plan_of(&recipe);
     assert_eq!(steps[2].status, PlanStatus::FallbackPlanned);
+}
+
+#[test]
+fn fallback_snapshots_produce_sidecars_and_fallback_builders() {
+    let dir = tempfile::tempdir().unwrap();
+    let recipe_path = dir.path().join("script.json");
+    let step_path = dir.path().join("part.step");
+    let artifact = dir.path().join("stop.craftx");
+    fs::write(&recipe_path, TRACER_STOP).unwrap();
+    fs::write(&step_path, STEP_FIXTURE).unwrap();
+    pack::pack(
+        &PackOptions {
+            recipe: &recipe_path,
+            step: &step_path,
+            out: &artifact,
+            warnings: None,
+            name: None,
+            overwrite: false,
+            snapshots: vec![(1, step_path.as_path())],
+            final_snapshot: None,
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    let out = dir.path().join("stop.swb");
+    let outcome = build::build(
+        &BuildOptions {
+            artifact: &artifact,
+            out: &out,
+            plan: None,
+            plan_text: None,
+            overwrite: false,
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    assert_eq!(outcome.plan.steps[1].status, PlanStatus::FallbackPlanned);
+    assert!(outcome.plan.steps[1].detail.contains("boundary snapshot"));
+    let macro_text = fs::read_to_string(&out).unwrap();
+    assert!(macro_text.contains("Fallback1()"), "no fallback builder");
+    assert!(macro_text.contains("ImportFile"), "no snapshot import");
+    assert!(macro_text.contains("DeleteCreated"), "no pre-step restore");
+    assert!(
+        macro_text.contains("ClearSlotsAll"),
+        "stale bindings are not invalidated"
+    );
+    assert!(dir.path().join("fallback-step-0001.step").exists());
+    // A boundary fallback continues: the step after keeps replaying.
+    assert!(
+        macro_text.contains("BuildExtrude2()"),
+        "replay stopped after a boundary fallback"
+    );
+}
+
+#[test]
+fn coarse_final_snapshots_terminate_replay() {
+    let dir = tempfile::tempdir().unwrap();
+    let recipe_path = dir.path().join("script.json");
+    let step_path = dir.path().join("part.step");
+    let artifact = dir.path().join("coarse.craftx");
+    fs::write(&recipe_path, TRACER_STOP).unwrap();
+    fs::write(&step_path, STEP_FIXTURE).unwrap();
+    pack::pack(
+        &PackOptions {
+            recipe: &recipe_path,
+            step: &step_path,
+            out: &artifact,
+            warnings: None,
+            name: None,
+            overwrite: false,
+            snapshots: Vec::new(),
+            final_snapshot: Some(step_path.as_path()),
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    let out = dir.path().join("coarse.swb");
+    let outcome = build::build(
+        &BuildOptions {
+            artifact: &artifact,
+            out: &out,
+            plan: None,
+            plan_text: None,
+            overwrite: false,
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    assert!(outcome.plan.steps[1].detail.contains("final snapshot"));
+    let macro_text = fs::read_to_string(&out).unwrap();
+    assert!(
+        macro_text.contains("If st = \"fallback\" Then stopModel = True"),
+        "the coarse snapshot did not terminate replay"
+    );
+}
+
+#[test]
+fn artifacts_without_snapshots_report_the_missing_fallback() {
+    let case = Case::new(TRACER_STOP);
+    let outcome = case.build_to("nosnap.swb", false).unwrap();
+    assert!(outcome.plan.steps[1].detail.contains("no snapshot"));
+    let macro_text = fs::read_to_string(case.dir.path().join("nosnap.swb")).unwrap();
+    assert!(macro_text.contains("replay terminates here"));
+    assert!(!macro_text.contains("ImportFile"));
 }

@@ -50,7 +50,10 @@ if (Test-Path $reportPath) { Remove-Item $reportPath } # never trust a stale rep
 # travels as a one-line file under %TEMP%, which every process can see.
 $env:CRAFT_BRIDGE_REPORT = $reportPath
 $pathFile = Join-Path $env:TEMP "craft-bridge-report-path.txt"
-Set-Content -Path $pathFile -Value $reportPath
+# Line 1: the runtime report path. Line 2: the macro's directory, where the
+# build publishes the fallback snapshot sidecars.
+$macroDir = Split-Path -Parent $macroFull
+Set-Content -Path $pathFile -Value @($reportPath, $macroDir)
 
 # ---- run: all SolidWorks COM goes through tools/run-macro.vbs (VBScript is
 # IDispatch-native; PowerShell's late binder has failed on this seat) ----

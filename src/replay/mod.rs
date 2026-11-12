@@ -394,7 +394,11 @@ pub struct RevolveStep {
 }
 
 /// Build the plan from a validated recipe (the artifact's `recipe.json`).
-pub fn plan(recipe: &Value, limits: &Limits) -> Result<Vec<PlannedStep>> {
+pub fn plan(
+    recipe: &Value,
+    limits: &Limits,
+    snapshots: &std::collections::BTreeMap<usize, crate::profile::SnapshotScope>,
+) -> Result<Vec<PlannedStep>> {
     let commands = crate::recipe::commands_of(recipe)?;
     let mut steps = Vec::with_capacity(commands.len());
     let mut stopped = false;
@@ -535,7 +539,11 @@ pub fn plan(recipe: &Value, limits: &Limits) -> Result<Vec<PlannedStep>> {
                 sketch_steps.push((fid, index));
             }
         }
-        let stop_here = matches!(planned.work, Work::Unmappable);
+        // The stop rule pauses model replay at the first unmappable step,
+        // except when a boundary snapshot covers it: the fallback body keeps
+        // replay going. A final (coarse) snapshot or nothing stops for good.
+        let stop_here = matches!(planned.work, Work::Unmappable)
+            && snapshots.get(&index) != Some(&crate::profile::SnapshotScope::Boundary);
         steps.push(planned);
         if stop_here {
             stopped = true;
@@ -1188,7 +1196,10 @@ fn parse_sketch(
                 which: 0,
                 rhs,
                 segs: coalesce(segs.into_iter().map(seg_from).collect()),
-                expect_si: d.value,
+                expect_si: match d.kind {
+                    DimKind::Angle => d.value,
+                    _ => d.value / 1000.0,
+                },
                 slot,
             })
         });

@@ -90,7 +90,7 @@ Function BuildSketch2() As String
     ok = swDoc.Extension.SelectByID2("Front Plane", "PLANE", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If Not ok Then gMsg = "could not select the Front Plane plane": GoTo SketchFailed
     swSketchMgr.InsertSketch True
-    gSketchName = swSketchMgr.ActiveSketch.Name
+    skName2 = swSketchMgr.ActiveSketch.Name
     DrawGeometry2
     If Not Relations2() Then GoTo Degrade
     If Not Dims2() Then GoTo Degrade
@@ -187,7 +187,7 @@ Function Dims2() As Boolean
     Set dm = dd.GetDimension2(0)
     If dm Is Nothing Then GoTo DimFail
     dm.SystemValue = 0.04
-    If Not AddDimEquation(dm, "40mm", 40.0, 0) Then GoTo DimFail
+    If Not AddDimEquation(dm, "40mm", 0.04, 0) Then GoTo DimFail
     swDoc.ClearSelection2 True
     sl2(1).Select False
     Set dd = swDoc.AddDimension2(0.05, 0.02, 0#)
@@ -195,7 +195,7 @@ Function Dims2() As Boolean
     Set dm = dd.GetDimension2(0)
     If dm Is Nothing Then GoTo DimFail
     dm.SystemValue = 0.02
-    If Not AddDimEquation(dm, "20mm", 20.0, 1) Then GoTo DimFail
+    If Not AddDimEquation(dm, "20mm", 0.02, 1) Then GoTo DimFail
     swDoc.ClearSelection2 True
     Dims2 = True
     Exit Function
@@ -303,6 +303,24 @@ If Err.Number = 0 Then ReportPathFromHost = Trim(oneLine)
 End If
 End Sub
 
+' The directory of the macro (its sidecar snapshots live there): the
+' second line of the host's path file.
+Function MacroDirFromHost() As String
+Dim p As String, f As Integer, oneLine As String
+p = Environ$("TEMP")
+If p = "" Then Exit Function
+p = p & "\craft-bridge-report-path.txt"
+Err.Clear
+On Error Resume Next
+f = FreeFile
+Open p For Input As #f
+If Err.Number = 0 Then
+Line Input #f, oneLine
+Line Input #f, oneLine
+Close #f
+If Err.Number = 0 Then MacroDirFromHost = Trim(oneLine)
+End If
+End Function
 ' JSON string escaping for the report file only.
 Function JsonStr(ByVal s As String) As String
 Dim t As String

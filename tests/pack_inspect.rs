@@ -63,6 +63,8 @@ impl Case {
                 warnings,
                 name: None,
                 overwrite: false,
+                snapshots: Vec::new(),
+                final_snapshot: None,
             },
             &Limits::default(),
         )
@@ -106,6 +108,7 @@ fn crafted_manifest(members: &[(&str, usize)]) -> Vec<u8> {
         },
         warnings: WarningsCapture::provided(vec!["example omitted".to_string()]),
         fallback_mode: FALLBACK_MODE.to_string(),
+        snapshots: Vec::new(),
         members: members
             .iter()
             .map(|(path, bytes)| MemberEntry {
@@ -256,6 +259,8 @@ fn pack_overwrite_replaces_regular_files() {
             warnings: None,
             name: None,
             overwrite: true,
+            snapshots: Vec::new(),
+            final_snapshot: None,
         },
         &Limits::default(),
     )

@@ -29,10 +29,47 @@ pub const STEP: &str = "geometry/final.step";
 /// alternate spellings.
 pub const KNOWN_MEMBERS: [&str; 3] = [MANIFEST, RECIPE, STEP];
 
-/// The fallback mode of this profile version: one STEP body from the end of
-/// the recipe, replacing everything from the first unmappable step onward.
-/// Per-boundary snapshots are a later profile capability.
+/// The fallback mode of this profile version. With snapshot entries in the
+/// manifest, each unmappable step replaces its body with the state after that
+/// step (per-boundary snapshots). Without them the artifact carries only the
+/// final snapshot: the first fallback imports it and replay terminates there
+/// (the coarse rule). Old artifacts (no snapshots) keep that coarse meaning.
 pub const FALLBACK_MODE: &str = "final-snapshot-coarse";
+
+/// Snapshot members live under this prefix.
+pub const SNAPSHOT_PREFIX: &str = "snapshots/";
+
+/// A fallback snapshot: the STEP body state after `step_index` has run in
+/// SolidCraft. `final` is the single end-of-recipe snapshot of a coarse
+/// artifact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnapshotEntry {
+    pub step_index: usize,
+    pub member: String,
+    pub bytes: u64,
+    pub scope: SnapshotScope,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SnapshotScope {
+    Boundary,
+    Final,
+}
+
+/// True for a well-formed snapshot member name: `snapshots/step_NNNN.step`.
+pub fn is_snapshot_member(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix(SNAPSHOT_PREFIX) else {
+        return false;
+    };
+    let Some(digits) = rest
+        .strip_prefix("step_")
+        .and_then(|r| r.strip_suffix(".step"))
+    else {
+        return false;
+    };
+    !digits.is_empty() && digits.len() <= 6 && digits.bytes().all(|b| b.is_ascii_digit())
+}
 
 /// What a packed artifact claims about itself.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -47,6 +84,9 @@ pub struct Manifest {
     /// Inventory of the payload members. `manifest.json` is excluded to avoid
     /// self-size ambiguity.
     pub members: Vec<MemberEntry>,
+    /// Fallback snapshots (absent in old artifacts: coarse semantics).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub snapshots: Vec<SnapshotEntry>,
 }
 
 /// The input files the artifact was packed from.
@@ -168,6 +208,40 @@ pub fn parse_manifest(bytes: &[u8], limits: &Limits) -> Result<Manifest> {
                 "inventory is missing {required}"
             )));
         }
+    }
+    // Snapshot contract: bounded, well-formed names, no duplicates, and at
+    // most one final snapshot.
+    if manifest.snapshots.len() > limits.max_snapshots {
+        return Err(Error::limit(
+            "snapshot entries",
+            limits.max_snapshots as u64,
+            manifest.snapshots.len() as u64,
+        ));
+    }
+    let mut snap_names: Vec<&str> = Vec::new();
+    let mut finals = 0;
+    for snap in &manifest.snapshots {
+        if !is_snapshot_member(&snap.member) {
+            return Err(Error::InvalidArtifact(format!(
+                "snapshot member {} is not snapshots/step_NNNN.step",
+                snap.member
+            )));
+        }
+        if snap_names.contains(&snap.member.as_str()) {
+            return Err(Error::InvalidArtifact(format!(
+                "duplicate snapshot member {}",
+                snap.member
+            )));
+        }
+        if snap.scope == SnapshotScope::Final {
+            finals += 1;
+        }
+        snap_names.push(&snap.member);
+    }
+    if finals > 1 {
+        return Err(Error::InvalidArtifact(
+            "more than one final snapshot".to_string(),
+        ));
     }
     Ok(manifest)
 }

@@ -43,6 +43,9 @@ pub const MAX_CONSTRAINTS: usize = 40_000;
 /// Largest generated output (macro or report).
 pub const MAX_GENERATED_BYTES: u64 = 16 * 1024 * 1024;
 
+/// Most fallback snapshots in one artifact.
+pub const MAX_SNAPSHOTS: usize = 32;
+
 // JSON nesting depth is bounded by serde_json's own recursion limit (128).
 // The bridge never raises it.
 
@@ -61,6 +64,7 @@ pub struct Limits {
     pub max_entities: usize,
     pub max_constraints: usize,
     pub max_generated_bytes: u64,
+    pub max_snapshots: usize,
 }
 
 impl Default for Limits {
@@ -78,6 +82,7 @@ impl Default for Limits {
             max_entities: MAX_ENTITIES,
             max_constraints: MAX_CONSTRAINTS,
             max_generated_bytes: MAX_GENERATED_BYTES,
+            max_snapshots: MAX_SNAPSHOTS,
         }
     }
 }
@@ -98,6 +103,7 @@ impl Limits {
             max_entities: 64,
             max_constraints: 64,
             max_generated_bytes: 64 * 1024,
+            max_snapshots: 4,
         }
     }
 }

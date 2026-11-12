@@ -1,6 +1,6 @@
 //! The craft-bridge command line: `pack` and `inspect`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -44,6 +44,12 @@ enum Command {
         /// Replace an existing regular file at the output path.
         #[arg(long)]
         overwrite: bool,
+        /// Boundary snapshot as STEP=file: the body state after recipe step N.
+        #[arg(long)]
+        snapshot: Vec<String>,
+        /// The single end-of-recipe snapshot (coarse artifact).
+        #[arg(long)]
+        final_snapshot: Option<PathBuf>,
     },
     /// Show what an artifact contains.
     Inspect {
@@ -83,7 +89,28 @@ fn main() -> ExitCode {
             warnings,
             name,
             overwrite,
+            snapshot,
+            final_snapshot,
         } => {
+            let mut snapshots: Vec<(usize, PathBuf)> = Vec::new();
+            let mut snapshot_error: Option<String> = None;
+            for item in &snapshot {
+                match item.split_once('=') {
+                    Some((n, path)) => match n.trim().parse::<usize>() {
+                        Ok(index) => snapshots.push((index, PathBuf::from(path))),
+                        Err(_) => snapshot_error = Some(format!("bad --snapshot index in {item}")),
+                    },
+                    None => {
+                        snapshot_error = Some(format!("--snapshot wants STEP=file, got {item}"))
+                    }
+                }
+            }
+            if let Some(message) = snapshot_error {
+                eprintln!("error: {message}");
+                return ExitCode::FAILURE;
+            }
+            let snapshot_refs: Vec<(usize, &Path)> =
+                snapshots.iter().map(|(i, p)| (*i, p.as_path())).collect();
             let options = PackOptions {
                 recipe: &recipe,
                 step: &step,
@@ -91,6 +118,8 @@ fn main() -> ExitCode {
                 warnings: warnings.as_deref(),
                 name,
                 overwrite,
+                snapshots: snapshot_refs,
+                final_snapshot: final_snapshot.as_deref(),
             };
             pack::pack(&options, &limits).map(|report| {
                 eprintln!(

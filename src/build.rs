@@ -3,6 +3,7 @@
 //! packing: refuse symlinks, refuse existing destinations unless asked,
 //! stage exclusively and rename into place.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
@@ -45,13 +46,42 @@ pub fn build(opts: &BuildOptions, limits: &Limits) -> Result<BuildOutcome> {
     let mut archive = zipio::open_archive(opts.artifact, limits)?;
     let mut budget = limits.max_total_bytes;
     let manifest_bytes = zipio::read_member(&mut archive, profile::MANIFEST, limits, &mut budget)?;
-    let _manifest: Manifest = profile::parse_manifest(&manifest_bytes, limits)?; // validated against the profile
+    let manifest: Manifest = profile::parse_manifest(&manifest_bytes, limits)?;
     let recipe_bytes = zipio::read_member(&mut archive, RECIPE, limits, &mut budget)?;
     let _step_bytes = zipio::read_member(&mut archive, profile::STEP, limits, &mut budget)?;
     let recipe_value = recipe::validate(&recipe_bytes, limits)?;
 
-    let steps = replay::plan(&recipe_value, limits)?;
-    let macro_text = swb::emit(&steps, &artifact_name, env!("CARGO_PKG_VERSION"));
+    let mut snapshots: std::collections::BTreeMap<usize, profile::SnapshotScope> =
+        std::collections::BTreeMap::new();
+    for snap in &manifest.snapshots {
+        snapshots.insert(snap.step_index, snap.scope);
+    }
+    let mut steps = replay::plan(&recipe_value, limits, &snapshots)?;
+    // Fallback coverage shapes the plan detail: the report must say whether a
+    // boundary snapshot, only the final snapshot, or nothing covers the step.
+    for step in &mut steps {
+        if matches!(step.work, replay::Work::Unmappable) {
+            let boundary = snapshots.get(&step.index) == Some(&profile::SnapshotScope::Boundary);
+            let final_exists = snapshots
+                .values()
+                .any(|s| *s == profile::SnapshotScope::Final);
+            step.detail = if boundary {
+                "no translation; the artifact carries a boundary snapshot (fallback body)"
+                    .to_string()
+            } else if final_exists {
+                "no translation; only the final snapshot covers it (replay terminates there)"
+                    .to_string()
+            } else {
+                "no translation and no snapshot; replay terminates here".to_string()
+            };
+        }
+    }
+    let macro_text = swb::emit(
+        &steps,
+        &artifact_name,
+        env!("CARGO_PKG_VERSION"),
+        &snapshots,
+    );
     let macro_bytes = macro_text.as_bytes();
     if macro_bytes.len() as u64 > limits.max_generated_bytes {
         return Err(Error::limit(
@@ -62,6 +92,47 @@ pub fn build(opts: &BuildOptions, limits: &Limits) -> Result<BuildOutcome> {
     }
 
     let plan = report::build_report(&steps, &artifact_name, &macro_name);
+    // Sidecar fallback snapshots next to the macro. Destinations are
+    // preflighted and the macro is published last, so it can never reference a
+    // missing snapshot.
+    let out_dir = match opts.out.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let mut sidecars: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut archive = zipio::open_archive(opts.artifact, limits)?;
+    let mut budget = limits.max_total_bytes;
+    for snap in &manifest.snapshots {
+        let bytes = zipio::read_member(&mut archive, &snap.member, limits, &mut budget)?;
+        if bytes.len() as u64 != snap.bytes {
+            return Err(Error::InvalidArtifact(format!(
+                "snapshot {} inventory mismatch",
+                snap.member
+            )));
+        }
+        sidecars.push((sidecar_name(snap.step_index), bytes));
+    }
+    for (name, _) in &sidecars {
+        let dest = out_dir.join(name);
+        match fs::symlink_metadata(&dest) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(Error::output(
+                    dest,
+                    "refusing to write through a symbolic link",
+                ))
+            }
+            Ok(_) if !opts.overwrite => {
+                return Err(Error::output(
+                    dest,
+                    "already exists (pass --overwrite to replace it)",
+                ))
+            }
+            _ => {}
+        }
+    }
+    for (name, bytes) in &sidecars {
+        publish_file(&out_dir.join(name), opts.overwrite, bytes)?;
+    }
     if let Some(path) = opts.plan {
         let mut bytes =
             serde_json::to_vec_pretty(&plan).map_err(|e| Error::json("plan report", e))?;
@@ -77,6 +148,11 @@ pub fn build(opts: &BuildOptions, limits: &Limits) -> Result<BuildOutcome> {
         macro_bytes: macro_bytes.len(),
         plan,
     })
+}
+
+/// The sidecar file name for a step's fallback snapshot.
+fn sidecar_name(step_index: usize) -> String {
+    format!("fallback-step-{step_index:04}.step")
 }
 
 /// Publish one generated file with the standard policy: refuse symlink

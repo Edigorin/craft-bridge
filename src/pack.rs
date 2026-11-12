@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::error::{Error, Result};
 use crate::limits::Limits;
 use crate::profile::{
-    Manifest, MemberEntry, Source, WarningsCapture, CONTAINER_ID, FALLBACK_MODE, MANIFEST,
+    self, Manifest, MemberEntry, Source, WarningsCapture, CONTAINER_ID, FALLBACK_MODE, MANIFEST,
     PROFILE_ID, RECIPE, STEP,
 };
 use crate::recipe;
@@ -20,6 +20,11 @@ pub struct PackOptions<'a> {
     pub warnings: Option<&'a Path>,
     pub name: Option<String>,
     pub overwrite: bool,
+    /// Boundary snapshots: the STEP body state after the given recipe step
+    /// index has run in SolidCraft.
+    pub snapshots: Vec<(usize, &'a Path)>,
+    /// The single end-of-recipe snapshot (coarse artifact).
+    pub final_snapshot: Option<&'a Path>,
 }
 
 /// What packing produced.
@@ -49,6 +54,52 @@ pub fn pack(opts: &PackOptions, limits: &Limits) -> Result<PackReport> {
         None => WarningsCapture::not_provided(),
     };
 
+    // Fallback snapshots: bounded, STEP-validated, packaged under the
+    // snapshot prefix. The boundary index must address a real recipe step.
+    let mut snapshot_members: Vec<(String, Vec<u8>, profile::SnapshotEntry)> = Vec::new();
+    for (index, path) in &opts.snapshots {
+        if *index >= command_count {
+            return Err(Error::InvalidRecipe(format!(
+                "snapshot boundary {index} is past the last recipe step"
+            )));
+        }
+        let bytes = zipio::read_file_bounded(path, limits.max_member_bytes, "snapshot")?;
+        validate_step(&bytes)?;
+        let member = format!("{}step_{index:04}.step", profile::SNAPSHOT_PREFIX);
+        snapshot_members.push((
+            member.clone(),
+            bytes,
+            profile::SnapshotEntry {
+                step_index: *index,
+                member,
+                bytes: 0,
+                scope: profile::SnapshotScope::Boundary,
+            },
+        ));
+    }
+    if let Some(path) = opts.final_snapshot {
+        let bytes = zipio::read_file_bounded(path, limits.max_member_bytes, "final snapshot")?;
+        validate_step(&bytes)?;
+        let member = format!("{}step_{:04}.step", profile::SNAPSHOT_PREFIX, command_count);
+        snapshot_members.push((
+            member.clone(),
+            bytes,
+            profile::SnapshotEntry {
+                step_index: command_count,
+                member,
+                bytes: 0,
+                scope: profile::SnapshotScope::Final,
+            },
+        ));
+    }
+    if snapshot_members.len() > limits.max_snapshots {
+        return Err(Error::limit(
+            "snapshots",
+            limits.max_snapshots as u64,
+            snapshot_members.len() as u64,
+        ));
+    }
+
     let name = resolve_name(opts);
     let manifest = Manifest {
         profile: PROFILE_ID.to_string(),
@@ -72,21 +123,36 @@ pub fn pack(opts: &PackOptions, limits: &Limits) -> Result<PackReport> {
                 bytes: step_bytes.len() as u64,
             },
         ],
+        snapshots: snapshot_members
+            .iter_mut()
+            .map(|(_, _, entry)| {
+                entry.bytes = 0;
+                entry.clone()
+            })
+            .collect(),
     };
+    let mut manifest = manifest;
+    for entry in &mut manifest.snapshots {
+        let bytes = snapshot_members
+            .iter()
+            .find(|(m, _, _)| *m == entry.member)
+            .map(|(_, b, _)| b.len() as u64)
+            .unwrap_or(0);
+        entry.bytes = bytes;
+    }
     let mut manifest_bytes =
         serde_json::to_vec_pretty(&manifest).map_err(|e| Error::json("manifest.json", e))?;
     manifest_bytes.push(b'\n');
 
-    zipio::write_archive_atomic(
-        opts.out,
-        opts.overwrite,
-        limits,
-        &[
-            (MANIFEST, manifest_bytes.as_slice()),
-            (RECIPE, recipe_bytes.as_slice()),
-            (STEP, step_bytes.as_slice()),
-        ],
-    )?;
+    let mut members: Vec<(&str, &[u8])> = vec![
+        (MANIFEST, manifest_bytes.as_slice()),
+        (RECIPE, recipe_bytes.as_slice()),
+        (STEP, step_bytes.as_slice()),
+    ];
+    for (member, bytes, _) in &snapshot_members {
+        members.push((member.as_str(), bytes.as_slice()));
+    }
+    zipio::write_archive_atomic(opts.out, opts.overwrite, limits, &members)?;
 
     Ok(PackReport {
         out: opts.out.to_path_buf(),
