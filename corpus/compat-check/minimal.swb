@@ -30,8 +30,8 @@ Sub main()
     On Error GoTo Fail
 
     ' ---- report setup (before any model mutation) ----
-    reportPath = Environ$("CRAFT_BRIDGE_REPORT")
-    If reportPath = "" Then Err.Raise vbObjectError + 513, "minimal.swb", "CRAFT_BRIDGE_REPORT is not set"
+    reportPath = ReportPathFromHost()
+    If reportPath = "" Then Err.Raise vbObjectError + 513, "minimal.swb", "no report path: CRAFT_BRIDGE_REPORT is unset and no path file exists in TEMP"
     Open reportPath For Output As #1
     Print #1, "{""type"":""header"",""macro"":""compat-check/minimal.swb"",""bridge_version"":""0.1.0""}"
 
@@ -81,15 +81,44 @@ Sub main()
     Exit Sub
 
 Fail:
-    ' The report must survive early failure: write what happened and the
-    ' completion signal, then leave the part as it is.
+    ' The report must survive early failure: open it if the failure happened
+    ' before Open, write what happened and the completion signal, then leave
+    ' the part as it is.
     On Error Resume Next
+    If reportPath = "" Then reportPath = ReportPathFromHost()
     If reportPath <> "" Then
+        Open reportPath For Append As #1
         Print #1, "{""type"":""step"",""index"":" & Trim(Str(stepIdx)) & ",""command"":""macro"",""status"":""failed"",""message"":""" & JsonStr(Err.Description) & """}"
         Print #1, "{""type"":""summary"",""status"":""failed""}"
         Close #1
     End If
 End Sub
+
+' The report path travels in the host's environment when the host set it before
+' SolidWorks started, and otherwise in a one-line path file under %TEMP%: the
+' macro runs inside the SolidWorks process, which may be an instance that was
+' already open and inherited an older environment. TEMP is set at login, so it
+' is always visible.
+Function ReportPathFromHost() As String
+    Dim p As String, f As Integer, line As String
+    p = Environ$("CRAFT_BRIDGE_REPORT")
+    If p <> "" Then
+        ReportPathFromHost = p
+        Exit Function
+    End If
+    p = Environ$("TEMP")
+    If p = "" Then Exit Function
+    p = p & "\craft-bridge-report-path.txt"
+    Err.Clear
+    On Error Resume Next
+    f = FreeFile
+    Open p For Input As #f
+    If Err.Number = 0 Then
+        Line Input #f, line
+        Close #f
+        If Err.Number = 0 Then ReportPathFromHost = Trim(line)
+    End If
+End Function
 
 ' Write one step line. Numbers use Str(), which always writes a period as the
 ' decimal separator, so the report is locale-independent.

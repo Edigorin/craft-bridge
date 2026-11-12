@@ -127,3 +127,18 @@ and `CreateCircleByRadius` in metres, `SketchAddConstraints "sgHorizontal"`,
 its completion signal, and failure handling that still writes one. The
 "Checkpoint-verified" column above is filled from that run
 (`docs/seat-acceptance.md` records the SolidWorks version).
+
+Seat findings so far (first contact, SolidWorks revision 34.3.2 / 2026):
+
+- The legacy **`RunMacro(path, "", "main")` is the verified invocation**;
+  `RunMacro2`'s ByRef error argument raises TYPE_E_ELEMENTNOTFOUND /
+  "Type mismatch" under both PowerShell and VBScript late binding, so the
+  runner (`tools/run-macro.vbs`) tries RunMacro2 first and falls back.
+- The macro runs **inside the SolidWorks process**: an already-open instance
+  inherits an older environment, so `CRAFT_BRIDGE_REPORT` cannot be trusted to
+  be visible. The report path therefore also travels as a one-line file under
+  `%TEMP%`, which is set at login and always visible
+  (`ReportPathFromHost` in the macro).
+- A `.swb` RunMacro "success" means the VBA did not crash out — the Fail
+  handler swallows errors, so only the runtime report proves the work
+  happened. Never infer success from the invocation result.

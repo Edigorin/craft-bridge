@@ -45,7 +45,12 @@ if ($actual -ne $ExpectSha256.ToUpperInvariant()) {
 $reportDirFull = (Resolve-Path $ReportDir).Path
 $reportPath = Join-Path $reportDirFull "runtime-report.jsonl"
 if (Test-Path $reportPath) { Remove-Item $reportPath } # never trust a stale report
+# The macro runs inside the SolidWorks process, which may be an instance that
+# is already open and inherited an older environment. The path therefore also
+# travels as a one-line file under %TEMP%, which every process can see.
 $env:CRAFT_BRIDGE_REPORT = $reportPath
+$pathFile = Join-Path $env:TEMP "craft-bridge-report-path.txt"
+Set-Content -Path $pathFile -Value $reportPath
 
 # ---- run: all SolidWorks COM goes through tools/run-macro.vbs (VBScript is
 # IDispatch-native; PowerShell's late binder has failed on this seat) ----
@@ -62,7 +67,10 @@ $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 while (-not (Test-Path $reportPath) -and (Get-Date) -lt $deadline) {
     Start-Sleep -Milliseconds 500
 }
-if (-not (Test-Path $reportPath)) { throw "no runtime report appeared at $reportPath" }
+if (-not (Test-Path $reportPath)) {
+    Get-ChildItem $reportDirFull | Out-String | Add-Content (Join-Path $reportDirFull "smoke-log.txt")
+    throw "no runtime report appeared at $reportPath (directory listing appended to smoke-log.txt)"
+}
 
 # The summary line is the completion signal; wait for it.
 $complete = $false
@@ -71,7 +79,11 @@ while ((Get-Date) -lt $deadline) {
     if ($lines -and ($lines[-1] -match '"type":"summary"')) { $complete = $true; break }
     Start-Sleep -Milliseconds 500
 }
-if (-not $complete) { throw "the runtime report is truncated: no summary line (macro crashed or is still running)" }
+if (-not $complete) {
+    Get-ChildItem $reportDirFull | Out-String | Add-Content (Join-Path $reportDirFull "smoke-log.txt")
+    throw "the runtime report is truncated: no summary line (macro crashed or is still running)"
+}
+Remove-Item $pathFile -ErrorAction SilentlyContinue
 
 # ---- check the report ----
 $created = 0; $degraded = 0; $failed = 0; $notExecuted = 0; $steps = 0; $summaryStatus = "?"
