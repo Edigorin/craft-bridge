@@ -56,10 +56,19 @@ Set-Content -Path $pathFile -Value $reportPath
 # IDispatch-native; PowerShell's late binder has failed on this seat) ----
 Write-Host "running $rel (sha256 verified) - report: $reportPath"
 $runner = Join-Path $repo "tools\run-macro.vbs"
-$vbsOut = & cscript //nologo $runner $macroFull 2>&1 | ForEach-Object { "$_" }
-$vbsExit = $LASTEXITCODE
-$vbsOut | ForEach-Object { Write-Host $_ }
-$vbsOut | Set-Content (Join-Path $reportDirFull "smoke-log.txt")
+$logPath = Join-Path $reportDirFull "smoke-log.txt"
+$proc = Start-Process -FilePath "cscript" `
+    -ArgumentList @("//nologo", $runner, $macroFull) `
+    -NoNewWindow -PassThru `
+    -RedirectStandardOutput $logPath `
+    -RedirectStandardError (Join-Path $reportDirFull "smoke-log-err.txt")
+if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
+    $proc.Kill()
+    Get-ChildItem $reportDirFull | Out-String | Add-Content $logPath
+    throw "the macro runner did not return within $TimeoutSeconds s - a modal dialog in the SolidWorks window is the usual cause; check it"
+}
+$vbsExit = $proc.ExitCode
+Get-Content $logPath | ForEach-Object { Write-Host $_ }
 Write-Host "runner exit code: $vbsExit"
 
 # ---- wait for the report ----
