@@ -24,6 +24,24 @@ runtime report after.
 
 You can review the generated macro as plain text before it runs — it is your file.
 
+## Usage
+
+The bridge CLI packs and inspects `.craftx` artifacts today (ticket #2 of the
+v1 plan); macro generation lands next. Built with Rust (`cargo build --release`).
+
+```bash
+# Pack a design exported from SolidCraft (recipe JSON + STEP geometry).
+# --warnings takes the exporter's omission warnings as a JSON array of strings;
+# without it the manifest records them as not provided.
+craft-bridge pack --recipe script.json --step part.step \
+  --warnings warnings.json --out part.craftx
+
+# Show what an artifact contains (add --json for machine-readable output).
+craft-bridge inspect part.craftx
+```
+
+The artifact contract is [docs/replay-profile.md](docs/replay-profile.md).
+
 ## Status
 
 Program spec published (see [docs/spec.md](docs/spec.md)); v1 (single parts) in

@@ -1,0 +1,10 @@
+{
+  "commands": [
+    { "command": "document.units", "params": { "units": "mm" } },
+    { "command": "parameters.add", "params": { "name": "width", "value": "40 mm", "expression": "40 mm" } },
+    { "command": "parameters.add", "params": { "name": "height", "value": "2 * width", "expression": "2 * width" } },
+    { "command": "timeline.add", "params": { "feature": { "type": "Sketch", "name": "Profile" }, "params": { "d1": "width" } } },
+    { "command": "timeline.add", "params": { "feature": { "type": "Extrude", "name": "Base" }, "params": { "d2": "12 mm", "d3": "height" } } },
+    { "command": "vendor.future_thing", "params": { "what": "unknown command: preserved, never executed" } }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "profile": "craft-bridge/replay/1",
+  "container": "craftx/1",
+  "name": "part",
+  "created_by": "craft-bridge 0.1.0",
+  "source": {
+    "recipe_file": "script.json",
+    "step_file": "part.step",
+    "warnings_file": "warnings.json"
+  },
+  "warnings": {
+    "status": "provided",
+    "items": [
+      "appearances omitted",
+      "canvases omitted"
+    ]
+  },
+  "fallback_mode": "final-snapshot-coarse",
+  "members": [
+    {
+      "path": "recipe.json",
+      "bytes": 700
+    },
+    {
+      "path": "geometry/final.step",
+      "bytes": 289
+    }
+  ]
+}

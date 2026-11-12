@@ -1,0 +1,101 @@
+{
+  "artifact": "part.craftx",
+  "profile": "craft-bridge/replay/1",
+  "container": "craftx/1",
+  "name": "part",
+  "created_by": "craft-bridge 0.1.0",
+  "source": {
+    "recipe_file": "script.json",
+    "step_file": "part.step",
+    "warnings_file": "warnings.json"
+  },
+  "warnings": {
+    "status": "provided",
+    "items": [
+      "appearances omitted",
+      "canvases omitted"
+    ]
+  },
+  "fallback_mode": "final-snapshot-coarse",
+  "steps": [
+    {
+      "index": 0,
+      "command": "document.units",
+      "detail": null
+    },
+    {
+      "index": 1,
+      "command": "parameters.add",
+      "detail": "width"
+    },
+    {
+      "index": 2,
+      "command": "parameters.add",
+      "detail": "height"
+    },
+    {
+      "index": 3,
+      "command": "timeline.add",
+      "detail": "Sketch"
+    },
+    {
+      "index": 4,
+      "command": "timeline.add",
+      "detail": "Extrude"
+    },
+    {
+      "index": 5,
+      "command": "vendor.future_thing",
+      "detail": null
+    }
+  ],
+  "parameters": {
+    "user": [
+      {
+        "name": "width",
+        "raw": {
+          "expression": "40 mm",
+          "name": "width",
+          "value": "40 mm"
+        }
+      },
+      {
+        "name": "height",
+        "raw": {
+          "expression": "2 * width",
+          "name": "height",
+          "value": "2 * width"
+        }
+      }
+    ],
+    "model": [
+      {
+        "name": "d1",
+        "raw": "width"
+      },
+      {
+        "name": "d2",
+        "raw": "12 mm"
+      },
+      {
+        "name": "d3",
+        "raw": "height"
+      }
+    ]
+  },
+  "geometry": {
+    "member": "geometry/final.step",
+    "bytes": 289,
+    "schema": "AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF { 1 0 10303 442 1 1 4 }"
+  },
+  "members": [
+    {
+      "path": "recipe.json",
+      "bytes": 700
+    },
+    {
+      "path": "geometry/final.step",
+      "bytes": 289
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+# One Rust for every build, local and CI: newer clippy lints must not break CI
+# unannounced, and builds on one rustc share their compiler cache.
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

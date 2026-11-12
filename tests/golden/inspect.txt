@@ -1,0 +1,28 @@
+craftx artifact: part.craftx
+profile: craft-bridge/replay/1   container: craftx/1
+name: part   created by: craft-bridge 0.1.0
+source: script.json + part.step   warnings sidecar: warnings.json
+omission warnings: provided: 2 omission warning(s)
+  - appearances omitted
+  - canvases omitted
+fallback: final-snapshot-coarse
+
+steps (6):
+    0  document.units
+    1  parameters.add   width
+    2  parameters.add   height
+    3  timeline.add   Sketch
+    4  timeline.add   Extrude
+    5  vendor.future_thing
+
+parameters (2 user, 3 model):
+  user   width = {"expression":"40 mm","name":"width","value":"40 mm"}
+  user   height = {"expression":"2 * width","name":"height","value":"2 * width"}
+  model  d1 = "width"
+  model  d2 = "12 mm"
+  model  d3 = "height"
+
+geometry: geometry/final.step (289 bytes, schema AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF { 1 0 10303 442 1 1 4 })
+members:
+  recipe.json  700 bytes
+  geometry/final.step  289 bytes
