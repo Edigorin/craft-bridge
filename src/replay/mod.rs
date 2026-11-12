@@ -24,6 +24,8 @@
 use serde::Serialize;
 use serde_json::Value;
 
+pub mod expr;
+
 use crate::error::{Error, Result};
 use crate::limits::Limits;
 

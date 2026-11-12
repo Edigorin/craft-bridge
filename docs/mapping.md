@@ -8,6 +8,24 @@ The last column is filled in when the compatibility checkpoint runs on the
 seat. One allowlist decides what is translated; reports are rendered from the
 same decision, so they cannot diverge from what the macro does.
 
+## Expressions (the supported subset)
+
+One bounded engine (`src/replay/expr.rs`) parses, evaluates and translates
+SolidCraft expressions. Numeric literals are *poly*: their dimension comes
+from context — bare `2` in `2 * width` doubles a length rather than being two
+millimetres — and an explicit unit (`mm|cm|m|in|ft|deg|rad`) fixes the
+dimension immediately. Parameters carry their own unit; a bare result reads in
+the caller's context (feature literals as millimetres, non-literal expressions
+as the design unit). Same-dimension division yields a count. Unsupported and
+refused: functions, implicit multiplication, fractional powers, powers of
+dimensioned values, mixed-dimension arithmetic, division by zero, unknown
+names. Hostile-input caps: 400 characters, 128 tokens, depth 16, identifiers
+64 characters — long names are rejected, never truncated into aliases.
+
+Translation to SolidWorks equation syntax preserves the same meaning
+(`40 mm` -> `40mm`, bare numbers stay bare, identifiers -> quoted global
+names) and is escaped for the macro separately from VBA-literal escaping.
+
 ## Units
 
 | Where | Unit |
