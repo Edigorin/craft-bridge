@@ -1,0 +1,111 @@
+' craft-bridge compatibility checkpoint - minimal.swb
+' Hand-written and reviewed line by line. It proves on one seat: .swb syntax and
+' entry point, fresh-part creation from the default template, origin-plane
+' selection, sketch creation, one relation and one dimension through the API,
+' incremental JSONL runtime reporting with its completion signal, and failure
+' handling that still leaves a report. It creates nothing outside the part and
+' writes nothing except the runtime report.
+'
+' The report path comes from the CRAFT_BRIDGE_REPORT environment variable,
+' which tools/seat-smoke.ps1 sets to an absolute path inside the directory the
+' operator chose. The macro refuses to run without it.
+'
+' Units: the SolidWorks API always takes metres (and radians). Every number
+' below is therefore in metres.
+
+Option Explicit
+
+Dim swApp As SldWorks.SldWorks
+Dim swDoc As SldWorks.ModelDoc2
+Dim swSketchMgr As SketchManager
+Dim reportPath As String
+
+Sub main()
+    Dim template As String
+    Dim ok As Boolean
+    Dim ln As SketchSegment
+    Dim dp As Parameter
+    Dim stepIdx As Long
+    stepIdx = -1
+    On Error GoTo Fail
+
+    ' ---- report setup (before any model mutation) ----
+    reportPath = Environ$("CRAFT_BRIDGE_REPORT")
+    If reportPath = "" Then Err.Raise vbObjectError + 513, "minimal.swb", "CRAFT_BRIDGE_REPORT is not set"
+    Open reportPath For Output As #1
+    Print #1, "{""type"":""header"",""macro"":""compat-check/minimal.swb"",""bridge_version"":""0.1.0""}"
+
+    ' ---- step 0: fresh part from the default template ----
+    stepIdx = 0
+    Set swApp = Application.SldWorks
+    template = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
+    If template = "" Then Err.Raise vbObjectError + 514, "minimal.swb", "no default part template is configured"
+    Set swDoc = swApp.NewDocument(template, 0, 0, 0)
+    If swDoc Is Nothing Then Err.Raise vbObjectError + 515, "minimal.swb", "NewDocument returned nothing"
+    WriteStep stepIdx, "document.new", "created", "fresh part from the default template"
+
+    ' ---- step 1: sketch on the Front plane with one line and one circle ----
+    stepIdx = 1
+    ok = swDoc.Extension.SelectByID2("Front Plane", "PLANE", 0, 0, 0, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    If Not ok Then Err.Raise vbObjectError + 516, "minimal.swb", "could not select the Front plane"
+    Set swSketchMgr = swDoc.SketchManager
+    swSketchMgr.InsertSketch True
+    Set ln = swSketchMgr.CreateLine(0#, 0#, 0#, 0.04, 0#, 0#)
+    swSketchMgr.CreateCircleByRadius 0.02, 0.02, 0#, 0.005
+    swDoc.ClearSelection2 True
+    WriteStep stepIdx, "sketch.geometry", "created", "1 line, 1 circle (metres)"
+
+    ' ---- step 2: one relation: the line is horizontal ----
+    stepIdx = 2
+    ok = ln.Select(False)
+    If Not ok Then Err.Raise vbObjectError + 517, "minimal.swb", "could not select the line"
+    swDoc.SketchAddConstraints "sgHorizontal"
+    swDoc.ClearSelection2 True
+    WriteStep stepIdx, "sketch.relation", "created", "sgHorizontal"
+
+    ' ---- step 3: one driving dimension: the line is 40 mm long ----
+    stepIdx = 3
+    ok = ln.Select(False)
+    If Not ok Then Err.Raise vbObjectError + 518, "minimal.swb", "could not select the line for dimensioning"
+    swDoc.AddDimension2 0.02, 0.01, 0#
+    Set dp = swDoc.Parameter("D1@Sketch1")
+    If dp Is Nothing Then Err.Raise vbObjectError + 519, "minimal.swb", "dimension D1@Sketch1 was not created"
+    dp.SystemValue = 0.04
+    swDoc.ClearSelection2 True
+    WriteStep stepIdx, "sketch.dimension", "created", "length = 0.04 m"
+
+    ' ---- done ----
+    swSketchMgr.InsertSketch True
+    Print #1, "{""type"":""summary"",""status"":""ok""}"
+    Close #1
+    Exit Sub
+
+Fail:
+    ' The report must survive early failure: write what happened and the
+    ' completion signal, then leave the part as it is.
+    On Error Resume Next
+    If reportPath <> "" Then
+        Print #1, "{""type"":""step"",""index"":" & Trim(Str(stepIdx)) & ",""command"":""macro"",""status"":""failed"",""message"":""" & JsonStr(Err.Description) & """}"
+        Print #1, "{""type"":""summary"",""status"":""failed""}"
+        Close #1
+    End If
+End Sub
+
+' Write one step line. Numbers use Str(), which always writes a period as the
+' decimal separator, so the report is locale-independent.
+Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)
+    Print #1, "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
+End Sub
+
+' JSON string escaping. This is not VBA-literal escaping: it is only for the
+' report file. Generated code strings are escaped separately by the generator.
+Function JsonStr(ByVal s As String) As String
+    Dim t As String
+    t = Replace(s, "\", "\\")
+    t = Replace(t, """", "\""")
+    t = Replace(t, vbCrLf, "\n")
+    t = Replace(t, vbCr, "\n")
+    t = Replace(t, vbLf, "\n")
+    t = Replace(t, vbTab, "\t")
+    JsonStr = t
+End Function
