@@ -4,7 +4,7 @@
 # Review this script and corpus/compat-check/minimal.swb before running.
 
 param(
-    [string]$ExpectSha256 = "49e9a582c68764387eb7e0c8232f57b2120dfbfa508984479336dc65b3d64ee0"
+    [string]$ExpectSha256 = "538e3a49d0d1eb831ea0029fb853afcf80f0426ef5889a12da716fa1647f397c"
 )
 
 $ErrorActionPreference = "Stop"
@@ -53,5 +53,6 @@ if (Test-Path (Join-Path $reportDir "runtime-report.jsonl")) {
 }
 
 Write-Host ""
-Write-Host "==== paste the contents of $results back to the agent ===="
+Write-Host "==== paste everything below back to the agent ===="
+Get-Content $results | ForEach-Object { Write-Host $_ }
 exit $code

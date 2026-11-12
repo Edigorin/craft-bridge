@@ -34,6 +34,7 @@ Sub main()
     If reportPath = "" Then Err.Raise vbObjectError + 513, "minimal.swb", "no report path: CRAFT_BRIDGE_REPORT is unset and no path file exists in TEMP"
     Open reportPath For Output As #1
     Print #1, "{""type"":""header"",""macro"":""compat-check/minimal.swb"",""bridge_version"":""0.1.0""}"
+    FlushReport
 
     ' ---- step 0: fresh part from the default template ----
     stepIdx = 0
@@ -120,10 +121,21 @@ Function ReportPathFromHost() As String
     End If
 End Function
 
-' Write one step line. Numbers use Str(), which always writes a period as the
+' Write one step line and flush it to disk immediately: Print buffers, and a
+' hard failure (which even the error handler cannot see) would otherwise hide
+' the last lines. Numbers use Str(), which always writes a period as the
 ' decimal separator, so the report is locale-independent.
 Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)
+    On Error Resume Next
     Print #1, "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
+    FlushReport
+End Sub
+
+' Close and reopen the report so the line just written reaches the disk.
+Sub FlushReport()
+    On Error Resume Next
+    Close #1
+    Open reportPath For Append As #1
 End Sub
 
 ' JSON string escaping. This is not VBA-literal escaping: it is only for the

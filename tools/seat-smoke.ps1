@@ -89,6 +89,8 @@ while ((Get-Date) -lt $deadline) {
     Start-Sleep -Milliseconds 500
 }
 if (-not $complete) {
+    "--- partial runtime report ---" | Add-Content (Join-Path $reportDirFull "smoke-log.txt")
+    Get-Content $reportPath -ErrorAction SilentlyContinue | Add-Content (Join-Path $reportDirFull "smoke-log.txt")
     Get-ChildItem $reportDirFull | Out-String | Add-Content (Join-Path $reportDirFull "smoke-log.txt")
     throw "the runtime report is truncated: no summary line (macro crashed or is still running)"
 }
