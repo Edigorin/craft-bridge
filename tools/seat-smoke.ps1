@@ -47,34 +47,15 @@ $reportPath = Join-Path $reportDirFull "runtime-report.jsonl"
 if (Test-Path $reportPath) { Remove-Item $reportPath } # never trust a stale report
 $env:CRAFT_BRIDGE_REPORT = $reportPath
 
-# ---- run ----
+# ---- run: all SolidWorks COM goes through tools/run-macro.vbs (VBScript is
+# IDispatch-native; PowerShell's late binder has failed on this seat) ----
 Write-Host "running $rel (sha256 verified) - report: $reportPath"
-try {
-    $sw = New-Object -ComObject SldWorks.Application
-} catch {
-    throw "could not attach to SolidWorks via COM (installed and licensed?): $($_.Exception.Message)"
-}
-Write-Host "attached to SolidWorks"
-$sw.Visible = $true
-# The legacy 3-argument RunMacro is the primary call: RunMacro2's ByRef error
-# argument does not marshal through PowerShell late binding on some machines
-# (TYPE_E_ELEMENTNOTFOUND / 0x8002802B). RunMacro2 stays as the fallback.
-$invocation = "none"
-$ok = $false
-try {
-    $ok = [bool]$sw.RunMacro($macroFull, "", "main")
-    $invocation = "RunMacro"
-} catch {
-    Write-Host "RunMacro failed: $($_.Exception.Message) - trying RunMacro2"
-    try {
-        $runError = 0
-        $ok = [bool]$sw.RunMacro2($macroFull, "", "main", 1, [ref]$runError)
-        $invocation = "RunMacro2 (runError=$runError)"
-    } catch {
-        throw "both macro invocations failed ($invocation attempt gave: $($_.Exception.Message))"
-    }
-}
-Write-Host "invocation: $invocation - returned $ok"
+$runner = Join-Path $repo "tools\run-macro.vbs"
+$vbsOut = & cscript //nologo $runner $macroFull 2>&1 | ForEach-Object { "$_" }
+$vbsExit = $LASTEXITCODE
+$vbsOut | ForEach-Object { Write-Host $_ }
+$vbsOut | Set-Content (Join-Path $reportDirFull "smoke-log.txt")
+Write-Host "runner exit code: $vbsExit"
 
 # ---- wait for the report ----
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)

@@ -12,14 +12,8 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $reportDir = Join-Path $env:USERPROFILE "craft-bridge-report"
 New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
 
-# SolidWorks version through COM (informational; opens no document).
-$ver = "unavailable"
-try {
-    $sw = New-Object -ComObject SldWorks.Application
-    $ver = $sw.RevisionNumber()
-} catch {
-    $ver = "unavailable: $($_.Exception.Message)"
-}
+# SolidWorks version and invocation details come from the VBScript runner's
+# output (smoke-log.txt): no COM is used from PowerShell at all.
 
 # Run the provenance-checked smoke (corpus-only, committed, byte-verified).
 # results.txt must be written even when the smoke itself throws, so this call
@@ -41,9 +35,15 @@ try {
 $results = Join-Path $reportDir "results.txt"
 "craft-bridge seat run" | Set-Content $results
 "date: $(Get-Date -Format o)" | Add-Content $results
-"solidworks revision: $ver" | Add-Content $results
 "seat-smoke exit code: $code" | Add-Content $results
 if ($smokeError -ne "") { "seat-smoke error: $smokeError" | Add-Content $results }
+"" | Add-Content $results
+"smoke-log.txt:" | Add-Content $results
+if (Test-Path (Join-Path $reportDir "smoke-log.txt")) {
+    Get-Content (Join-Path $reportDir "smoke-log.txt") | Add-Content $results
+} else {
+    "(runner produced no log)" | Add-Content $results
+}
 "" | Add-Content $results
 "runtime-report.jsonl:" | Add-Content $results
 if (Test-Path (Join-Path $reportDir "runtime-report.jsonl")) {
