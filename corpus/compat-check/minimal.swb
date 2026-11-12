@@ -100,7 +100,7 @@ End Sub
 ' already open and inherited an older environment. TEMP is set at login, so it
 ' is always visible.
 Function ReportPathFromHost() As String
-    Dim p As String, f As Integer, line As String
+    Dim p As String, f As Integer, oneLine As String
     p = Environ$("CRAFT_BRIDGE_REPORT")
     If p <> "" Then
         ReportPathFromHost = p
@@ -114,9 +114,9 @@ Function ReportPathFromHost() As String
     f = FreeFile
     Open p For Input As #f
     If Err.Number = 0 Then
-        Line Input #f, line
+        Line Input #f, oneLine
         Close #f
-        If Err.Number = 0 Then ReportPathFromHost = Trim(line)
+        If Err.Number = 0 Then ReportPathFromHost = Trim(oneLine)
     End If
 End Function
 
