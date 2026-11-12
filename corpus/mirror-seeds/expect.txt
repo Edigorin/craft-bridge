@@ -1,0 +1,5 @@
+sha256=277f113c86c9045442c39bd2595e02de0a6980b8362267eca6c50f8c607eb2a5
+min_features=3
+volume_compare=skip
+# reference.step is a placeholder body: mass comparison activates when
+# real SolidCraft exports replace it (see docs/seat-acceptance.md).
