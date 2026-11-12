@@ -29,6 +29,53 @@ pub mod expr;
 use crate::error::{Error, Result};
 use crate::limits::Limits;
 
+/// The evaluated parameter environment: names to SI quantities, filled in
+/// recipe order (the exporter emits dependency order).
+#[derive(Debug, Default, Clone)]
+pub struct ParamEnv {
+    values: Vec<(String, expr::Quantity, bool)>,
+}
+
+impl ParamEnv {
+    pub fn insert_global(&mut self, name: &str, quantity: expr::Quantity) {
+        self.values.push((name.to_string(), quantity, true));
+    }
+
+    pub fn insert_model(&mut self, name: &str, quantity: expr::Quantity) {
+        self.values.push((name.to_string(), quantity, false));
+    }
+
+    /// True when the name is a global (user) parameter: the only kind an
+    /// equation may reference in the current subset.
+    pub fn is_global(&self, name: &str) -> bool {
+        self.values
+            .iter()
+            .any(|(n, _, global)| n == name && *global)
+    }
+
+    pub fn get(&self, name: &str) -> Option<expr::Quantity> {
+        self.values
+            .iter()
+            .find(|(n, _, _)| n == name)
+            .map(|(_, q, _)| *q)
+    }
+
+    fn lookup(&self) -> impl Fn(&str) -> Option<expr::Quantity> + '_ {
+        move |name| self.get(name)
+    }
+}
+
+/// The design length unit factor from `document.units` (metres per bare unit).
+fn design_length_factor(unit: Option<&str>) -> f64 {
+    match unit {
+        Some("cm") => 0.01,
+        Some("m") => 1.0,
+        Some("in") => 0.0254,
+        Some("ft") => 0.3048,
+        _ => 0.001,
+    }
+}
+
 /// What the plan says about one step before anything runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -57,11 +104,21 @@ pub enum Work {
     Units {
         unit: String,
     },
+    /// A parameter becomes a SolidWorks global-variable equation.
     UserParam {
         name: String,
+        /// The expression as written (for the plan report).
+        expression: String,
+        /// The equation right-hand side in SolidWorks syntax.
+        equation_rhs: String,
+        /// The evaluated SI value the equation must produce (verification).
+        expect_si: f64,
     },
     Sketch(SketchStep),
     Extrude(ExtrudeStep),
+    /// Recorded but not executed and not model work (a text parameter, an
+    /// expression outside the supported subset): never triggers the stop rule.
+    Note,
     /// The stop boundary: no translation exists yet.
     Unmappable,
     /// After the stop boundary.
@@ -87,6 +144,11 @@ pub struct SketchStep {
     pub circles: Vec<CircleT>,
     pub relations: Vec<RelationT>,
     pub dimensions: Vec<DimensionT>,
+    /// Dimension equations: (index into `dimensions`, equation). A dimension
+    /// bound to a model parameter becomes an equation when the parameter's
+    /// expression is expressible (global references only); otherwise the
+    /// dimension keeps its solved value and the binding is a degrade trigger.
+    pub dim_equations: Vec<(usize, DimEquation)>,
     /// Constraint kinds the tracer cannot replay: degrade triggers, reported
     /// in both reports and never silently dropped.
     pub dropped_constraints: Vec<String>,
@@ -133,8 +195,12 @@ pub struct DimensionT {
     /// index into `circles`; Distance* hold two slots.
     pub a: usize,
     pub b: Option<usize>,
-    /// Millimetres for lengths, radians for angles.
+    /// Millimetres for lengths, radians for angles (the solved value the
+    /// recipe stores: ground truth for verification).
     pub value: f64,
+    /// The model parameter this dimension is bound to (constraint `param`):
+    /// it becomes a dimension equation instead of a fixed value.
+    pub param: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,13 +214,39 @@ pub enum DimKind {
     Angle,
 }
 
+/// How far a blind extrude reaches.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExtrudeKind {
+    /// One side, blind depth in metres.
+    Blind { depth_m: f64, negative: bool },
+    /// Symmetric about the sketch plane; total thickness in metres (the
+    /// legacy_per_side convention is folded in at parse time).
+    Symmetric { total_m: f64 },
+    /// Two blind sides, each in metres.
+    TwoSided { first_m: f64, second_m: f64 },
+    /// Through everything in one direction.
+    ThroughAll { negative: bool },
+}
+
 /// A single-direction blind extrude over the whole sketch.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtrudeStep {
     pub name: String,
-    /// Depth in metres.
-    pub depth_m: f64,
-    pub negative: bool,
+    pub kind: ExtrudeKind,
+    /// Non-literal depth expressions become dimension equations; the
+    /// equation right-hand side and the evaluated expectation travel here.
+    pub equations: Vec<DimEquation>,
+}
+
+/// An equation that drives a feature dimension, captured at runtime by name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DimEquation {
+    /// Which dimension of the feature: 1 for D1, 2 for D2.
+    pub which: usize,
+    /// The equation right-hand side in SolidWorks syntax.
+    pub rhs: String,
+    /// The evaluated SI value it must produce (verification).
+    pub expect_si: f64,
 }
 
 /// Build the plan from a validated recipe (the artifact's `recipe.json`).
@@ -162,6 +254,9 @@ pub fn plan(recipe: &Value, limits: &Limits) -> Result<Vec<PlannedStep>> {
     let commands = crate::recipe::commands_of(recipe)?;
     let mut steps = Vec::with_capacity(commands.len());
     let mut stopped = false;
+    let mut env = ParamEnv::default();
+    let mut design_factor = 0.001f64;
+    let mut design_text: &'static str = "mm";
     for (index, entry) in commands.iter().enumerate() {
         let id = entry
             .get("command")
@@ -185,6 +280,14 @@ pub fn plan(recipe: &Value, limits: &Limits) -> Result<Vec<PlannedStep>> {
                     .and_then(|p| p.get("units"))
                     .and_then(Value::as_str)
                     .unwrap_or("mm");
+                design_factor = design_length_factor(Some(unit));
+                design_text = match unit {
+                    "cm" => "cm",
+                    "m" => "m",
+                    "in" => "in",
+                    "ft" => "ft",
+                    _ => "mm",
+                };
                 PlannedStep {
                     index,
                     command: id,
@@ -201,15 +304,59 @@ pub fn plan(recipe: &Value, limits: &Limits) -> Result<Vec<PlannedStep>> {
                     .and_then(Value::as_str)
                     .unwrap_or("(unnamed)")
                     .to_string();
-                PlannedStep {
-                    index,
-                    command: id,
-                    status: PlanStatus::NotExecuted,
-                    detail: "recorded; equations land with expressions".to_string(),
-                    work: Work::UserParam { name },
-                }
+                let expression = params
+                    .and_then(|p| p.get("expression"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let unit = params
+                    .and_then(|p| p.get("unit"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let ctx = expr::Context::for_unit(&unit, design_factor, design_text);
+                let evaluated = expr::parse(&expression).ok().and_then(|node| {
+                    expr::eval(&node, &ctx, &env.lookup())
+                        .ok()
+                        .map(|q| (expr::translate(&node, &ctx), q))
+                });
+                let planned = match evaluated {
+                    Some((equation_rhs, q)) if unit != "text" => {
+                        env.insert_global(&name, q);
+                        PlannedStep {
+                            index,
+                            command: id,
+                            status: PlanStatus::Mapped,
+                            detail: format!("equation \"{name}\" = {equation_rhs}"),
+                            work: Work::UserParam {
+                                name,
+                                expression,
+                                equation_rhs,
+                                expect_si: q.value,
+                            },
+                        }
+                    }
+                    _ => PlannedStep {
+                        index,
+                        command: id,
+                        status: PlanStatus::NotExecuted,
+                        detail:
+                            "not an equation: text parameter or an expression outside the supported subset"
+                                .to_string(),
+                        work: Work::Note,
+                    },
+                };
+                planned
             }
-            "timeline.add" => plan_feature(index, &id, params, limits)?,
+            "timeline.add" => plan_feature(
+                index,
+                &id,
+                params,
+                limits,
+                &mut env,
+                design_factor,
+                design_text,
+            )?,
             _ => PlannedStep {
                 index,
                 command: id,
@@ -233,6 +380,9 @@ fn plan_feature(
     id: &str,
     params: Option<&Value>,
     limits: &Limits,
+    env: &mut ParamEnv,
+    design_factor: f64,
+    design_text: &'static str,
 ) -> Result<PlannedStep> {
     let feature = params
         .and_then(|p| p.get("feature"))
@@ -250,8 +400,44 @@ fn plan_feature(
         detail,
         work: Work::Unmappable,
     };
+    // Model parameters (feature inputs, in the step's params array) evaluate
+    // in array order and enter the environment as model entries.
+    let mut model_exprs: Vec<(String, String, String)> = Vec::new();
+    if let Some(items) = params
+        .and_then(|p| p.get("params"))
+        .and_then(Value::as_array)
+    {
+        for item in items {
+            let n = item
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let e = item
+                .get("expression")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let u = item
+                .get("unit")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            if n.is_empty() {
+                continue;
+            }
+            let ctx = expr::Context::for_unit(&u, design_factor, design_text);
+            let evaluated = expr::parse(&e)
+                .ok()
+                .and_then(|node| expr::eval(&node, &ctx, &env.lookup()).ok());
+            if let Some(q) = evaluated {
+                env.insert_model(&n, q);
+            }
+            model_exprs.push((n, e, u));
+        }
+    }
     Ok(match kind {
-        "sketch" => match parse_sketch(name, feature, limits) {
+        "sketch" => match parse_sketch(name, feature, limits, &model_exprs, env, design_factor, design_text) {
             Ok((sketch, degrade)) => {
                 let dropped = sketch.dropped_constraints.len();
                 let detail = if degrade {
@@ -284,13 +470,27 @@ fn plan_feature(
             Err(Error::Unsupported(reason)) => unmappable(reason),
             Err(e) => return Err(e),
         },
-        "extrude" => match parse_extrude(name, feature) {
+        "extrude" => match parse_extrude(name, feature, env, design_factor, design_text) {
             Ok(extrude) => {
-                let detail = format!(
-                    "extrude {} mm{} over the whole sketch",
-                    extrude.depth_m * 1000.0,
-                    if extrude.negative { " (negative)" } else { "" }
-                );
+                let detail = match &extrude.kind {
+                    ExtrudeKind::Blind { depth_m, negative } => format!(
+                        "extrude {} mm{} over the whole sketch",
+                        depth_m * 1000.0,
+                        if *negative { " (negative)" } else { "" }
+                    ),
+                    ExtrudeKind::Symmetric { total_m } => {
+                        format!("symmetric extrude {} mm total", total_m * 1000.0)
+                    }
+                    ExtrudeKind::TwoSided { first_m, second_m } => format!(
+                        "two-sided extrude {} + {} mm",
+                        first_m * 1000.0,
+                        second_m * 1000.0
+                    ),
+                    ExtrudeKind::ThroughAll { negative } => format!(
+                        "extrude through all{}",
+                        if *negative { " (negative)" } else { "" }
+                    ),
+                };
                 PlannedStep {
                     index,
                     command: id.to_string(),
@@ -312,7 +512,15 @@ fn plan_feature(
 /// Parse a sketch. Malformed recipe data is InvalidRecipe; content outside
 /// the tracer subset is Unsupported (the stop boundary) or a degrade trigger
 /// (kept on the sketch and reported).
-fn parse_sketch(name: String, feature: &Value, limits: &Limits) -> Result<(SketchStep, bool)> {
+fn parse_sketch(
+    name: String,
+    feature: &Value,
+    limits: &Limits,
+    model_exprs: &[(String, String, String)],
+    env: &ParamEnv,
+    design_factor: f64,
+    design_text: &'static str,
+) -> Result<(SketchStep, bool)> {
     let plane_v = feature
         .get("plane")
         .ok_or_else(|| Error::InvalidRecipe("sketch has no plane".to_string()))?;
@@ -579,6 +787,7 @@ fn parse_sketch(name: String, feature: &Value, limits: &Limits) -> Result<(Sketc
                     a: line_index("l")?,
                     b: None,
                     value: value()?,
+                    param: k.get("param").and_then(Value::as_str).map(str::to_string),
                 }),
                 "distance" | "distance_x" | "distance_y" => {
                     let kind = match ctype.as_str() {
@@ -591,6 +800,7 @@ fn parse_sketch(name: String, feature: &Value, limits: &Limits) -> Result<(Sketc
                         a: point_slot("p")?,
                         b: Some(point_slot("q")?),
                         value: value()?,
+                        param: k.get("param").and_then(Value::as_str).map(str::to_string),
                     });
                 }
                 "radius" | "diameter" => {
@@ -604,6 +814,7 @@ fn parse_sketch(name: String, feature: &Value, limits: &Limits) -> Result<(Sketc
                         a: circle_index("c")?,
                         b: None,
                         value: value()?,
+                        param: k.get("param").and_then(Value::as_str).map(str::to_string),
                     });
                 }
                 "angle" => dimensions.push(DimensionT {
@@ -611,6 +822,7 @@ fn parse_sketch(name: String, feature: &Value, limits: &Limits) -> Result<(Sketc
                     a: line_index("a")?,
                     b: Some(line_index("b")?),
                     value: value()?,
+                    param: k.get("param").and_then(Value::as_str).map(str::to_string),
                 }),
                 other => dropped_constraints.push(other.to_string()),
             }
@@ -623,7 +835,7 @@ fn parse_sketch(name: String, feature: &Value, limits: &Limits) -> Result<(Sketc
         }
     }
 
-    let sketch = SketchStep {
+    let mut sketch = SketchStep {
         name,
         plane,
         points,
@@ -631,38 +843,77 @@ fn parse_sketch(name: String, feature: &Value, limits: &Limits) -> Result<(Sketc
         circles,
         relations,
         dimensions,
+        dim_equations: Vec::new(),
         dropped_constraints,
     };
+    // Bind dimensions to their model parameter's expression, as equations
+    // that reference globals only; anything else loses the equation (reported
+    // as a degrade trigger) and keeps the solved value.
+    for (di, d) in sketch.dimensions.iter().enumerate() {
+        let param = match &d.param {
+            Some(p) => p.clone(),
+            None => continue,
+        };
+        let found = model_exprs.iter().find(|(n, _, _)| *n == param);
+        let bound = found.and_then(|(_, expression, unit)| {
+            let node = expr::parse(expression).ok()?;
+            let mut used = Vec::new();
+            expr::names(&node, &mut used);
+            if !used.iter().all(|u| env.is_global(u)) {
+                return None;
+            }
+            let ctx = expr::Context::for_unit(unit, design_factor, design_text);
+            expr::eval(&node, &ctx, &env.lookup()).ok()?;
+            Some(DimEquation {
+                which: 0,
+                rhs: expr::translate(&node, &ctx),
+                expect_si: d.value,
+            })
+        });
+        match bound {
+            Some(equation) => sketch.dim_equations.push((di, equation)),
+            None => sketch
+                .dropped_constraints
+                .push(format!("{param} (equation not expressible)")),
+        }
+    }
     let degrade = !sketch.dropped_constraints.is_empty();
     Ok((sketch, degrade))
 }
 
-/// Single-direction blind extrude over the whole sketch, from a literal
-/// distance expression only. Anything else is an Unsupported reason (the
-/// stop rule).
-fn parse_extrude(name: String, feature: &Value) -> std::result::Result<ExtrudeStep, String> {
+/// Blind, symmetric, two-sided or through-all extrude over the whole sketch.
+/// Extent semantics follow the recipe's convention: `total_distance` is the
+/// finished thickness, `legacy_per_side` doubles symmetric distances. A
+/// second side with `second_follows_first` is the legacy signed rule and is
+/// outside this subset. Expressions evaluate through the shared engine;
+/// non-literal expressions travel as dimension equations.
+fn parse_extrude(
+    name: String,
+    feature: &Value,
+    env: &ParamEnv,
+    design_factor: f64,
+    design_text: &'static str,
+) -> std::result::Result<ExtrudeStep, String> {
     let extent = feature
         .get("extent")
         .ok_or_else(|| "extrude has no extent".to_string())?;
     for forbidden in [
-        "distance2",
         "start_offset",
         "taper",
         "to",
         "from",
         "to_offset",
-        "through_all",
         "corner",
         "to_body_apart",
     ] {
         if extent.get(forbidden).is_some() {
             return Err(format!(
-                "extrude extent has {forbidden}, outside the tracer subset"
+                "extrude extent has {forbidden}, outside the supported subset"
             ));
         }
     }
     if feature.get("thin").is_some() {
-        return Err("thin extrude is outside the tracer subset".to_string());
+        return Err("thin extrude is outside the supported subset".to_string());
     }
     match feature
         .get("profiles")
@@ -672,7 +923,7 @@ fn parse_extrude(name: String, feature: &Value) -> std::result::Result<ExtrudeSt
         Some("all") => {}
         _ => {
             return Err(
-                "extrude profiles other than \"all\" are outside the tracer subset".to_string(),
+                "extrude profiles other than \"all\" are outside the supported subset".to_string(),
             )
         }
     }
@@ -684,75 +935,120 @@ fn parse_extrude(name: String, feature: &Value) -> std::result::Result<ExtrudeSt
         "new_body" | "join" => {}
         other => {
             return Err(format!(
-                "extrude operation {other:?} is outside the tracer subset"
+                "extrude operation {other:?} is outside the supported subset"
             ))
         }
     }
-    let negative = match extent
+    if extent
+        .get("second_follows_first")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err(
+            "two-sided extrude with second_follows_first is the legacy signed rule".to_string(),
+        );
+    }
+    let total_distance = match extent
+        .get("convention")
+        .and_then(Value::as_str)
+        .unwrap_or("legacy_per_side")
+    {
+        "total_distance" => true,
+        "legacy_per_side" => false,
+        other => return Err(format!("extrude convention {other:?} is unknown")),
+    };
+    let direction = extent
         .get("direction")
         .and_then(Value::as_str)
-        .unwrap_or("positive")
-    {
-        "positive" => false,
-        "negative" => true,
-        other => {
-            return Err(format!(
-                "extrude direction {other:?} is outside the tracer subset"
-            ))
+        .unwrap_or("positive");
+    let through_all = extent
+        .get("through_all")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    // Evaluate one expression: literal numbers read as millimetres, bare
+    // numbers inside non-literal expressions read in the design unit.
+    let mut equations = Vec::new();
+    let mut eval_len = |text: &str, which: usize| -> std::result::Result<f64, String> {
+        let node = expr::parse(text).map_err(|e| format!("extrude distance: {e}"))?;
+        let literal = matches!(node, expr::Node::Number { .. });
+        let ctx = expr::Context {
+            bare_length: if literal { 0.001 } else { design_factor },
+            bare_angle: 1.0,
+            bare_dim: expr::Dim::Length,
+            bare_text: design_text,
+        };
+        let q =
+            expr::eval(&node, &ctx, &env.lookup()).map_err(|e| format!("extrude distance: {e}"))?;
+        if q.dim != expr::Dim::Length {
+            return Err("extrude distance is not a length".to_string());
         }
+        if !literal {
+            equations.push(DimEquation {
+                which,
+                rhs: expr::translate(&node, &ctx),
+                expect_si: q.value,
+            });
+        }
+        Ok(q.value)
     };
+
     let distance = extent
         .get("distance")
         .and_then(Value::as_str)
-        .ok_or_else(|| "extrude distance is not a literal expression".to_string())?;
-    let (v, is_angle) = parse_literal(distance).ok_or_else(|| {
-        "extrude distance is not a literal expression (expressions land later)".to_string()
-    })?;
-    if is_angle {
-        return Err("extrude distance is an angle".to_string());
+        .ok_or_else(|| "extrude distance is not an expression string".to_string())?;
+    if through_all {
+        let negative = match direction {
+            "positive" => false,
+            "negative" => true,
+            other => {
+                return Err(format!(
+                    "extrude direction {other:?} with through-all is outside the supported subset"
+                ))
+            }
+        };
+        return Ok(ExtrudeStep {
+            name,
+            kind: ExtrudeKind::ThroughAll { negative },
+            equations,
+        });
     }
+    let d1 = eval_len(distance, 1)?;
+
+    let kind = match (direction, extent.get("distance2").and_then(Value::as_str)) {
+        ("positive", None) => ExtrudeKind::Blind {
+            depth_m: d1.abs(),
+            negative: false,
+        },
+        ("negative", None) => ExtrudeKind::Blind {
+            depth_m: d1.abs(),
+            negative: true,
+        },
+        ("symmetric", None) => {
+            let total = if total_distance {
+                d1.abs()
+            } else {
+                2.0 * d1.abs()
+            };
+            ExtrudeKind::Symmetric { total_m: total }
+        }
+        (_, Some(_)) if direction == "symmetric" => {
+            return Err("symmetric extrude with a second side is contradictory".to_string())
+        }
+        ("positive", Some(d2s)) | ("negative", Some(d2s)) => {
+            let d2 = eval_len(d2s, 2)?;
+            ExtrudeKind::TwoSided {
+                first_m: d1.abs(),
+                second_m: d2.abs(),
+            }
+        }
+        (other, _) => return Err(format!("extrude direction {other:?} is unknown")),
+    };
     Ok(ExtrudeStep {
         name,
-        depth_m: v,
-        negative,
+        kind,
+        equations,
     })
-}
-
-/// Parse a literal expression: a number with an optional unit suffix. Bare
-/// numbers are millimetres. Returns (SI value: metres or radians, is_angle).
-/// Anything with names or operators is None.
-pub fn parse_literal(s: &str) -> Option<(f64, bool)> {
-    let t = s.trim();
-    let bytes = t.as_bytes();
-    let mut i = 0;
-    if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
-        i += 1;
-    }
-    let start = i;
-    while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
-        i += 1;
-    }
-    if i == start {
-        return None;
-    }
-    let number: f64 = t[start..i].parse().ok()?;
-    if !number.is_finite() {
-        return None;
-    }
-    let unit = t[i..].trim();
-    let (factor, is_angle) = match unit {
-        "" => (0.001, false),
-        "mm" => (0.001, false),
-        "cm" => (0.01, false),
-        "m" => (1.0, false),
-        "in" => (0.0254, false),
-        "ft" => (0.3048, false),
-        "deg" => (std::f64::consts::PI / 180.0, true),
-        "rad" => (1.0, true),
-        _ => return None,
-    };
-    let sign = if t.starts_with('-') { -1.0 } else { 1.0 };
-    Some((sign * number.abs() * factor, is_angle))
 }
 
 impl SketchStep {

@@ -153,30 +153,19 @@ fn malformed_sketch_data_is_rejected() {
     assert_eq!(steps[3].status, PlanStatus::FallbackPlanned);
 }
 
-// ---- literal expressions ----
+// ---- expressions (the engine suite is tests/expr_tests.rs) ----
 
 #[test]
-fn literals_parse_to_si_and_expressions_do_not() {
-    let cases = [
-        ("12 mm", 0.012, false),
-        ("12", 0.012, false),
-        ("-0.5 in", -0.0127, false),
-        ("3 deg", 3.0 * std::f64::consts::PI / 180.0, true),
-        ("0.25 rad", 0.25, true),
-        ("2 cm", 0.02, false),
-        ("1 ft", 0.3048, false),
-    ];
-    for (text, si, angle) in cases {
-        let (v, a) = replay::parse_literal(text).expect(text);
-        assert!((v - si).abs() < 1e-12, "{text}: {v} != {si}");
-        assert_eq!(a, angle, "{text}");
-    }
-    for text in ["width", "2 * width", "12 mm + 1", "mm", "", "1..2", "1e3"] {
-        assert!(
-            replay::parse_literal(text).is_none(),
-            "{text} must not parse"
-        );
-    }
+fn expressions_outside_the_subset_stop_the_step() {
+    // An extrude distance naming an unknown parameter stops model replay.
+    let recipe = TRACER.replace("\"distance\": \"12 mm\"", "\"distance\": \"mystery / 2\"");
+    let steps = plan_of(&recipe);
+    assert_eq!(steps[3].status, PlanStatus::FallbackPlanned);
+    // A parameter expression outside the subset becomes a plain note: no
+    // equation, no stop.
+    let recipe = TRACER.replace("\"expression\": \"40 mm\"", "\"expression\": \"sqrt(40)\"");
+    let steps = plan_of(&recipe);
+    assert_eq!(steps[1].status, PlanStatus::NotExecuted);
 }
 
 // ---- escaping ----

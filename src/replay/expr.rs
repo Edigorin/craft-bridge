@@ -46,15 +46,66 @@ pub struct Quantity {
 pub struct Context {
     /// SI metres per bare length unit (0.001 for millimetres).
     pub bare_length: f64,
+    /// SI radians per bare angle unit (1 for radians, pi/180 for degrees).
+    pub bare_angle: f64,
     /// The dimension a bare result takes.
     pub bare_dim: Dim,
+    /// The unit text a bare length literal is suffixed with on translation,
+    /// so the equation means the same thing whatever the SolidWorks part's
+    /// document units are.
+    pub bare_text: &'static str,
 }
 
 impl Context {
     pub fn millimetres() -> Self {
         Context {
             bare_length: 0.001,
+            bare_angle: 1.0,
             bare_dim: Dim::Length,
+            bare_text: "mm",
+        }
+    }
+
+    /// The context of a parameter with its own unit: a bare number reads in
+    /// that unit (SolidCraft's parameter rule).
+    pub fn for_unit(unit: &str, design_length: f64, design_text: &'static str) -> Self {
+        match unit {
+            "deg" => Context {
+                bare_length: design_length,
+                bare_angle: std::f64::consts::PI / 180.0,
+                bare_dim: Dim::Angle,
+                bare_text: "deg",
+            },
+            "rad" => Context {
+                bare_length: design_length,
+                bare_angle: 1.0,
+                bare_dim: Dim::Angle,
+                bare_text: "rad",
+            },
+            "" | "text" => Context {
+                bare_length: design_length,
+                bare_angle: 1.0,
+                bare_dim: Dim::Length,
+                bare_text: design_text,
+            },
+            "mm" | "cm" | "m" | "in" | "ft" => Context {
+                bare_length: unit_factor(unit).map(|(f, _)| f).unwrap_or(design_length),
+                bare_angle: 1.0,
+                bare_dim: Dim::Length,
+                bare_text: match unit {
+                    "cm" => "cm",
+                    "m" => "m",
+                    "in" => "in",
+                    "ft" => "ft",
+                    _ => "mm",
+                },
+            },
+            _ => Context {
+                bare_length: design_length,
+                bare_angle: 1.0,
+                bare_dim: Dim::Length,
+                bare_text: design_text,
+            },
         }
     }
 }
@@ -116,6 +167,20 @@ pub enum Node {
     Mul(Box<Node>, Box<Node>),
     Div(Box<Node>, Box<Node>),
     Pow(Box<Node>, Box<Node>),
+}
+
+/// Collect every name an expression references (evaluation-time binding
+/// checks use this).
+pub fn names(node: &Node, out: &mut Vec<String>) {
+    match node {
+        Node::Number { .. } => {}
+        Node::Name(n) => out.push(n.clone()),
+        Node::Unary(a) => names(a, out),
+        Node::Add(a, b) | Node::Sub(a, b) | Node::Mul(a, b) | Node::Div(a, b) | Node::Pow(a, b) => {
+            names(a, out);
+            names(b, out);
+        }
+    }
 }
 
 /// The unit suffixes the subset accepts, with their SI factors and dims.
@@ -365,7 +430,7 @@ pub fn eval(
     };
     let value = match (shape, dim) {
         (Shape::Poly, Dim::Length) => value * ctx.bare_length,
-        (Shape::Poly, Dim::Angle) => value, // bare angles read as radians
+        (Shape::Poly, Dim::Angle) => value * ctx.bare_angle,
         _ => value,
     };
     if !value.is_finite() {
@@ -470,20 +535,55 @@ fn eval_inner(
 
 /// Translate to a SolidWorks equation right-hand side, preserving meaning:
 /// literals carry explicit units where their dimension is fixed, bare numbers
-/// stay bare, identifiers become quoted global-variable names. The result is
-/// equation *syntax*; it is escaped for the macro by the emitter separately.
-pub fn translate(node: &Node) -> String {
+/// that stand for lengths get the context unit suffix (a bare `20` in a
+/// SolidWorks equation follows the part's document units, so the suffix is
+/// what keeps the meaning), bare dimensionless operands stay bare, and
+/// identifiers become quoted global-variable names. The result is equation
+/// *syntax*; the emitter escapes it for the macro separately.
+pub fn translate(node: &Node, ctx: &Context) -> String {
+    // The root: a bare number that means a length gets the unit suffix here.
+    if let Node::Number { text, unit: None } = node {
+        if ctx.bare_dim != Dim::Count {
+            return format!("{text}{}", ctx.bare_text);
+        }
+    }
+    render(node, ctx)
+}
+
+fn render(node: &Node, ctx: &Context) -> String {
+    fn bare_number(node: &Node) -> bool {
+        matches!(node, Node::Number { unit: None, .. })
+    }
+    fn side(node: &Node, ctx: &Context, suffix: bool) -> String {
+        let text = render(node, ctx);
+        if suffix && bare_number(node) {
+            format!("{text}{}", ctx.bare_text)
+        } else {
+            text
+        }
+    }
     match node {
         Node::Number { text, unit } => match unit {
             Some(u) => format!("{text}{u}"),
             None => text.clone(),
         },
         Node::Name(name) => format!("\"{}\"", name.replace('"', "")),
-        Node::Unary(inner) => format!("-{}", translate(inner)),
-        Node::Add(a, b) => format!("({} + {})", translate(a), translate(b)),
-        Node::Sub(a, b) => format!("({} - {})", translate(a), translate(b)),
-        Node::Mul(a, b) => format!("{} * {}", translate(a), translate(b)),
-        Node::Div(a, b) => format!("{} / {}", translate(a), translate(b)),
-        Node::Pow(a, b) => format!("({} ^ {})", translate(a), translate(b)),
+        Node::Unary(inner) => format!("-{}", render(inner, ctx)),
+        Node::Add(a, b) | Node::Sub(a, b) => {
+            let op = if matches!(node, Node::Add(..)) {
+                "+"
+            } else {
+                "-"
+            };
+            format!(
+                "({} {} {})",
+                side(a, ctx, !bare_number(b)),
+                op,
+                side(b, ctx, !bare_number(a))
+            )
+        }
+        Node::Mul(a, b) => format!("{} * {}", render(a, ctx), render(b, ctx)),
+        Node::Div(a, b) => format!("{} / {}", render(a, ctx), render(b, ctx)),
+        Node::Pow(a, b) => format!("({} ^ {})", render(a, ctx), render(b, ctx)),
     }
 }

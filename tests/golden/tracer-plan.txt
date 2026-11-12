@@ -1,9 +1,9 @@
 plan for tracer.craftx -> tracer.swb
 profile: craft-bridge/replay/1
-counts: 2 mapped, 0 degrade-planned, 0 fallback-planned, 2 not-executed
+counts: 3 mapped, 0 degrade-planned, 0 fallback-planned, 1 not-executed
 
     0  document.units           not-executed     units recorded (in); values replay in millimetres
-    1  parameters.add           not-executed     recorded; equations land with expressions
+    1  parameters.add           mapped           equation "width" = 40mm
     2  timeline.add             mapped           sketch on Xy: 4 lines, 0 circles, 8 relations, 2 dimensions
     3  timeline.add             mapped           extrude 12 mm over the whole sketch
 

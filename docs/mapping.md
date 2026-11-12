@@ -26,6 +26,20 @@ Translation to SolidWorks equation syntax preserves the same meaning
 (`40 mm` -> `40mm`, bare numbers stay bare, identifiers -> quoted global
 names) and is escaped for the macro separately from VBA-literal escaping.
 
+## Equations (this phase)
+
+Parameters become SolidWorks equations: user parameters as global variables
+(`"width"=40mm`), model parameters and non-literal feature inputs as dimension
+equations whose left-hand side is the dimension name **captured at runtime**
+(never assumed D1..Dn) and whose right-hand side is the translated expression.
+Bare length literals are suffixed (`20mm`) so the equation means the same
+thing whatever the part's document units are. An equation is verified by
+evaluation: added, rebuilt, and the dimension's value must match the
+evaluated expectation before the step reports `created`. Expressions may
+reference global parameters only in this phase; a model-parameter reference
+stops that step, and a dimension whose binding is not expressible keeps its
+solved value with the binding reported as a degrade trigger.
+
 ## Units
 
 | Where | Unit |

@@ -152,11 +152,30 @@ pub fn emit(steps: &[PlannedStep], artifact: &str, bridge_version: &str) -> Stri
                     ))
                 ));
             }
-            Work::UserParam { .. } => {
+            Work::UserParam {
+                name,
+                equation_rhs,
+                expect_si,
+                ..
+            } => {
+                out.push_str("    If Not stopModel Then\n");
+                out.push_str(&format!(
+                    "        st = AddGlobalEquation({}, {}, {})\n",
+                    vb_lit(name),
+                    vb_lit(equation_rhs),
+                    vba_num(*expect_si)
+                ));
+                out.push_str("    Else\n        st = \"not-executed\"\n        gMsg = \"after the first stopped step\"\n    End If\n");
+                out.push_str(&format!(
+                    "    WriteStep stepIdx, {}, st, gMsg\n    If st = \"failed\" Then stopModel = True\n\n",
+                    vb_lit(&step.command)
+                ));
+            }
+            Work::Note => {
                 out.push_str(&format!(
                     "    WriteStep stepIdx, {}, \"not-executed\", {}\n\n",
                     vb_lit(&step.command),
-                    vb_lit("recorded; equations land with expressions")
+                    vb_lit(&step.detail)
                 ));
             }
             Work::Sketch(_) => {
@@ -271,7 +290,46 @@ pub fn emit(steps: &[PlannedStep], artifact: &str, bridge_version: &str) -> Stri
              t = Replace(t, vbLf, \"\\n\")\n\
              t = Replace(t, vbTab, \"\\t\")\n\
              JsonStr = t\n\
-         End Sub\n",
+         End Function\n\
+\n\
+         ' Add a global-variable equation and rebuild. The name is a global, the\n\
+         ' right-hand side is equation syntax. Globals are verified through the\n\
+         ' dimensions that reference them.\n\
+         Function AddGlobalEquation(ByVal nm As String, ByVal rhs As String, ByVal expect As Double) As String\n\
+             On Error GoTo EqFail\n\
+             Dim eqMgr As SldWorks.EquationMgr\n\
+             Dim eqText As String\n\
+             Set eqMgr = swDoc.GetEquationMgr\n\
+             If eqMgr Is Nothing Then gMsg = \"the equation manager is missing\": AddGlobalEquation = \"failed\": Exit Function\n\
+             eqText = \"\"\"\" & nm & \"\"\"=\" & rhs\n\
+             eqMgr.Add2 -1, eqText\n\
+             swDoc.EditRebuild3\n\
+             gMsg = \"equation \" & eqText\n\
+             AddGlobalEquation = \"created\"\n\
+             Exit Function\n\
+         EqFail:\n\
+             gMsg = \"equation failed: \" & Err.Description\n\
+             AddGlobalEquation = \"failed\"\n\
+         End Function\n\
+\n\
+         ' Add an equation driving a dimension and verify it evaluated: the\n\
+         ' dimension name is captured at runtime, the value must match the\n\
+         ' expectation after a rebuild. Never presence alone.\n\
+         Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double) As Boolean\n\
+             On Error GoTo EqFail\n\
+             Dim eqMgr As SldWorks.EquationMgr\n\
+             Dim eqText As String\n\
+             Set eqMgr = swDoc.GetEquationMgr\n\
+             If eqMgr Is Nothing Then GoTo EqFail\n\
+             eqText = \"\"\"\" & dm.Name & \"\"\"=\" & rhs\n\
+             eqMgr.Add2 -1, eqText\n\
+             swDoc.EditRebuild3\n\
+             If Abs(dm.SystemValue - expect) > 0.000001 Then GoTo EqFail\n\
+             AddDimEquation = True\n\
+             Exit Function\n\
+         EqFail:\n\
+             AddDimEquation = False\n\
+         End Function\n",
     );
     out
 }
@@ -394,8 +452,8 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     out.push_str(&format!(
         "Function Dims{index}() As Boolean\n    On Error GoTo DimFail\n    Dim dd As SldWorks.DisplayDimension\n    Dim dm As SldWorks.Dimension\n"
     ));
-    for dim in &sk.dimensions {
-        out.push_str(&emit_dimension(index, dim, sk));
+    for (di, dim) in sk.dimensions.iter().enumerate() {
+        out.push_str(&emit_dimension(index, dim, sk, equation_for(sk, di)));
     }
     out.push_str(&format!(
         "    Dims{index} = True\n    Exit Function\nDimFail:\n    Dims{index} = False\nEnd Function\n\n"
@@ -477,7 +535,19 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
     }
 }
 
-fn emit_dimension(index: usize, dim: &DimensionT, sk: &SketchStep) -> String {
+fn equation_for(sk: &SketchStep, di: usize) -> Option<&crate::replay::DimEquation> {
+    sk.dim_equations
+        .iter()
+        .find(|(i, _)| *i == di)
+        .map(|(_, e)| e)
+}
+
+fn emit_dimension(
+    index: usize,
+    dim: &DimensionT,
+    sk: &SketchStep,
+    equation: Option<&crate::replay::DimEquation>,
+) -> String {
     let mut out = String::new();
     // Selection of the referents.
     match dim.kind {
@@ -534,14 +604,20 @@ fn emit_dimension(index: usize, dim: &DimensionT, sk: &SketchStep) -> String {
         DimKind::Angle => dim.value, // already radians
         _ => mm(dim.value),
     };
-    out.push_str(&format!(
-        "    dm.SystemValue = {}\n    swDoc.ClearSelection2 True\n",
-        vba_num(si)
-    ));
+    out.push_str(&format!("    dm.SystemValue = {}\n", vba_num(si)));
+    if let Some(equation) = equation {
+        out.push_str(&format!(
+            "    If Not AddDimEquation(dm, {}, {}) Then GoTo DimFail\n",
+            vb_lit(&equation.rhs),
+            vba_num(si)
+        ));
+    }
+    out.push_str("    swDoc.ClearSelection2 True\n");
     out
 }
 
 fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
+    use crate::replay::ExtrudeKind;
     let mut out = String::new();
     out.push_str(&format!("' Extrude step {index}: {}\n", vb_lit(&ex.name)));
     out.push_str(&format!(
@@ -551,22 +627,72 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
     out.push_str(
         "    If Not ok Then gMsg = \"could not select the sketch for the extrude\": GoTo ExFail\n",
     );
-    out.push_str(&format!(
-        "    Set feat = swDoc.FeatureManager.FeatureExtrusion2(True, False, {}, 0#, 0#, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
-        if ex.negative { "True" } else { "False" },
-        vba_num(ex.depth_m)
-    ));
+    let (call, verify, message) = match &ex.kind {
+        ExtrudeKind::Blind { depth_m, negative } => (
+            format!(
+                "    Set feat = swDoc.FeatureManager.FeatureExtrusion2(True, False, {}, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
+                if *negative { "True" } else { "False" },
+                vba_num(*depth_m)
+            ),
+            vec![(1usize, *depth_m)],
+            format!("depth {} m", vba_num(*depth_m)),
+        ),
+        ExtrudeKind::Symmetric { total_m } => (
+            format!(
+                "    Set feat = swDoc.FeatureManager.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondMidPlane, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
+                vba_num(*total_m)
+            ),
+            vec![(1, *total_m)],
+            format!("symmetric, total {} m", vba_num(*total_m)),
+        ),
+        ExtrudeKind::TwoSided { first_m, second_m } => (
+            format!(
+                "    Set feat = swDoc.FeatureManager.FeatureExtrusion2(False, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, {}, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
+                vba_num(*first_m),
+                vba_num(*second_m)
+            ),
+            vec![(1, *first_m), (2, *second_m)],
+            format!("two-sided {} + {} m", vba_num(*first_m), vba_num(*second_m)),
+        ),
+        ExtrudeKind::ThroughAll { negative } => (
+            format!(
+                "    Set feat = swDoc.FeatureManager.FeatureExtrusion2(True, False, {}, swEndConditions_e.swEndCondThroughAll, swEndConditions_e.swEndCondBlind, 0#, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
+                if *negative { "True" } else { "False" }
+            ),
+            vec![],
+            "through all".to_string(),
+        ),
+    };
+    out.push_str(&call);
     out.push_str(
         "    If feat Is Nothing Then gMsg = \"the extrude was not created\": GoTo ExFail\n",
     );
-    out.push_str("    Set dm = swDoc.Parameter(\"D1@\" & feat.Name)\n");
+    // Each side's dimension is verified by validated lookup against the
+    // evaluated expectation; through-all has no depth readback and says so.
+    for (which, expected) in verify {
+        out.push_str(&format!(
+            "    Set dm = swDoc.Parameter(\"D{which}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D{which} is missing\": GoTo ExFail\n    If Abs(dm.SystemValue - {}) > 0.000001 Then gMsg = \"the extrude dimension D{which} does not match\": GoTo ExFail\n",
+            vba_num(expected)
+        ));
+    }
+    if ex.equations.is_empty() && matches!(ex.kind, ExtrudeKind::ThroughAll { .. }) {
+        out.push_str(
+            "    ' through-all: the end condition is the geometry; depth readback does not apply\n",
+        );
+    }
+    // Parametric depths become equations, verified by evaluation.
+    for eq in &ex.equations {
+        out.push_str(&format!(
+            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
+            eq.which,
+            eq.which,
+            vb_lit(&eq.rhs),
+            vba_num(eq.expect_si)
+        ));
+    }
     out.push_str(&format!(
-        "    If dm Is Nothing Then gMsg = \"the extrude depth dimension is missing\": GoTo ExFail\n    If Abs(dm.SystemValue - {}) > 0.000001 Then gMsg = \"the extrude depth does not match\": GoTo ExFail\n",
-        vba_num(ex.depth_m)
-    ));
-    out.push_str(&format!(
-        "    gMsg = \"depth {} m\"\n    BuildExtrude{index} = \"created\"\n    Exit Function\n\nExFail:\n    BuildExtrude{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    On Error Resume Next\n    gMsg = Err.Description\n    BuildExtrude{index} = \"failed\"\nEnd Function\n\n",
-        vba_num(ex.depth_m)
+        "    gMsg = {}\n    BuildExtrude{index} = \"created\"\n    Exit Function\n\nExFail:\n    BuildExtrude{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    On Error Resume Next\n    gMsg = Err.Description\n    BuildExtrude{index} = \"failed\"\nEnd Function\n\n",
+        vb_lit(&message)
     ));
     out
 }

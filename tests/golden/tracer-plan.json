@@ -12,8 +12,8 @@
     {
       "index": 1,
       "command": "parameters.add",
-      "status": "not-executed",
-      "detail": "recorded; equations land with expressions"
+      "status": "mapped",
+      "detail": "equation \"width\" = 40mm"
     },
     {
       "index": 2,
@@ -29,9 +29,9 @@
     }
   ],
   "counts": {
-    "mapped": 2,
+    "mapped": 3,
     "degrade_planned": 0,
     "fallback_planned": 0,
-    "not_executed": 2
+    "not_executed": 1
   }
 }

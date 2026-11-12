@@ -38,7 +38,9 @@ fn literals_carry_units_and_bare_numbers_follow_context() {
         &node,
         &Context {
             bare_length: 0.001,
+            bare_angle: 1.0,
             bare_dim: Dim::Count,
+            bare_text: "mm",
         },
         &env(&[]),
     )
@@ -125,19 +127,25 @@ fn hostile_and_malformed_expressions_are_refused() {
 #[test]
 fn translation_preserves_meaning() {
     let node = expr::parse("2 * width").unwrap();
-    assert_eq!(expr::translate(&node), "2 * \"width\"");
+    assert_eq!(
+        expr::translate(&node, &Context::millimetres()),
+        "2 * \"width\""
+    );
 
     let node = expr::parse("40 mm").unwrap();
-    assert_eq!(expr::translate(&node), "40mm");
+    assert_eq!(expr::translate(&node, &Context::millimetres()), "40mm");
 
     let node = expr::parse("-0.5 in").unwrap();
-    assert_eq!(expr::translate(&node), "-0.5in");
+    assert_eq!(expr::translate(&node, &Context::millimetres()), "-0.5in");
 
     let node = expr::parse("(a + 1) * 2").unwrap();
-    assert_eq!(expr::translate(&node), "(\"a\" + 1) * 2");
+    assert_eq!(
+        expr::translate(&node, &Context::millimetres()),
+        "(\"a\" + 1mm) * 2"
+    );
 
     let node = expr::parse("3 deg").unwrap();
-    assert_eq!(expr::translate(&node), "3deg");
+    assert_eq!(expr::translate(&node, &Context::millimetres()), "3deg");
 }
 
 #[test]
@@ -147,5 +155,8 @@ fn round_trip_eval_matches_translation_semantics() {
     let node = expr::parse("width / 2 + depth").unwrap();
     let q = expr::eval(&node, &Context::millimetres(), &env(&pairs)).unwrap();
     assert!((q.value - 0.032).abs() < 1e-12);
-    assert_eq!(expr::translate(&node), "(\"width\" / 2 + \"depth\")");
+    assert_eq!(
+        expr::translate(&node, &Context::millimetres()),
+        "(\"width\" / 2 + \"depth\")"
+    );
 }

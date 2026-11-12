@@ -33,7 +33,14 @@ Sub main()
 
     ' ---- step 1: parameters.add ----
     stepIdx = 1
-    WriteStep stepIdx, "parameters.add", "not-executed", "recorded; equations land with expressions"
+    If Not stopModel Then
+        st = AddGlobalEquation("width", "40mm", 0.04)
+    Else
+        st = "not-executed"
+        gMsg = "after the first stopped step"
+    End If
+    WriteStep stepIdx, "parameters.add", st, gMsg
+    If st = "failed" Then stopModel = True
 
     ' ---- step 2: timeline.add ----
     stepIdx = 2
@@ -178,6 +185,7 @@ Function Dims2() As Boolean
     Set dm = dd.GetDimension2(0)
     If dm Is Nothing Then GoTo DimFail
     dm.SystemValue = 0.04
+    If Not AddDimEquation(dm, "40mm", 0.04) Then GoTo DimFail
     swDoc.ClearSelection2 True
     sl2(1).Select False
     Set dd = swDoc.AddDimension2(0.05, 0.02, 0#)
@@ -185,6 +193,7 @@ Function Dims2() As Boolean
     Set dm = dd.GetDimension2(0)
     If dm Is Nothing Then GoTo DimFail
     dm.SystemValue = 0.02
+    If Not AddDimEquation(dm, "20mm", 0.02) Then GoTo DimFail
     swDoc.ClearSelection2 True
     Dims2 = True
     Exit Function
@@ -235,11 +244,11 @@ Function BuildExtrude3() As String
     Dim dm As SldWorks.Dimension
     ok = swDoc.Extension.SelectByID2(gSketchName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If Not ok Then gMsg = "could not select the sketch for the extrude": GoTo ExFail
-    Set feat = swDoc.FeatureManager.FeatureExtrusion2(True, False, False, 0#, 0#, 0.012, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)
+    Set feat = swDoc.FeatureManager.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.012, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)
     If feat Is Nothing Then gMsg = "the extrude was not created": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
-    If dm Is Nothing Then gMsg = "the extrude depth dimension is missing": GoTo ExFail
-    If Abs(dm.SystemValue - 0.012) > 0.000001 Then gMsg = "the extrude depth does not match": GoTo ExFail
+    If dm Is Nothing Then gMsg = "the extrude dimension D1 is missing": GoTo ExFail
+    If Abs(dm.SystemValue - 0.012) > 0.000001 Then gMsg = "the extrude dimension D1 does not match": GoTo ExFail
     gMsg = "depth 0.012 m"
     BuildExtrude3 = "created"
     Exit Function
@@ -301,4 +310,43 @@ t = Replace(t, vbCr, "\n")
 t = Replace(t, vbLf, "\n")
 t = Replace(t, vbTab, "\t")
 JsonStr = t
-End Sub
+End Function
+
+' Add a global-variable equation and rebuild. The name is a global, the
+' right-hand side is equation syntax. Globals are verified through the
+' dimensions that reference them.
+Function AddGlobalEquation(ByVal nm As String, ByVal rhs As String, ByVal expect As Double) As String
+On Error GoTo EqFail
+Dim eqMgr As SldWorks.EquationMgr
+Dim eqText As String
+Set eqMgr = swDoc.GetEquationMgr
+If eqMgr Is Nothing Then gMsg = "the equation manager is missing": AddGlobalEquation = "failed": Exit Function
+eqText = """" & nm & """=" & rhs
+eqMgr.Add2 -1, eqText
+swDoc.EditRebuild3
+gMsg = "equation " & eqText
+AddGlobalEquation = "created"
+Exit Function
+EqFail:
+gMsg = "equation failed: " & Err.Description
+AddGlobalEquation = "failed"
+End Function
+
+' Add an equation driving a dimension and verify it evaluated: the
+' dimension name is captured at runtime, the value must match the
+' expectation after a rebuild. Never presence alone.
+Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double) As Boolean
+On Error GoTo EqFail
+Dim eqMgr As SldWorks.EquationMgr
+Dim eqText As String
+Set eqMgr = swDoc.GetEquationMgr
+If eqMgr Is Nothing Then GoTo EqFail
+eqText = """" & dm.Name & """=" & rhs
+eqMgr.Add2 -1, eqText
+swDoc.EditRebuild3
+If Abs(dm.SystemValue - expect) > 0.000001 Then GoTo EqFail
+AddDimEquation = True
+Exit Function
+EqFail:
+AddDimEquation = False
+End Function
