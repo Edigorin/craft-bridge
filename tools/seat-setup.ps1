@@ -22,11 +22,20 @@ try {
 }
 
 # Run the provenance-checked smoke (corpus-only, committed, byte-verified).
-& (Join-Path $PSScriptRoot "seat-smoke.ps1") `
-    -Macro (Join-Path $repo "corpus\compat-check\minimal.swb") `
-    -ExpectSha256 $ExpectSha256 `
-    -ReportDir $reportDir
-$code = $LASTEXITCODE
+# results.txt must be written even when the smoke itself throws, so this call
+# is caught and recorded rather than allowed to abort the script.
+$smokeError = ""
+try {
+    & (Join-Path $PSScriptRoot "seat-smoke.ps1") `
+        -Macro (Join-Path $repo "corpus\compat-check\minimal.swb") `
+        -ExpectSha256 $ExpectSha256 `
+        -ReportDir $reportDir
+    $code = $LASTEXITCODE
+} catch {
+    $smokeError = $_.Exception.Message
+    $code = 4
+    Write-Host "seat-smoke stopped before the macro report: $smokeError"
+}
 
 # One file to paste back.
 $results = Join-Path $reportDir "results.txt"
@@ -34,6 +43,7 @@ $results = Join-Path $reportDir "results.txt"
 "date: $(Get-Date -Format o)" | Add-Content $results
 "solidworks revision: $ver" | Add-Content $results
 "seat-smoke exit code: $code" | Add-Content $results
+if ($smokeError -ne "") { "seat-smoke error: $smokeError" | Add-Content $results }
 "" | Add-Content $results
 "runtime-report.jsonl:" | Add-Content $results
 if (Test-Path (Join-Path $reportDir "runtime-report.jsonl")) {

@@ -49,16 +49,32 @@ $env:CRAFT_BRIDGE_REPORT = $reportPath
 
 # ---- run ----
 Write-Host "running $rel (sha256 verified) - report: $reportPath"
-$sw = New-Object -ComObject SldWorks.Application
-$sw.Visible = $true
-# RunMacro2(macroPath, moduleName, procedureName, options, runError).
-# For .swb macros the module argument is unused; documented in docs/mapping.md
-# as checkpoint-verified once this run passes. options 1 = swRunMacroDefault.
-$runError = 0
-$ok = $sw.RunMacro2($macroFull, "", "main", 1, [ref]$runError)
-if (-not $ok) {
-    Write-Host "RunMacro2 returned failure (runError=$runError)"
+try {
+    $sw = New-Object -ComObject SldWorks.Application
+} catch {
+    throw "could not attach to SolidWorks via COM (installed and licensed?): $($_.Exception.Message)"
 }
+Write-Host "attached to SolidWorks"
+$sw.Visible = $true
+# The legacy 3-argument RunMacro is the primary call: RunMacro2's ByRef error
+# argument does not marshal through PowerShell late binding on some machines
+# (TYPE_E_ELEMENTNOTFOUND / 0x8002802B). RunMacro2 stays as the fallback.
+$invocation = "none"
+$ok = $false
+try {
+    $ok = [bool]$sw.RunMacro($macroFull, "", "main")
+    $invocation = "RunMacro"
+} catch {
+    Write-Host "RunMacro failed: $($_.Exception.Message) - trying RunMacro2"
+    try {
+        $runError = 0
+        $ok = [bool]$sw.RunMacro2($macroFull, "", "main", 1, [ref]$runError)
+        $invocation = "RunMacro2 (runError=$runError)"
+    } catch {
+        throw "both macro invocations failed ($invocation attempt gave: $($_.Exception.Message))"
+    }
+}
+Write-Host "invocation: $invocation - returned $ok"
 
 # ---- wait for the report ----
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
