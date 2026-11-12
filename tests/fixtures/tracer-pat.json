@@ -1,0 +1,61 @@
+{
+  "about": { "design": "Tracer Mirror", "format": "solidcraft/53", "replay": "craft-bridge build", "version": "0.40.0-rc.4" },
+  "commands": [
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "id": 1, "name": "Profile",
+          "plane": { "name": "XY", "type": "origin" },
+          "sketch": {
+            "constraints": [
+              { "id": "k1", "l": 0, "type": "horizontal" },
+              { "id": "k2", "l": 1, "type": "vertical" },
+              { "id": "k3", "l": 2, "type": "horizontal" },
+              { "id": "k4", "l": 3, "type": "vertical" }
+            ],
+            "counters": { "k": 4, "l": 4, "p": 4 },
+            "curves": [
+              { "a": 0, "b": 1, "construction": false, "id": "l1", "type": "line" },
+              { "a": 1, "b": 2, "construction": false, "id": "l2", "type": "line" },
+              { "a": 2, "b": 3, "construction": false, "id": "l3", "type": "line" },
+              { "a": 3, "b": 0, "construction": false, "id": "l4", "type": "line" }
+            ],
+            "points": [
+              { "fixed": true, "id": "origin", "pos": [0.0, 0.0] },
+              { "id": "p1", "pos": [10.0, 0.0] },
+              { "id": "p2", "pos": [10.0, 5.0] },
+              { "id": "p3", "pos": [0.0, 5.0] }
+            ]
+          },
+          "suppressed": false, "type": "sketch"
+        },
+        "params": []
+      }
+    },
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "extent": { "convention": "total_distance", "direction": "positive", "distance": "8 mm" },
+          "id": 2, "name": "Boss",
+          "operation": "new_body", "profiles": { "type": "all" },
+          "sketch": 1, "suppressed": false, "type": "extrude"
+        },
+        "params": []
+      }
+    },
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "features": [2],
+          "id": 3, "name": "Twin",
+          "plane": { "name": "XY", "type": "origin" },
+          "suppressed": false, "type": "mirror"
+        },
+        "params": []
+      }
+    }
+  ]
+}

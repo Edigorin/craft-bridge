@@ -117,6 +117,14 @@ pub fn emit(steps: &[PlannedStep], artifact: &str, bridge_version: &str) -> Stri
     if let Some(m) = max_slot {
         out.push_str(&format!("Dim regName(0 To {}) As String\n", m));
     }
+    for s in steps {
+        if matches!(
+            s.work,
+            Work::Extrude(_) | Work::Revolve(_) | Work::Primitive(_) | Work::Modifier(_)
+        ) {
+            out.push_str(&format!("Dim feat{} As SldWorks.Feature\n", s.index));
+        }
+    }
     for (index, sk) in &sketches {
         out.push_str(&format!("Dim skName{index} As String\n"));
         out.push_str(&format!(
@@ -206,12 +214,17 @@ pub fn emit(steps: &[PlannedStep], artifact: &str, bridge_version: &str) -> Stri
                 ));
                 out.push_str("    If st = \"failed\" Then stopModel = True\n\n");
             }
-            Work::Extrude(_) | Work::Revolve(_) | Work::Primitive(_) | Work::Modifier(_) => {
+            Work::Extrude(_)
+            | Work::Revolve(_)
+            | Work::Primitive(_)
+            | Work::Modifier(_)
+            | Work::Pattern(_) => {
                 out.push_str("    If Not stopModel Then\n");
                 let kind = match &step.work {
                     Work::Extrude(_) => "Extrude",
                     Work::Revolve(_) => "Revolve",
                     Work::Primitive(_) => "Prim",
+                    Work::Pattern(_) => "Pat",
                     _ => "Mod",
                 };
                 out.push_str(&format!("        st = Build{}{}()\n", kind, step.index));
@@ -293,6 +306,16 @@ pub fn emit(steps: &[PlannedStep], artifact: &str, bridge_version: &str) -> Stri
         .collect();
     for (index, md) in &mods {
         out.push_str(&emit_mod_subs(*index, md));
+    }
+    let pats: Vec<(usize, &crate::replay::PatStep)> = steps
+        .iter()
+        .filter_map(|s| match &s.work {
+            Work::Pattern(p) => Some((s.index, p)),
+            _ => None,
+        })
+        .collect();
+    for (index, pt) in &pats {
+        out.push_str(&emit_pat_subs(*index, pt));
     }
 
     // ---- shared helpers (the checkpoint's, unchanged in spirit) ----
@@ -753,7 +776,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
         ));
     }
     out.push_str(&format!(
-        "    gMsg = {}\n    BuildExtrude{index} = \"created\"\n    Exit Function\n\nExFail:\n    BuildExtrude{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    On Error Resume Next\n    gMsg = Err.Description\n    BuildExtrude{index} = \"failed\"\nEnd Function\n\n",
+        "    Set feat{index} = feat\n    gMsg = {}\n    BuildExtrude{index} = \"created\"\n    Exit Function\n\nExFail:\n    BuildExtrude{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    On Error Resume Next\n    gMsg = Err.Description\n    BuildExtrude{index} = \"failed\"\nEnd Function\n\n",
         vb_lit(&message)
     ));
     out
@@ -879,7 +902,7 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep) -> String {
         ));
     }
     out.push_str(&format!(
-        "    gMsg = {}\n    BuildRevolve{index} = \"created\"\n    Exit Function\n\nExFail:\n    BuildRevolve{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    On Error Resume Next\n    gMsg = Err.Description\n    BuildRevolve{index} = \"failed\"\nEnd Function\n\n",
+        "    Set feat{index} = feat\n    gMsg = {}\n    BuildRevolve{index} = \"created\"\n    Exit Function\n\nExFail:\n    BuildRevolve{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    On Error Resume Next\n    gMsg = Err.Description\n    BuildRevolve{index} = \"failed\"\nEnd Function\n\n",
         vb_lit(&format!("{message}; sweep direction and volume are acceptance checks"))
     ));
     out
@@ -1143,4 +1166,67 @@ fn dim_check(which: usize, expect: f64, what: &str) -> String {
         "    If feat Is Nothing Then gMsg = \"the feature was not created\": GoTo ExFail\n    Set dm = swDoc.Parameter(\"D{which}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the {what} dimension is missing\": GoTo ExFail\n    If Abs(dm.SystemValue - {}) > 0.000001 Then gMsg = \"the {what} does not match\": GoTo ExFail\n",
         vba_num(expect)
     )
+}
+
+/// Mirrors about origin planes: the seeds are verified native features
+/// (live bindings, fail-closed), the plane is selected like a sketch plane,
+/// and the mirror call shape carries the checkpoint-pending mark.
+fn emit_pat_subs(index: usize, pt: &crate::replay::PatStep) -> String {
+    use crate::replay::{PatKind, RhsSeg};
+    let _ = RhsSeg::Text(String::new());
+    let mut out = String::new();
+    out.push_str(&format!("' Pattern step {index}: {}\n", vb_lit(&pt.name)));
+    out.push_str(&format!(
+        "Function BuildPat{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n"
+    ));
+    match &pt.kind {
+        PatKind::Mirror { seeds, plane } => {
+            // Live seed bindings first: never pattern a body that merely
+            // stands in for a feature.
+            for seed in seeds {
+                out.push_str(&format!(
+                    "    If feat{seed} Is Nothing Then gMsg = \"a seed feature did not verify\": GoTo ExFail\n"
+                ));
+            }
+            let plane_name = match plane {
+                crate::replay::OriginPlane::Xy => "Front Plane",
+                crate::replay::OriginPlane::Xz => "Top Plane",
+                crate::replay::OriginPlane::Yz => "Right Plane",
+            };
+            out.push_str(&format!(
+                "    ok = swDoc.Extension.SelectByID2(\"{plane_name}\", \"PLANE\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n"
+            ));
+            out.push_str(
+                "    If Not ok Then gMsg = \"could not select the mirror plane\": GoTo ExFail\n",
+            );
+            for seed in seeds {
+                out.push_str(&format!("    feat{seed}.Select True\n"));
+            }
+            out.push_str("    ' feature call shape pending checkpoint verification\n");
+            out.push_str(
+                "    Set feat = swDoc.FeatureManager.FeatureMirror(True, False, False, 0#, 0#)\n",
+            );
+            out.push_str(
+                "    If feat Is Nothing Then gMsg = \"the mirror was not created\": GoTo ExFail\n",
+            );
+        }
+        PatKind::Rectangular { .. } => {
+            out.push_str("    gMsg = \"feature patterns await direction selection (ticket #6 remainder)\": GoTo ExFail\n");
+        }
+    }
+    out.push_str("    swDoc.ClearSelection2 True\n");
+    let degrade_note = if pt.degraded_variants.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; variants not replayed: {}",
+            pt.degraded_variants.join(", ")
+        )
+    };
+    out.push_str(&format!(
+        "    gMsg = {}\n    BuildPat{index} = \"{}\"\n    Exit Function\n\nExFail:\n    BuildPat{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    On Error Resume Next\n    gMsg = Err.Description\n    BuildPat{index} = \"failed\"\nEnd Function\n\n",
+        vb_lit(&format!("created{degrade_note}")),
+        if pt.degraded_variants.is_empty() { "created" } else { "degraded" }
+    ));
+    out
 }

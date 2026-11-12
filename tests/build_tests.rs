@@ -18,6 +18,7 @@ const TRACER_STOP: &str = include_str!("fixtures/tracer-stop.json");
 const TRACER_REVOLVE: &str = include_str!("fixtures/tracer-revolve.json");
 const TRACER_PRIM: &str = include_str!("fixtures/tracer-prim.json");
 const TRACER_MOD: &str = include_str!("fixtures/tracer-mod.json");
+const TRACER_PAT: &str = include_str!("fixtures/tracer-pat.json");
 const STEP_FIXTURE: &str = include_str!("fixtures/part.step");
 const GOLDEN_MACRO: &str = include_str!("golden/tracer.swb");
 const GOLDEN_PLAN_JSON: &str = include_str!("golden/tracer-plan.json");
@@ -367,4 +368,44 @@ fn unsupported_modification_variants_stop_or_degrade() {
     );
     let steps = plan_of(&recipe);
     assert_eq!(steps[0].status, PlanStatus::DegradePlanned);
+}
+
+#[test]
+fn mirrors_replay_over_verified_native_seeds() {
+    let case = Case::new(TRACER_PAT);
+    case.build_to("pat.swb", false).unwrap();
+    let macro_text = fs::read_to_string(case.dir.path().join("pat.swb")).unwrap();
+    assert!(macro_text.contains("FeatureMirror"), "no mirror");
+    assert!(
+        macro_text.contains("If feat1 Is Nothing Then"),
+        "the seed binding is not live-checked"
+    );
+    assert!(
+        macro_text.contains("Set feat1 = feat"),
+        "the seed never registers"
+    );
+    assert!(
+        macro_text.contains("Front Plane"),
+        "the origin mirror plane is not selected"
+    );
+    let outcome = case.build_to("pat2.swb", false).unwrap();
+    assert_eq!(outcome.plan.steps[2].status, PlanStatus::Mapped);
+}
+
+#[test]
+fn body_patterns_and_feature_patterns_are_honest_stops() {
+    // A body mirror stops.
+    let recipe = TRACER_PAT.replace(
+        "\"features\": [2],",
+        "\"bodies\": [\"Body1\"], \"features\": [],",
+    );
+    let steps = plan_of(&recipe);
+    assert_eq!(steps[2].status, PlanStatus::FallbackPlanned);
+    // A rectangular feature pattern stops until direction selection is pinned.
+    let recipe = TRACER_PAT.replace(
+        "\"type\": \"mirror\"",
+        "\"pattern\": {\"count1\": \"3\", \"dir1\": [1, 0, 0], \"spacing1\": \"20 mm\", \"type\": \"rectangular\"}, \"type\": \"pattern\"",
+    );
+    let steps = plan_of(&recipe);
+    assert_eq!(steps[2].status, PlanStatus::FallbackPlanned);
 }

@@ -8,6 +8,7 @@ Dim swSketchMgr As SketchManager
 Dim reportPath As String
 Dim gMsg As String
 Dim regName(0 To 1) As String
+Dim feat3 As SldWorks.Feature
 Dim skName2 As String
 Dim pt2(0 To 7) As SldWorks.SketchPoint
 Dim sl2(0 To 3) As SldWorks.SketchLine
@@ -250,6 +251,7 @@ Function BuildExtrude3() As String
     Set dm = swDoc.Parameter("D1@" & feat.Name)
     If dm Is Nothing Then gMsg = "the extrude dimension D1 is missing": GoTo ExFail
     If Abs(dm.SystemValue - 0.012) > 0.000001 Then gMsg = "the extrude dimension D1 does not match": GoTo ExFail
+    Set feat3 = feat
     gMsg = "depth 0.012 m"
     BuildExtrude3 = "created"
     Exit Function

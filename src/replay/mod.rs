@@ -119,6 +119,7 @@ pub enum Work {
     Revolve(RevolveStep),
     Primitive(PrimStep),
     Modifier(ModStep),
+    Pattern(PatStep),
     /// Recorded but not executed and not model work (a text parameter, an
     /// expression outside the supported subset): never triggers the stop rule.
     Note,
@@ -267,6 +268,34 @@ pub struct DimEquation {
     /// The registry slot where the macro records this dimension's runtime
     /// name after verification; later equations may then reference it.
     pub slot: usize,
+}
+
+/// A rectangular feature pattern or a mirror about an origin plane. Seeds
+/// bind to verified native features (never fallback bodies).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PatStep {
+    pub name: String,
+    pub kind: PatKind,
+    pub equations: Vec<DimEquation>,
+    pub degraded_variants: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PatKind {
+    Rectangular {
+        /// Plan indices of the seed features.
+        seeds: Vec<usize>,
+        /// Pattern direction in sketch space (unit vector).
+        dir: [f64; 2],
+        count: u32,
+        spacing: f64,
+        reversed: bool,
+    },
+    Mirror {
+        seeds: Vec<usize>,
+        /// The origin plane the mirror is about.
+        plane: OriginPlane,
+    },
 }
 
 /// A modification feature: fillet, chamfer, shell, draft or a simple hole.
@@ -490,7 +519,14 @@ pub fn plan(recipe: &Value, limits: &Limits) -> Result<Vec<PlannedStep>> {
                 work: Work::Unmappable,
             },
         };
-        if let Work::Sketch(_) = &planned.work {
+        if matches!(
+            planned.work,
+            Work::Sketch(_)
+                | Work::Extrude(_)
+                | Work::Revolve(_)
+                | Work::Primitive(_)
+                | Work::Modifier(_)
+        ) {
             if let Some(fid) = params
                 .and_then(|p| p.get("feature"))
                 .and_then(|f| f.get("id"))
@@ -686,6 +722,38 @@ fn plan_feature(
                         status: PlanStatus::Mapped,
                         detail: format!("{detail} {axis}"),
                         work: Work::Revolve(revolve),
+                    }
+                }
+                Err(reason) => unmappable(format!(
+                    "{reason}; a fallback body lands with the hybrid-fallback ticket"
+                )),
+            }
+        }
+        "pattern" | "mirror" => {
+            match parse_pattern(
+                kind,
+                name,
+                feature,
+                env,
+                design_factor,
+                design_text,
+                steps,
+                sketch_steps,
+                model_slots,
+                next_slot,
+            ) {
+                Ok(pattern) => {
+                    let degrade = !pattern.degraded_variants.is_empty();
+                    PlannedStep {
+                        index,
+                        command: id.to_string(),
+                        status: if degrade {
+                            PlanStatus::DegradePlanned
+                        } else {
+                            PlanStatus::Mapped
+                        },
+                        detail: format!("{kind} replays natively over its seed features"),
+                        work: Work::Pattern(pattern),
                     }
                 }
                 Err(reason) => unmappable(format!(
@@ -2093,6 +2161,109 @@ fn parse_mod(
     Ok(ModStep {
         name,
         kind: mod_kind,
+        equations,
+        degraded_variants,
+    })
+}
+
+/// Rectangular feature patterns and mirrors about origin planes. Seeds must
+/// name mapped features earlier in the recipe (verified native features at
+/// runtime); body patterns, second directions and non-origin mirror planes
+/// stay outside the subset.
+#[allow(clippy::too_many_arguments)]
+fn parse_pattern(
+    kind: &str,
+    name: String,
+    feature: &Value,
+    _env: &ParamEnv,
+    _design_factor: f64,
+    _design_text: &'static str,
+    steps: &[PlannedStep],
+    sketch_steps: &[(u64, usize)],
+    _model_slots: &[(String, usize)],
+    _next_slot: &mut usize,
+) -> std::result::Result<PatStep, String> {
+    let mut degraded_variants = Vec::new();
+    let equations = Vec::new();
+    if feature
+        .get("bodies")
+        .and_then(Value::as_array)
+        .map(|b| !b.is_empty())
+        .unwrap_or(false)
+    {
+        return Err("a body pattern is outside the supported subset".to_string());
+    }
+    let seeds_v = feature
+        .get("features")
+        .and_then(Value::as_array)
+        .ok_or("the pattern names no features")?;
+    if seeds_v.is_empty() {
+        return Err("the pattern names no features".to_string());
+    }
+    let mut seeds = Vec::new();
+    for id in seeds_v {
+        let fid = id.as_u64().ok_or("a seed is not a feature id")?;
+        let step_index = sketch_steps
+            .iter()
+            .find(|(f, _)| *f == fid)
+            .map(|(_, i)| *i);
+        let step_index = match step_index {
+            Some(i) => i,
+            None => return Err(format!("seed feature {fid} is not in this recipe")),
+        };
+        let live = steps.iter().any(|s| {
+            s.index == step_index
+                && matches!(
+                    s.work,
+                    Work::Extrude(_) | Work::Revolve(_) | Work::Primitive(_) | Work::Modifier(_)
+                )
+        });
+        if !live {
+            return Err(format!(
+                "seed feature {fid} does not replay natively (fallback bodies cannot seed a pattern)"
+            ));
+        }
+        seeds.push(step_index);
+    }
+
+    let pat_kind = match kind {
+        "pattern" => {
+            // Direction and axis selection for feature patterns awaits API
+            // pinning; the parser and emitter seam is in place (see #6).
+            return Err(
+                "a feature pattern's direction selection awaits API pinning (ticket #6 remainder)"
+                    .to_string(),
+            );
+        }
+        "mirror" => {
+            let plane_v = feature.get("plane").ok_or("the mirror has no plane")?;
+            let plane =
+                match (
+                    plane_v.get("type").and_then(Value::as_str),
+                    plane_v.get("name").and_then(Value::as_str),
+                ) {
+                    (Some("origin"), Some("XY")) => OriginPlane::Xy,
+                    (Some("origin"), Some("XZ")) => OriginPlane::Xz,
+                    (Some("origin"), Some("YZ")) => OriginPlane::Yz,
+                    _ => return Err(
+                        "a mirror plane outside the origin planes is outside the supported subset"
+                            .to_string(),
+                    ),
+                };
+            if feature
+                .get("combine")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                degraded_variants.push("combine".to_string());
+            }
+            PatKind::Mirror { seeds, plane }
+        }
+        other => return Err(format!("{other} is not a pattern feature")),
+    };
+    Ok(PatStep {
+        name,
+        kind: pat_kind,
         equations,
         degraded_variants,
     })
