@@ -206,12 +206,13 @@ pub fn emit(steps: &[PlannedStep], artifact: &str, bridge_version: &str) -> Stri
                 ));
                 out.push_str("    If st = \"failed\" Then stopModel = True\n\n");
             }
-            Work::Extrude(_) | Work::Revolve(_) | Work::Primitive(_) => {
+            Work::Extrude(_) | Work::Revolve(_) | Work::Primitive(_) | Work::Modifier(_) => {
                 out.push_str("    If Not stopModel Then\n");
                 let kind = match &step.work {
                     Work::Extrude(_) => "Extrude",
                     Work::Revolve(_) => "Revolve",
-                    _ => "Prim",
+                    Work::Primitive(_) => "Prim",
+                    _ => "Mod",
                 };
                 out.push_str(&format!("        st = Build{}{}()\n", kind, step.index));
                 out.push_str("    Else\n        st = \"not-executed\"\n        gMsg = \"after the first stopped step\"\n    End If\n");
@@ -282,6 +283,16 @@ pub fn emit(steps: &[PlannedStep], artifact: &str, bridge_version: &str) -> Stri
         .collect();
     for (index, pr) in &prims {
         out.push_str(&emit_prim_subs(*index, pr));
+    }
+    let mods: Vec<(usize, &crate::replay::ModStep)> = steps
+        .iter()
+        .filter_map(|s| match &s.work {
+            Work::Modifier(m) => Some((s.index, m)),
+            _ => None,
+        })
+        .collect();
+    for (index, md) in &mods {
+        out.push_str(&emit_mod_subs(*index, md));
     }
 
     // ---- shared helpers (the checkpoint's, unchanged in spirit) ----
@@ -1007,4 +1018,129 @@ fn slot_guards(eq: &crate::replay::DimEquation, fail_label: &str) -> String {
         }
     }
     out
+}
+
+/// Modification features: coordinate-picked edges and faces (fail-closed
+/// SelectByID2 with explicit types; recipe coordinates map identically into
+/// the rebuilt model per docs/mapping.md) and one feature call each. The
+/// five feature-call shapes are checkpoint-pending like every other API
+/// member here: the seat loop corrects their exact argument lists.
+fn emit_mod_subs(index: usize, md: &crate::replay::ModStep) -> String {
+    use crate::replay::ModKind;
+    let mut out = String::new();
+    out.push_str(&format!(
+        "' Modification step {index}: {}\n",
+        vb_lit(&md.name)
+    ));
+    out.push_str(&format!(
+        "Function BuildMod{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n    Dim anySel As Boolean\n"
+    ));
+    // Selections first: every pick must land on the intended entity type.
+    let (picks, pick_type) = match &md.kind {
+        ModKind::Fillet { edges, .. } | ModKind::Chamfer { edges, .. } => (edges, "EDGE"),
+        ModKind::Shell { faces, .. } | ModKind::Draft { faces, .. } => (faces, "FACE"),
+        ModKind::Hole { at, .. } => (&vec![*at], "FACE"),
+    };
+    for (i, p) in picks.iter().enumerate() {
+        let append = if i > 0 { "True" } else { "False" };
+        out.push_str(&format!(
+            "    ok = swDoc.Extension.SelectByID2(\"\", \"{pick_type}\", {}, {}, {}, {append}, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n",
+            vba_num(p[0] / 1000.0),
+            vba_num(p[1] / 1000.0),
+            vba_num(p[2] / 1000.0)
+        ));
+        out.push_str(&format!(
+            "    If Not ok Then gMsg = \"a {pick_type} pick did not land\": GoTo ExFail\n"
+        ));
+    }
+    out.push_str("    anySel = True\n");
+    // One feature call per family (argument lists: checkpoint-pending).
+    match &md.kind {
+        ModKind::Fillet {
+            radius,
+            tangent_chain,
+            ..
+        } => {
+            out.push_str(&format!(
+                "    ' feature call shape pending checkpoint verification\n    Set feat = swDoc.FeatureFillet3({}, {}, 0, 0, 0)\n",
+                vba_num(radius / 1000.0),
+                if *tangent_chain { "True" } else { "False" }
+            ));
+            out.push_str(&dim_check(1, radius / 1000.0, "the fillet radius"));
+        }
+        ModKind::Chamfer {
+            distance,
+            tangent_chain,
+            ..
+        } => {
+            out.push_str(&format!(
+                "    ' feature call shape pending checkpoint verification\n    Set feat = swDoc.FeatureChamfer3(0#, {}, {}, 0#, 0#, 0#, 0#, 0#, 0#, 0#, 0#)\n",
+                vba_num(distance / 1000.0),
+                vba_num(distance / 1000.0)
+            ));
+            let _ = tangent_chain;
+            out.push_str(&dim_check(1, distance / 1000.0, "the chamfer distance"));
+        }
+        ModKind::Shell { thickness, .. } => {
+            out.push_str(&format!(
+                "    ' feature call shape pending checkpoint verification\n    Set feat = swDoc.FeatureShell({}, False, 0#, False, False, False, 0#, 0#, 0#, 0#, 0#)\n",
+                vba_num(thickness / 1000.0)
+            ));
+            out.push_str(&dim_check(1, thickness / 1000.0, "the shell thickness"));
+        }
+        ModKind::Draft { angle_rad, .. } => {
+            out.push_str(&format!(
+                "    ' feature call shape pending checkpoint verification\n    Set feat = swDoc.FeatureDraft({}, False, 0#, 0#, False, False, False, 0#, 0#, 0#, 0#, 0#, 0#)\n",
+                vba_num(*angle_rad)
+            ));
+            out.push_str(&dim_check(1, *angle_rad, "the draft angle"));
+        }
+        ModKind::Hole {
+            diameter, depth, ..
+        } => {
+            let (endcond, d2) = match depth {
+                Some(d) => ("swEndConditions_e.swEndCondBlind", vba_num(d / 1000.0)),
+                None => ("swEndConditions_e.swEndCondThroughAll", "0#".to_string()),
+            };
+            out.push_str(&format!(
+                "    ' feature call shape pending checkpoint verification\n    Set feat = swDoc.SimpleHole2(True, False, False, {endcond}, {}, {d2}, 0#, 0#, False, False, False, False, 0#, 0#)\n",
+                vba_num(diameter / 1000.0)
+            ));
+            out.push_str(&dim_check(1, diameter / 1000.0, "the hole diameter"));
+        }
+    }
+    out.push_str("    swDoc.ClearSelection2 True\n");
+    for eq in &md.equations {
+        out.push_str(&slot_guards(eq, "ExFail"));
+        out.push_str(&format!(
+            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}) Then gMsg = \"the equation did not evaluate\": GoTo ExFail\n",
+            eq.which,
+            eq.which,
+            rhs_vba(eq),
+            vba_num(eq.expect_si),
+            eq.slot
+        ));
+    }
+    let degrade_note = if md.degraded_variants.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; variants not replayed: {}",
+            md.degraded_variants.join(", ")
+        )
+    };
+    out.push_str(&format!(
+        "    gMsg = {}\n    BuildMod{index} = \"{}\"\n    Exit Function\n\nExFail:\n    BuildMod{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    On Error Resume Next\n    gMsg = Err.Description\n    BuildMod{index} = \"failed\"\nEnd Function\n\n",
+        vb_lit(&format!("created{degrade_note}")),
+        if md.degraded_variants.is_empty() { "created" } else { "degraded" }
+    ));
+    out
+}
+
+/// A validated dimension readback against the expected SI value.
+fn dim_check(which: usize, expect: f64, what: &str) -> String {
+    format!(
+        "    If feat Is Nothing Then gMsg = \"the feature was not created\": GoTo ExFail\n    Set dm = swDoc.Parameter(\"D{which}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the {what} dimension is missing\": GoTo ExFail\n    If Abs(dm.SystemValue - {}) > 0.000001 Then gMsg = \"the {what} does not match\": GoTo ExFail\n",
+        vba_num(expect)
+    )
 }

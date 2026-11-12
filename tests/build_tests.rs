@@ -17,6 +17,7 @@ const TRACER: &str = include_str!("fixtures/tracer.json");
 const TRACER_STOP: &str = include_str!("fixtures/tracer-stop.json");
 const TRACER_REVOLVE: &str = include_str!("fixtures/tracer-revolve.json");
 const TRACER_PRIM: &str = include_str!("fixtures/tracer-prim.json");
+const TRACER_MOD: &str = include_str!("fixtures/tracer-mod.json");
 const STEP_FIXTURE: &str = include_str!("fixtures/part.step");
 const GOLDEN_MACRO: &str = include_str!("golden/tracer.swb");
 const GOLDEN_PLAN_JSON: &str = include_str!("golden/tracer-plan.json");
@@ -325,4 +326,45 @@ fn primitives_off_the_base_plane_stop() {
     let steps = plan_of(&recipe);
     assert_eq!(steps[2].status, PlanStatus::FallbackPlanned);
     assert_eq!(steps[3].status, PlanStatus::NotExecuted);
+}
+
+#[test]
+fn modifications_replay_with_fail_closed_picks() {
+    let case = Case::new(TRACER_MOD);
+    case.build_to("mod.swb", false).unwrap();
+    let macro_text = fs::read_to_string(case.dir.path().join("mod.swb")).unwrap();
+    assert!(macro_text.contains("FeatureFillet3"), "no fillet");
+    assert!(macro_text.contains("FeatureShell"), "no shell");
+    assert!(macro_text.contains("SimpleHole2"), "no hole");
+    assert!(
+        macro_text.contains("SelectByID2(\"\", \"EDGE\""),
+        "edge picks are not fail-closed selections"
+    );
+    assert!(
+        macro_text.contains("a EDGE pick did not land"),
+        "pick failures are not checked"
+    );
+    let outcome = case.build_to("mod2.swb", false).unwrap();
+    assert_eq!(outcome.plan.steps[0].status, PlanStatus::Mapped);
+    assert_eq!(outcome.plan.steps[1].status, PlanStatus::Mapped);
+    assert_eq!(outcome.plan.steps[2].status, PlanStatus::Mapped);
+}
+
+#[test]
+fn unsupported_modification_variants_stop_or_degrade() {
+    // An unequal chamfer stops.
+    let recipe = TRACER_MOD.replace(
+        "\"type\": \"shell\"",
+        "\"distance2\": \"2 mm\", \"type\": \"chamfer\"",
+    );
+    let steps = plan_of(&recipe);
+    assert_eq!(steps[1].status, PlanStatus::FallbackPlanned);
+    assert_eq!(steps[2].status, PlanStatus::NotExecuted); // the stop cascades
+                                                          // A fillet style variant degrades but still replays constant.
+    let recipe = TRACER_MOD.replace(
+        "\"type\": \"fillet\"",
+        "\"style\": \"variable_radius\", \"type\": \"fillet\"",
+    );
+    let steps = plan_of(&recipe);
+    assert_eq!(steps[0].status, PlanStatus::DegradePlanned);
 }

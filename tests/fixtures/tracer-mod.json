@@ -1,0 +1,41 @@
+{
+  "about": { "design": "Tracer Mod", "format": "solidcraft/53", "replay": "craft-bridge build", "version": "0.40.0-rc.4" },
+  "commands": [
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "edges": [[10.0, 0.0, 0.0], { "at": [20.0, 0.0, 0.0] }],
+          "id": 4, "name": "Round",
+          "param_names": ["d1"],
+          "radius": "2 mm",
+          "suppressed": false, "type": "fillet"
+        },
+        "params": [{ "expression": "2 mm", "name": "d1", "unit": "mm" }]
+      }
+    },
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "faces": [[0.0, 0.0, 0.0]],
+          "id": 5, "name": "Hollow",
+          "suppressed": false, "thickness": "1.5 mm", "type": "shell"
+        },
+        "params": []
+      }
+    },
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "depth": "8 mm", "diameter": "4 mm", "direction": [0, 0, 1],
+          "hole": "simple", "id": 6, "name": "Bore",
+          "position": [5.0, 5.0, 0.0],
+          "suppressed": false, "type": "hole"
+        },
+        "params": []
+      }
+    }
+  ]
+}

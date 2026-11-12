@@ -118,6 +118,7 @@ pub enum Work {
     Extrude(ExtrudeStep),
     Revolve(RevolveStep),
     Primitive(PrimStep),
+    Modifier(ModStep),
     /// Recorded but not executed and not model work (a text parameter, an
     /// expression outside the supported subset): never triggers the stop rule.
     Note,
@@ -266,6 +267,48 @@ pub struct DimEquation {
     /// The registry slot where the macro records this dimension's runtime
     /// name after verification; later equations may then reference it.
     pub slot: usize,
+}
+
+/// A modification feature: fillet, chamfer, shell, draft or a simple hole.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModStep {
+    pub name: String,
+    pub kind: ModKind,
+    pub equations: Vec<DimEquation>,
+    /// Variant flags that could not be replayed (reported as degrade).
+    pub degraded_variants: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModKind {
+    Fillet {
+        /// Edge picks in model millimetres (recipe coordinates, identity map).
+        edges: Vec<[f64; 3]>,
+        radius: f64,
+        tangent_chain: bool,
+    },
+    Chamfer {
+        edges: Vec<[f64; 3]>,
+        distance: f64,
+        flip: bool,
+        tangent_chain: bool,
+    },
+    Shell {
+        faces: Vec<[f64; 3]>,
+        thickness: f64,
+        direction: String,
+        tangent_chain: bool,
+    },
+    Draft {
+        faces: Vec<[f64; 3]>,
+        angle_rad: f64,
+    },
+    Hole {
+        at: [f64; 3],
+        diameter: f64,
+        /// None = through all.
+        depth: Option<f64>,
+    },
 }
 
 /// Primitives replay as generated sketches plus features.
@@ -643,6 +686,38 @@ fn plan_feature(
                         status: PlanStatus::Mapped,
                         detail: format!("{detail} {axis}"),
                         work: Work::Revolve(revolve),
+                    }
+                }
+                Err(reason) => unmappable(format!(
+                    "{reason}; a fallback body lands with the hybrid-fallback ticket"
+                )),
+            }
+        }
+        "fillet" | "chamfer" | "shell" | "draft" | "hole" => {
+            match parse_mod(kind, name, feature, env, design_factor, design_text, model_slots, next_slot)
+            {
+                Ok(modifier) => {
+                    let degrade = !modifier.degraded_variants.is_empty();
+                    PlannedStep {
+                        index,
+                        command: id.to_string(),
+                        status: if degrade {
+                            PlanStatus::DegradePlanned
+                        } else {
+                            PlanStatus::Mapped
+                        },
+                        detail: format!(
+                            "{kind} replays natively{}",
+                            if degrade {
+                                format!(
+                                    " ({} variant(s) not replayed)",
+                                    modifier.degraded_variants.len()
+                                )
+                            } else {
+                                String::new()
+                            }
+                        ),
+                        work: Work::Modifier(modifier),
                     }
                 }
                 Err(reason) => unmappable(format!(
@@ -1079,7 +1154,7 @@ fn parse_extrude(
 ) -> std::result::Result<ExtrudeStep, String> {
     let extent = feature
         .get("extent")
-        .ok_or_else(|| "extrude has no extent".to_string())?;
+        .ok_or("extrude has no extent".to_string())?;
     for forbidden in [
         "start_offset",
         "taper",
@@ -1185,7 +1260,7 @@ fn parse_extrude(
     let distance = extent
         .get("distance")
         .and_then(Value::as_str)
-        .ok_or_else(|| "extrude distance is not an expression string".to_string())?;
+        .ok_or("extrude distance is not an expression string".to_string())?;
     if through_all {
         let negative = match direction {
             "positive" => false,
@@ -1317,7 +1392,7 @@ fn parse_revolve(
     // Axis.
     let axis_v = feature
         .get("axis")
-        .ok_or_else(|| "revolve has no axis".to_string())?;
+        .ok_or("revolve has no axis".to_string())?;
     let axis_kind = axis_v.get("type").and_then(Value::as_str).unwrap_or("");
     let axis = match axis_kind {
         "sketch_line" => {
@@ -1332,7 +1407,7 @@ fn parse_revolve(
             let curve = axis_v
                 .get("curve")
                 .and_then(Value::as_str)
-                .ok_or_else(|| "the revolve axis names no curve".to_string())?;
+                .ok_or("the revolve axis names no curve".to_string())?;
             let li = sketch
                 .lines
                 .iter()
@@ -1372,7 +1447,7 @@ fn parse_revolve(
             let origin_v = axis_v
                 .get("origin")
                 .and_then(Value::as_array)
-                .ok_or_else(|| "the axis line has no origin".to_string())?;
+                .ok_or("the axis line has no origin".to_string())?;
             if origin_v.len() != 3 {
                 return Err("the axis line origin is not three expressions".to_string());
             }
@@ -1380,7 +1455,7 @@ fn parse_revolve(
             for (i, e) in origin_v.iter().enumerate() {
                 let text = e
                     .as_str()
-                    .ok_or_else(|| "the axis origin is not an expression string".to_string())?;
+                    .ok_or("the axis origin is not an expression string".to_string())?;
                 let node = expr::parse(text).map_err(|e| format!("the axis origin: {e}"))?;
                 if !matches!(node, expr::Node::Number { .. }) {
                     return Err("the axis origin is not a literal in this phase".to_string());
@@ -1398,7 +1473,7 @@ fn parse_revolve(
             let dir_v = axis_v
                 .get("dir")
                 .and_then(Value::as_array)
-                .ok_or_else(|| "the axis line has no direction".to_string())?;
+                .ok_or("the axis line has no direction".to_string())?;
             let mut d = [0.0f64; 3];
             for (i, e) in dir_v.iter().enumerate().take(3) {
                 d[i] = e.as_f64().unwrap_or(0.0);
@@ -1478,7 +1553,7 @@ fn parse_revolve(
     let angle_text = feature
         .get("angle")
         .and_then(Value::as_str)
-        .ok_or_else(|| "revolve angle is not an expression string".to_string())?;
+        .ok_or("revolve angle is not an expression string".to_string())?;
     let angle = eval_angle(angle_text, 1, &mut equations)?;
     let symmetric = feature
         .get("symmetric")
@@ -1740,5 +1815,285 @@ fn parse_prim(
         kind,
         origin: [xyz[0] * 1000.0, xyz[1] * 1000.0],
         sizes,
+    })
+}
+
+/// Pick points: plain [x,y,z] arrays (FacePick) or objects with an `at`
+/// array. Model millimetres; the replay policy maps them identically into
+/// the rebuilt model and selections are fail-closed.
+fn pick_coords(v: &Value) -> std::result::Result<[f64; 3], String> {
+    let arr = match v {
+        Value::Array(a) => Some(a),
+        other => other.get("at").and_then(Value::as_array),
+    }
+    .ok_or("a pick is neither [x,y,z] nor {at: [x,y,z]}".to_string())?;
+    if arr.len() != 3 {
+        return Err("a pick is not three numbers".to_string());
+    }
+    let mut out = [0.0f64; 3];
+    for (i, e) in arr.iter().enumerate() {
+        out[i] = e.as_f64().ok_or("a pick coordinate is not a number")?;
+        if !out[i].is_finite() {
+            return Err("a pick coordinate is not finite".to_string());
+        }
+    }
+    Ok(out)
+}
+
+/// Fillet, chamfer, shell, draft and simple holes. Variant-rich forms keep
+/// the constant/default essence and report the variants as degrade triggers;
+/// forms where the variation is the essence stop.
+#[allow(clippy::too_many_arguments)]
+fn parse_mod(
+    kind: &str,
+    name: String,
+    feature: &Value,
+    env: &ParamEnv,
+    design_factor: f64,
+    design_text: &'static str,
+    model_slots: &[(String, usize)],
+    next_slot: &mut usize,
+) -> std::result::Result<ModStep, String> {
+    let mut degraded_variants = Vec::new();
+    let mut equations = Vec::new();
+    let mut eval_len = |text: &str,
+                        which: usize,
+                        equations: &mut Vec<DimEquation>|
+     -> std::result::Result<f64, String> {
+        let node = expr::parse(text).map_err(|e| format!("{kind}: {e}"))?;
+        let literal = matches!(node, expr::Node::Number { .. });
+        let ctx = expr::Context {
+            bare_length: if literal { 0.001 } else { design_factor },
+            bare_angle: 1.0,
+            bare_dim: expr::Dim::Length,
+            bare_text: design_text,
+        };
+        let q = expr::eval(&node, &ctx, &env.lookup()).map_err(|e| format!("{kind}: {e}"))?;
+        if !literal {
+            let segs = expr::translate_with(&node, &ctx, &|n| resolve_name(n, env, model_slots))
+                .map_err(|e| format!("{kind}: {e}"))?;
+            let slot = *next_slot;
+            *next_slot += 1;
+            equations.push(DimEquation {
+                which,
+                rhs: expr::translate(&node, &ctx),
+                segs: coalesce(segs.into_iter().map(seg_from).collect()),
+                expect_si: q.value,
+                slot,
+            });
+        }
+        Ok(q.value)
+    };
+    let picks = |key: &str| -> std::result::Result<Vec<[f64; 3]>, String> {
+        let arr = feature
+            .get(key)
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("{kind} has no {key}"))?;
+        if arr.is_empty() {
+            return Err(format!("{kind} has no picks in {key}"));
+        }
+        arr.iter().map(pick_coords).collect()
+    };
+
+    let mod_kind = match kind {
+        "fillet" => {
+            for (key, why) in [
+                ("style", "fillet style"),
+                ("setbacks", "corner setbacks"),
+                ("turn", "fillet turn"),
+            ] {
+                if feature.get(key).is_some() {
+                    degraded_variants.push(why.to_string());
+                }
+            }
+            if feature
+                .get("fit")
+                .and_then(Value::as_str)
+                .map(|f| f != "exact")
+                .unwrap_or(false)
+            {
+                degraded_variants.push("fillet fit".to_string());
+            }
+            if feature
+                .get("corner")
+                .and_then(Value::as_str)
+                .map(|c| c != "rolling_ball")
+                .unwrap_or(false)
+            {
+                degraded_variants.push("fillet corner".to_string());
+            }
+            let radius = eval_len(
+                feature
+                    .get("radius")
+                    .and_then(Value::as_str)
+                    .ok_or("fillet has no radius expression")?,
+                1,
+                &mut equations,
+            )?;
+            ModKind::Fillet {
+                edges: picks("edges")?,
+                radius: radius.abs(),
+                tangent_chain: feature
+                    .get("tangent_chain")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
+            }
+        }
+        "chamfer" => {
+            if feature.get("distance2").is_some() || feature.get("angle").is_some() {
+                return Err("an unequal chamfer is outside the supported subset".to_string());
+            }
+            let distance = eval_len(
+                feature
+                    .get("distance")
+                    .and_then(Value::as_str)
+                    .ok_or("chamfer has no distance expression")?,
+                1,
+                &mut equations,
+            )?;
+            ModKind::Chamfer {
+                edges: picks("edges")?,
+                distance: distance.abs(),
+                flip: feature
+                    .get("flip")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                tangent_chain: feature
+                    .get("tangent_chain")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
+            }
+        }
+        "shell" => {
+            let thickness = eval_len(
+                feature
+                    .get("thickness")
+                    .and_then(Value::as_str)
+                    .ok_or("shell has no thickness expression")?,
+                1,
+                &mut equations,
+            )?;
+            let direction = feature
+                .get("direction")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            if !matches!(direction.as_str(), "" | "inside" | "outside" | "both") {
+                return Err(format!("shell direction {direction:?} is unknown"));
+            }
+            ModKind::Shell {
+                faces: picks("faces")?,
+                thickness: thickness.abs(),
+                direction,
+                tangent_chain: feature
+                    .get("tangent_chain")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            }
+        }
+        "draft" => {
+            // The neutral plane must be an origin plane in this phase.
+            let neutral = feature
+                .get("neutral")
+                .and_then(|n| n.get("type"))
+                .and_then(Value::as_str);
+            if neutral != Some("origin") {
+                return Err("a draft neutral plane outside the origin planes is outside the supported subset".to_string());
+            }
+            let angle_text = feature
+                .get("angle")
+                .and_then(Value::as_str)
+                .ok_or("draft has no angle expression")?;
+            let node = expr::parse(angle_text).map_err(|e| format!("draft: {e}"))?;
+            let literal = matches!(node, expr::Node::Number { .. });
+            let ctx = expr::Context {
+                bare_length: design_factor,
+                bare_angle: 1.0,
+                bare_dim: expr::Dim::Angle,
+                bare_text: design_text,
+            };
+            let q = expr::eval(&node, &ctx, &env.lookup()).map_err(|e| format!("draft: {e}"))?;
+            if q.dim != expr::Dim::Angle {
+                return Err("draft angle is not an angle".to_string());
+            }
+            if !literal {
+                let segs =
+                    expr::translate_with(&node, &ctx, &|n| resolve_name(n, env, model_slots))
+                        .map_err(|e| format!("draft: {e}"))?;
+                let slot = *next_slot;
+                *next_slot += 1;
+                equations.push(DimEquation {
+                    which: 1,
+                    rhs: expr::translate(&node, &ctx),
+                    segs: coalesce(segs.into_iter().map(seg_from).collect()),
+                    expect_si: q.value,
+                    slot,
+                });
+            }
+            ModKind::Draft {
+                faces: picks("faces")?,
+                angle_rad: q.value.abs(),
+            }
+        }
+        "hole" => {
+            match feature
+                .get("hole")
+                .and_then(Value::as_str)
+                .unwrap_or("simple")
+            {
+                "simple" => {}
+                "drilled" => degraded_variants.push("drill point".to_string()),
+                other => {
+                    return Err(format!(
+                        "hole kind {other:?} is outside the supported subset"
+                    ))
+                }
+            }
+            if feature.get("thread").is_some()
+                || feature.get("to").is_some()
+                || feature.get("points").is_some()
+                || feature
+                    .get("modeled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            {
+                return Err(
+                    "a threaded, to-object or sketch-point hole is outside the supported subset"
+                        .to_string(),
+                );
+            }
+            let at = pick_coords(&Value::Array(
+                feature
+                    .get("position")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .ok_or("hole has no position")?,
+            ))?;
+            let diameter = eval_len(
+                feature
+                    .get("diameter")
+                    .and_then(Value::as_str)
+                    .ok_or("hole has no diameter expression")?,
+                1,
+                &mut equations,
+            )?;
+            let depth = feature
+                .get("depth")
+                .and_then(Value::as_str)
+                .map(|t| eval_len(t, 2, &mut equations))
+                .transpose()?;
+            ModKind::Hole {
+                at,
+                diameter: diameter.abs(),
+                depth: depth.map(f64::abs),
+            }
+        }
+        other => return Err(format!("{other} is not a modification feature")),
+    };
+    Ok(ModStep {
+        name,
+        kind: mod_kind,
+        equations,
+        degraded_variants,
     })
 }
