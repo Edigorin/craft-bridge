@@ -1,0 +1,5 @@
+# Every checkout must produce identical bytes: the seat smoke verifies exact
+# SHA-256 of the files it executes, so line endings are pinned to LF and
+# core.autocrlf conversions are disabled. Without this, a Windows checkout of
+# the same commit hashes differently (this actually blocked a seat run).
+* text=auto eol=lf

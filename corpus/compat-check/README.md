@@ -17,6 +17,11 @@ emits anything. It proves the vocabulary the generator will rely on:
 
 ## Running it on the seat
 
+The repository pins LF line endings (`.gitattributes`) so the committed bytes
+hash identically on every machine — a first seat run was correctly refused
+when Git for Windows converted the checkout to CRLF. If a hash mismatch ever
+appears on a fresh clone, suspect line-ending conversion before anything else.
+
 From the repository root on the Windows seat, after reviewing the script and
 the macro:
 
