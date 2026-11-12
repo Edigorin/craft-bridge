@@ -5,6 +5,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+use craft_bridge::build::{self, BuildOptions};
 use craft_bridge::inspect::{self, InspectReport};
 use craft_bridge::limits::Limits;
 use craft_bridge::pack::{self, PackOptions};
@@ -52,6 +53,23 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Generate a SolidWorks macro and a plan report from an artifact.
+    Build {
+        /// The artifact to rebuild from.
+        artifact: PathBuf,
+        /// Output macro path (.swb).
+        #[arg(long)]
+        out: PathBuf,
+        /// Write the machine-readable plan report here.
+        #[arg(long)]
+        plan: Option<PathBuf>,
+        /// Write the human plan report here.
+        #[arg(long)]
+        plan_text: Option<PathBuf>,
+        /// Replace existing regular files at the output paths.
+        #[arg(long)]
+        overwrite: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -95,6 +113,32 @@ fn main() -> ExitCode {
                     print!("{}", inspect::render_human(&report));
                 }
                 Ok(())
+            })
+        }
+        Command::Build {
+            artifact,
+            out,
+            plan,
+            plan_text,
+            overwrite,
+        } => {
+            let options = BuildOptions {
+                artifact: &artifact,
+                out: &out,
+                plan: plan.as_deref(),
+                plan_text: plan_text.as_deref(),
+                overwrite,
+            };
+            build::build(&options, &limits).map(|outcome| {
+                eprintln!(
+                    "built {} ({} bytes; {} mapped, {} degrade-planned, {} fallback-planned, {} not-executed)",
+                    out.display(),
+                    outcome.macro_bytes,
+                    outcome.plan.counts.mapped,
+                    outcome.plan.counts.degrade_planned,
+                    outcome.plan.counts.fallback_planned,
+                    outcome.plan.counts.not_executed
+                );
             })
         }
     };

@@ -1,0 +1,37 @@
+{
+  "artifact": "tracer.craftx",
+  "macro_name": "tracer.swb",
+  "profile": "craft-bridge/replay/1",
+  "steps": [
+    {
+      "index": 0,
+      "command": "document.units",
+      "status": "not-executed",
+      "detail": "units recorded (in); values replay in millimetres"
+    },
+    {
+      "index": 1,
+      "command": "parameters.add",
+      "status": "not-executed",
+      "detail": "recorded; equations land with expressions"
+    },
+    {
+      "index": 2,
+      "command": "timeline.add",
+      "status": "mapped",
+      "detail": "sketch on Xy: 4 lines, 0 circles, 8 relations, 2 dimensions"
+    },
+    {
+      "index": 3,
+      "command": "timeline.add",
+      "status": "mapped",
+      "detail": "extrude 12 mm over the whole sketch"
+    }
+  ],
+  "counts": {
+    "mapped": 2,
+    "degrade_planned": 0,
+    "fallback_planned": 0,
+    "not_executed": 2
+  }
+}

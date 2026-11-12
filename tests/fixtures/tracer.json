@@ -1,0 +1,68 @@
+{
+  "about": {
+    "design": "Tracer Plate",
+    "format": "solidcraft/53",
+    "replay": "craft-bridge build",
+    "version": "0.40.0-rc.4"
+  },
+  "commands": [
+    { "command": "document.units", "params": { "units": "in" } },
+    { "command": "parameters.add", "params": { "expression": "40 mm", "name": "width", "unit": "mm" } },
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "id": 1,
+          "name": "Profile",
+          "plane": { "name": "XY", "type": "origin" },
+          "sketch": {
+            "constraints": [
+              { "id": "k1", "l": 0, "type": "horizontal" },
+              { "id": "k2", "l": 1, "type": "vertical" },
+              { "id": "k3", "l": 2, "type": "horizontal" },
+              { "id": "k4", "l": 3, "type": "vertical" },
+              { "id": "k5", "l": 0, "param": "d1", "type": "length", "value": 40.0 },
+              { "id": "k6", "l": 1, "param": "d2", "type": "length", "value": 20.0 }
+            ],
+            "counters": { "k": 6, "l": 4, "p": 4 },
+            "curves": [
+              { "a": 0, "b": 1, "construction": false, "id": "l1", "type": "line" },
+              { "a": 1, "b": 2, "construction": false, "id": "l2", "type": "line" },
+              { "a": 2, "b": 3, "construction": false, "id": "l3", "type": "line" },
+              { "a": 3, "b": 0, "construction": false, "id": "l4", "type": "line" }
+            ],
+            "points": [
+              { "fixed": true, "id": "origin", "pos": [0.0, 0.0] },
+              { "id": "p1", "pos": [40.0, 0.0] },
+              { "id": "p2", "pos": [40.0, 20.0] },
+              { "id": "p3", "pos": [0.0, 20.0] }
+            ]
+          },
+          "suppressed": false,
+          "type": "sketch"
+        },
+        "params": [
+          { "expression": "40 mm", "name": "d1", "unit": "mm" },
+          { "expression": "20", "name": "d2", "unit": "mm" }
+        ]
+      }
+    },
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "extent": { "convention": "total_distance", "direction": "positive", "distance": "12 mm" },
+          "id": 2,
+          "name": "Base",
+          "operation": "new_body",
+          "param_names": ["d3"],
+          "profiles": { "type": "all" },
+          "sketch": 1,
+          "suppressed": false,
+          "type": "extrude"
+        },
+        "params": [{ "expression": "12 mm", "name": "d3", "unit": "mm" }]
+      }
+    }
+  ]
+}

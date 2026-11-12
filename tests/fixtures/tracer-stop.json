@@ -1,0 +1,59 @@
+{
+  "about": {
+    "design": "Tracer Stop",
+    "format": "solidcraft/53",
+    "replay": "craft-bridge build",
+    "version": "0.40.0-rc.4"
+  },
+  "commands": [
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "id": 1,
+          "name": "Round",
+          "plane": { "name": "XY", "type": "origin" },
+          "sketch": {
+            "constraints": [
+              { "id": "k1", "c": 0, "type": "radius", "value": 5.0 },
+              { "id": "k2", "center": 1, "offset": [1.0, 0.0], "p": 0, "q": 1, "type": "pattern_point", "angle": 0.5 }
+            ],
+            "counters": { "k": 2, "l": 1, "p": 2 },
+            "curves": [
+              { "a": 1, "b": 2, "construction": false, "id": "l1", "type": "line" },
+              { "c": 0, "construction": false, "id": "c1", "r": 5.0, "type": "circle" }
+            ],
+            "points": [
+              { "fixed": true, "id": "origin", "pos": [0.0, 0.0] },
+              { "id": "p1", "pos": [10.0, 0.0] },
+              { "id": "p2", "pos": [15.0, 0.0] }
+            ]
+          },
+          "suppressed": false,
+          "type": "sketch"
+        },
+        "params": [{ "expression": "5", "name": "d1", "unit": "mm" }]
+      }
+    },
+    {
+      "command": "vendor.future_thing",
+      "params": { "what": "unknown command: preserved, never executed" }
+    },
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "extent": { "convention": "total_distance", "direction": "positive", "distance": "3 mm" },
+          "id": 2,
+          "name": "Later",
+          "operation": "new_body",
+          "profiles": { "type": "all" },
+          "sketch": 1,
+          "suppressed": false,
+          "type": "extrude"
+        },
+        "params": []
+      }
+    }
+  ]
+}

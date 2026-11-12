@@ -34,6 +34,15 @@ pub const MAX_COMMANDS: usize = 100_000;
 /// Most omission warnings a sidecar may contain.
 pub const MAX_WARNINGS: usize = 10_000;
 
+/// Most sketch points or curves in one sketch.
+pub const MAX_ENTITIES: usize = 10_000;
+
+/// Most sketch constraints in one sketch.
+pub const MAX_CONSTRAINTS: usize = 40_000;
+
+/// Largest generated output (macro or report).
+pub const MAX_GENERATED_BYTES: u64 = 16 * 1024 * 1024;
+
 // JSON nesting depth is bounded by serde_json's own recursion limit (128).
 // The bridge never raises it.
 
@@ -49,6 +58,9 @@ pub struct Limits {
     pub max_warnings_bytes: u64,
     pub max_commands: usize,
     pub max_warnings: usize,
+    pub max_entities: usize,
+    pub max_constraints: usize,
+    pub max_generated_bytes: u64,
 }
 
 impl Default for Limits {
@@ -63,6 +75,9 @@ impl Default for Limits {
             max_warnings_bytes: MAX_WARNINGS_BYTES,
             max_commands: MAX_COMMANDS,
             max_warnings: MAX_WARNINGS,
+            max_entities: MAX_ENTITIES,
+            max_constraints: MAX_CONSTRAINTS,
+            max_generated_bytes: MAX_GENERATED_BYTES,
         }
     }
 }
@@ -80,6 +95,9 @@ impl Limits {
             max_warnings_bytes: 16 * 1024,
             max_commands: 64,
             max_warnings: 32,
+            max_entities: 64,
+            max_constraints: 64,
+            max_generated_bytes: 64 * 1024,
         }
     }
 }

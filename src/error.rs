@@ -43,6 +43,11 @@ pub enum Error {
     #[error("invalid STEP geometry: {0}")]
     InvalidStep(String),
 
+    /// The recipe is well-formed but this content has no translation yet.
+    /// Not an error to report upward as failure: it is the stop boundary.
+    #[error("unsupported in this phase: {0}")]
+    Unsupported(String),
+
     #[error("cannot write {path}: {reason}")]
     Output { path: PathBuf, reason: String },
 }
