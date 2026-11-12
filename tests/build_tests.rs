@@ -16,6 +16,7 @@ use craft_bridge::swb;
 const TRACER: &str = include_str!("fixtures/tracer.json");
 const TRACER_STOP: &str = include_str!("fixtures/tracer-stop.json");
 const TRACER_REVOLVE: &str = include_str!("fixtures/tracer-revolve.json");
+const TRACER_PRIM: &str = include_str!("fixtures/tracer-prim.json");
 const STEP_FIXTURE: &str = include_str!("fixtures/part.step");
 const GOLDEN_MACRO: &str = include_str!("golden/tracer.swb");
 const GOLDEN_PLAN_JSON: &str = include_str!("golden/tracer-plan.json");
@@ -282,4 +283,46 @@ fn partial_revolve_needs_the_sketch_normal_convention() {
     // The stop rule cascades: the full turn after the stopped step is
     // not-executed. Its convention-freedom is covered by the fixture test.
     assert_eq!(steps[2].status, PlanStatus::NotExecuted);
+}
+
+#[test]
+fn primitives_and_cross_references_replay() {
+    let case = Case::new(TRACER_PRIM);
+    case.build_to("prim.swb", false).unwrap();
+    let macro_text = fs::read_to_string(case.dir.path().join("prim.swb")).unwrap();
+    assert!(
+        macro_text.contains("CreateCornerRectangle"),
+        "no box sketch"
+    );
+    assert!(
+        macro_text.contains("CreateCircleByRadius"),
+        "no cylinder sketch"
+    );
+    assert!(
+        macro_text.contains("regName(0)"),
+        "the cross-reference slot is missing"
+    );
+    assert!(
+        macro_text.contains("If regName(0) = \"\" Then GoTo ExFail"),
+        "the dead-slot guard is missing"
+    );
+    assert!(
+        macro_text.contains("* 2"),
+        "the segmented right-hand side is missing"
+    );
+    let outcome = case.build_to("prim2.swb", false).unwrap();
+    for step in &outcome.plan.steps {
+        assert_eq!(step.status, PlanStatus::Mapped, "{}", step.detail);
+    }
+}
+
+#[test]
+fn primitives_off_the_base_plane_stop() {
+    let recipe = TRACER_PRIM.replace(
+        "\"corner\": [\"0\", \"0\", \"0\"]",
+        "\"corner\": [\"0\", \"0\", \"5 mm\"]",
+    );
+    let steps = plan_of(&recipe);
+    assert_eq!(steps[2].status, PlanStatus::FallbackPlanned);
+    assert_eq!(steps[3].status, PlanStatus::NotExecuted);
 }

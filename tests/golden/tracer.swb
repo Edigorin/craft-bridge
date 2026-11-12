@@ -7,6 +7,7 @@ Dim swDoc As SldWorks.ModelDoc2
 Dim swSketchMgr As SketchManager
 Dim reportPath As String
 Dim gMsg As String
+Dim regName(0 To 1) As String
 Dim skName2 As String
 Dim pt2(0 To 7) As SldWorks.SketchPoint
 Dim sl2(0 To 3) As SldWorks.SketchLine
@@ -185,7 +186,7 @@ Function Dims2() As Boolean
     Set dm = dd.GetDimension2(0)
     If dm Is Nothing Then GoTo DimFail
     dm.SystemValue = 0.04
-    If Not AddDimEquation(dm, "40mm", 0.04) Then GoTo DimFail
+    If Not AddDimEquation(dm, "40mm", 40.0, 0) Then GoTo DimFail
     swDoc.ClearSelection2 True
     sl2(1).Select False
     Set dd = swDoc.AddDimension2(0.05, 0.02, 0#)
@@ -193,7 +194,7 @@ Function Dims2() As Boolean
     Set dm = dd.GetDimension2(0)
     If dm Is Nothing Then GoTo DimFail
     dm.SystemValue = 0.02
-    If Not AddDimEquation(dm, "20mm", 0.02) Then GoTo DimFail
+    If Not AddDimEquation(dm, "20mm", 20.0, 1) Then GoTo DimFail
     swDoc.ClearSelection2 True
     Dims2 = True
     Exit Function
@@ -335,7 +336,7 @@ End Function
 ' Add an equation driving a dimension and verify it evaluated: the
 ' dimension name is captured at runtime, the value must match the
 ' expectation after a rebuild. Never presence alone.
-Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double) As Boolean
+Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long) As Boolean
 On Error GoTo EqFail
 Dim eqMgr As SldWorks.EquationMgr
 Dim eqText As String
@@ -345,7 +346,8 @@ eqText = """" & dm.Name & """=" & rhs
 eqMgr.Add2 -1, eqText
 swDoc.EditRebuild3
 If Abs(dm.SystemValue - expect) > 0.000001 Then GoTo EqFail
-AddDimEquation = True
+If slot >= 0 Then regName(slot) = dm.Name
+             AddDimEquation = True
 Exit Function
 EqFail:
 AddDimEquation = False

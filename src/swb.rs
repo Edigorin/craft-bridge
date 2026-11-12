@@ -100,6 +100,23 @@ pub fn emit(steps: &[PlannedStep], artifact: &str, bridge_version: &str) -> Stri
     out.push_str("Dim swSketchMgr As SketchManager\n");
     out.push_str("Dim reportPath As String\n");
     out.push_str("Dim gMsg As String\n");
+    let max_slot = steps
+        .iter()
+        .filter_map(|s| match &s.work {
+            Work::Sketch(sk) => sk.dim_equations.iter().map(|(_, e)| e.slot).max(),
+            Work::Extrude(ex) => ex.equations.iter().map(|e| e.slot).max(),
+            Work::Revolve(rv) => rv.equations.iter().map(|e| e.slot).max(),
+            Work::Primitive(pr) => pr
+                .sizes
+                .iter()
+                .filter_map(|sz| sz.equation.as_ref().map(|e| e.slot))
+                .max(),
+            _ => None,
+        })
+        .max();
+    if let Some(m) = max_slot {
+        out.push_str(&format!("Dim regName(0 To {}) As String\n", m));
+    }
     for (index, sk) in &sketches {
         out.push_str(&format!("Dim skName{index} As String\n"));
         out.push_str(&format!(
@@ -189,17 +206,14 @@ pub fn emit(steps: &[PlannedStep], artifact: &str, bridge_version: &str) -> Stri
                 ));
                 out.push_str("    If st = \"failed\" Then stopModel = True\n\n");
             }
-            Work::Extrude(_) | Work::Revolve(_) => {
+            Work::Extrude(_) | Work::Revolve(_) | Work::Primitive(_) => {
                 out.push_str("    If Not stopModel Then\n");
-                out.push_str(&format!(
-                    "        st = Build{}{}()\n",
-                    if matches!(&step.work, Work::Extrude(_)) {
-                        "Extrude"
-                    } else {
-                        "Revolve"
-                    },
-                    step.index
-                ));
+                let kind = match &step.work {
+                    Work::Extrude(_) => "Extrude",
+                    Work::Revolve(_) => "Revolve",
+                    _ => "Prim",
+                };
+                out.push_str(&format!("        st = Build{}{}()\n", kind, step.index));
                 out.push_str("    Else\n        st = \"not-executed\"\n        gMsg = \"after the first stopped step\"\n    End If\n");
                 out.push_str(&format!(
                     "    WriteStep stepIdx, {}, st, gMsg\n",
@@ -258,6 +272,16 @@ pub fn emit(steps: &[PlannedStep], artifact: &str, bridge_version: &str) -> Stri
         .collect();
     for (index, rv) in &revolves {
         out.push_str(&emit_revolve_subs(*index, rv));
+    }
+    let prims: Vec<(usize, &crate::replay::PrimStep)> = steps
+        .iter()
+        .filter_map(|s| match &s.work {
+            Work::Primitive(p) => Some((s.index, p)),
+            _ => None,
+        })
+        .collect();
+    for (index, pr) in &prims {
+        out.push_str(&emit_prim_subs(*index, pr));
     }
 
     // ---- shared helpers (the checkpoint's, unchanged in spirit) ----
@@ -334,7 +358,7 @@ pub fn emit(steps: &[PlannedStep], artifact: &str, bridge_version: &str) -> Stri
          ' Add an equation driving a dimension and verify it evaluated: the\n\
          ' dimension name is captured at runtime, the value must match the\n\
          ' expectation after a rebuild. Never presence alone.\n\
-         Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double) As Boolean\n\
+         Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long) As Boolean\n\
              On Error GoTo EqFail\n\
              Dim eqMgr As SldWorks.EquationMgr\n\
              Dim eqText As String\n\
@@ -344,6 +368,7 @@ pub fn emit(steps: &[PlannedStep], artifact: &str, bridge_version: &str) -> Stri
              eqMgr.Add2 -1, eqText\n\
              swDoc.EditRebuild3\n\
              If Abs(dm.SystemValue - expect) > 0.000001 Then GoTo EqFail\n\
+             If slot >= 0 Then regName(slot) = dm.Name
              AddDimEquation = True\n\
              Exit Function\n\
          EqFail:\n\
@@ -625,10 +650,12 @@ fn emit_dimension(
     };
     out.push_str(&format!("    dm.SystemValue = {}\n", vba_num(si)));
     if let Some(equation) = equation {
+        out.push_str(&slot_guards(equation, "DimFail"));
         out.push_str(&format!(
-            "    If Not AddDimEquation(dm, {}, {}) Then GoTo DimFail\n",
-            vb_lit(&equation.rhs),
-            vba_num(si)
+            "    If Not AddDimEquation(dm, {}, {}, {}) Then GoTo DimFail\n",
+            rhs_vba(equation),
+            vba_num(equation.expect_si),
+            equation.slot
         ));
     }
     out.push_str("    swDoc.ClearSelection2 True\n");
@@ -704,12 +731,14 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
     }
     // Parametric depths become equations, verified by evaluation.
     for eq in &ex.equations {
+        out.push_str(&slot_guards(eq, "ExFail"));
         out.push_str(&format!(
-            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
+            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
             eq.which,
             eq.which,
-            vb_lit(&eq.rhs),
-            vba_num(eq.expect_si)
+            rhs_vba(eq),
+            vba_num(eq.expect_si),
+            eq.slot
         ));
     }
     out.push_str(&format!(
@@ -828,17 +857,154 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep) -> String {
     }
     let equations: Vec<&DE> = rv.equations.iter().collect();
     for eq in equations {
+        out.push_str(&slot_guards(eq, "ExFail"));
         out.push_str(&format!(
-            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the revolve angle dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}) Then gMsg = \"the revolve angle equation did not evaluate\": GoTo ExFail\n",
+            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the revolve angle dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}) Then gMsg = \"the revolve angle equation did not evaluate\": GoTo ExFail\n",
             eq.which,
             eq.which,
-            vb_lit(&eq.rhs),
-            vba_num(eq.expect_si)
+            rhs_vba(eq),
+            vba_num(eq.expect_si),
+            eq.slot
         ));
     }
     out.push_str(&format!(
         "    gMsg = {}\n    BuildRevolve{index} = \"created\"\n    Exit Function\n\nExFail:\n    BuildRevolve{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    On Error Resume Next\n    gMsg = Err.Description\n    BuildRevolve{index} = \"failed\"\nEnd Function\n\n",
         vb_lit(&format!("{message}; sweep direction and volume are acceptance checks"))
     ));
+    out
+}
+
+/// Primitive builder: a generated sketch (rectangle or circle) on the Front
+/// plane (XY) with driving dimensions and equations, then a blind extrude.
+/// Placement is literal by design (this phase); sizes keep their parametrisation
+/// through dimension equations.
+fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
+    use crate::replay::PrimKind;
+    let mut out = String::new();
+    out.push_str(&format!("' Primitive step {index}: {}\n", vb_lit(&pr.name)));
+    out.push_str(&format!(
+        "Function BuildPrim{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n    Dim dd As SldWorks.DisplayDimension\n    Dim seg As Variant\n    Dim sl As SldWorks.SketchLine\n    Dim ci As SldWorks.SketchCircle\n"
+    ));
+    out.push_str("    ok = swDoc.Extension.SelectByID2(\"Front Plane\", \"PLANE\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n");
+    out.push_str("    If Not ok Then gMsg = \"could not select the Front plane\": GoTo ExFail\n");
+    out.push_str("    swSketchMgr.InsertSketch True\n");
+    let (ox, oy) = (pr.origin[0] / 1000.0, pr.origin[1] / 1000.0);
+    match pr.kind {
+        PrimKind::Box => {
+            let l = pr.sizes[0].value / 1000.0;
+            let w = pr.sizes[1].value / 1000.0;
+            out.push_str(&format!(
+                "    seg = swSketchMgr.CreateCornerRectangle({}, {}, 0#, {}, {}, 0#)\n",
+                vba_num(ox),
+                vba_num(oy),
+                vba_num(ox + l),
+                vba_num(oy + w)
+            ));
+            out.push_str("    Set sl = seg(0)\n    sl.Select False\n");
+            out.push_str("    Set dd = swDoc.AddDimension2(0#, 0#, 0#)\n    If dd Is Nothing Then GoTo ExFail\n    Set dm = dd.GetDimension2(0)\n    If dm Is Nothing Then GoTo ExFail\n");
+            out.push_str(&emit_size(1, &pr.sizes[0], "the box length"));
+            out.push_str(
+                "    swDoc.ClearSelection2 True\n    Set sl = seg(1)\n    sl.Select False\n",
+            );
+            out.push_str("    Set dd = swDoc.AddDimension2(0#, 0#, 0#)\n    If dd Is Nothing Then GoTo ExFail\n    Set dm = dd.GetDimension2(0)\n    If dm Is Nothing Then GoTo ExFail\n");
+            out.push_str(&emit_size(2, &pr.sizes[1], "the box width"));
+        }
+        PrimKind::Cylinder => {
+            let r = pr.sizes[0].value / 1000.0;
+            out.push_str(&format!(
+                "    Set ci = swSketchMgr.CreateCircleByRadius({}, {}, 0#, {})\n",
+                vba_num(ox),
+                vba_num(oy),
+                vba_num(r)
+            ));
+            out.push_str("    ci.Select False\n");
+            out.push_str("    Set dd = swDoc.AddDimension2(0#, 0#, 0#)\n    If dd Is Nothing Then GoTo ExFail\n    Set dm = dd.GetDimension2(0)\n    If dm Is Nothing Then GoTo ExFail\n");
+            out.push_str(&emit_size(1, &pr.sizes[0], "the cylinder radius"));
+        }
+    }
+    out.push_str("    swDoc.ClearSelection2 True\n    swSketchMgr.InsertSketch True\n");
+    // The blind extrude carries the last size (height).
+    let height = pr.sizes.last().map(|s| s.value / 1000.0).unwrap_or(0.0);
+    out.push_str("    ok = swDoc.Extension.SelectByID2(swSketchMgr.ActiveSketch.Name, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n");
+    out.push_str(
+        "    If Not ok Then gMsg = \"could not select the primitive sketch\": GoTo ExFail\n",
+    );
+    out.push_str(&format!(
+        "    Set feat = swDoc.FeatureManager.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
+        vba_num(height)
+    ));
+    out.push_str("    If feat Is Nothing Then gMsg = \"the primitive extrude was not created\": GoTo ExFail\n");
+    out.push_str("    Set dm = swDoc.Parameter(\"D1@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the primitive height dimension is missing\": GoTo ExFail\n");
+    out.push_str(&format!(
+        "    If Abs(dm.SystemValue - {}) > 0.000001 Then gMsg = \"the primitive height does not match\": GoTo ExFail\n",
+        vba_num(height)
+    ));
+    if let Some(last) = pr.sizes.last() {
+        out.push_str(&emit_size_eq(last, "the primitive height"));
+    }
+    out.push_str(&format!(
+        "    gMsg = \"primitive created\"\n    BuildPrim{index} = \"created\"\n    Exit Function\n\nExFail:\n    BuildPrim{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    On Error Resume Next\n    gMsg = Err.Description\n    BuildPrim{index} = \"failed\"\nEnd Function\n\n"
+    ));
+    out
+}
+
+/// Verify one primitive sketch size (dm already set) and attach its equation.
+fn emit_size(_which: usize, size: &crate::replay::PrimSize, what: &str) -> String {
+    let mm = size.value / 1000.0;
+    let mut out = format!(
+        "    If Abs(dm.SystemValue - {}) > 0.000001 Then gMsg = \"{} does not match\": GoTo ExFail\n",
+        vba_num(mm),
+        what
+    );
+    out.push_str(&emit_size_eq(size, what));
+    out
+}
+
+fn emit_size_eq(size: &crate::replay::PrimSize, what: &str) -> String {
+    match &size.equation {
+        Some(eq) => {
+            let mut out = slot_guards(eq, "ExFail");
+            out.push_str(&format!(
+            "    If Not AddDimEquation(dm, {}, {}, {}) Then gMsg = \"{} equation did not evaluate\": GoTo ExFail\n",
+            rhs_vba(eq),
+            vba_num(eq.expect_si),
+            eq.slot,
+            what
+        ));
+            out
+        }
+        None => String::new(),
+    }
+}
+
+/// The right-hand side as a VBA string expression: static when the equation
+/// has no segments, otherwise a concatenation with runtime dimension names.
+fn rhs_vba(eq: &crate::replay::DimEquation) -> String {
+    use crate::replay::RhsSeg;
+    if eq.segs.is_empty() {
+        return rhs_vba(eq);
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for seg in &eq.segs {
+        match seg {
+            RhsSeg::Text(t) => parts.push(vb_lit(t)),
+            RhsSeg::Slot(slot) => parts.push(format!("(\"\"\"\" & regName({slot}) & \"\"\")")),
+        }
+    }
+    parts.join(" & ")
+}
+
+/// Fail closed on dead slots: an equation may only reference a dimension
+/// whose slot is live (registered after its own verification).
+fn slot_guards(eq: &crate::replay::DimEquation, fail_label: &str) -> String {
+    use crate::replay::RhsSeg;
+    let mut out = String::new();
+    for seg in &eq.segs {
+        if let RhsSeg::Slot(slot) = seg {
+            out.push_str(&format!(
+                "    If regName({slot}) = \"\" Then GoTo {fail_label}\n"
+            ));
+        }
+    }
     out
 }

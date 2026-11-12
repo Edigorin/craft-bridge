@@ -587,3 +587,94 @@ fn render(node: &Node, ctx: &Context) -> String {
         Node::Pow(a, b) => format!("({} ^ {})", render(a, ctx), render(b, ctx)),
     }
 }
+
+/// How a name resolves for translation purposes.
+pub enum NameRef {
+    /// A user parameter: quoted global-variable name.
+    Global,
+    /// A model parameter: the runtime name of a registered dimension.
+    Slot(usize),
+    Unknown,
+}
+
+/// Translate with runtime name resolution: segments of literal equation
+/// syntax and dimension slots. Meaning-preserving like `translate`; a name
+/// that resolves to nothing is an error, never a guess.
+pub fn translate_with(
+    node: &Node,
+    ctx: &Context,
+    resolve: &dyn Fn(&str) -> NameRef,
+) -> Result<Vec<(String, Option<usize>)>, String> {
+    fn bare_number(node: &Node) -> bool {
+        matches!(node, Node::Number { unit: None, .. })
+    }
+    fn render(
+        node: &Node,
+        ctx: &Context,
+        resolve: &dyn Fn(&str) -> NameRef,
+        suffix_bare: bool,
+    ) -> Result<Vec<(String, Option<usize>)>, String> {
+        Ok(match node {
+            Node::Number { text, unit } => {
+                let text = match unit {
+                    Some(u) => format!("{text}{u}"),
+                    None if suffix_bare && ctx.bare_dim != Dim::Count => {
+                        format!("{text}{}", ctx.bare_text)
+                    }
+                    None => text.clone(),
+                };
+                vec![(text, None)]
+            }
+            Node::Name(name) => match resolve(name) {
+                NameRef::Global => vec![(format!("\"{}\"", name.replace('"', "")), None)],
+                NameRef::Slot(slot) => vec![(String::new(), Some(slot))],
+                NameRef::Unknown => return Err(format!("unresolvable name {name:?}")),
+            },
+            Node::Unary(a) => {
+                let mut v = vec![("-".to_string(), None)];
+                v.extend(render(a, ctx, resolve, false)?);
+                v
+            }
+            Node::Add(a, b) | Node::Sub(a, b) => {
+                let op = if matches!(node, Node::Add(..)) {
+                    "+"
+                } else {
+                    "-"
+                };
+                let mut v = vec![("(".to_string(), None)];
+                v.extend(render(a, ctx, resolve, !bare_number(b))?);
+                v.push((format!(" {op} "), None));
+                v.extend(render(b, ctx, resolve, !bare_number(a))?);
+                v.push((")".to_string(), None));
+                v
+            }
+            Node::Mul(a, b) => {
+                let mut v = render(a, ctx, resolve, false)?;
+                v.push((" * ".to_string(), None));
+                v.extend(render(b, ctx, resolve, false)?);
+                v
+            }
+            Node::Div(a, b) => {
+                let mut v = render(a, ctx, resolve, false)?;
+                v.push((" / ".to_string(), None));
+                v.extend(render(b, ctx, resolve, false)?);
+                v
+            }
+            Node::Pow(a, b) => {
+                let mut v = vec![("(".to_string(), None)];
+                v.extend(render(a, ctx, resolve, false)?);
+                v.push((" ^ ".to_string(), None));
+                v.extend(render(b, ctx, resolve, false)?);
+                v.push((")".to_string(), None));
+                v
+            }
+        })
+    }
+    // The root: a bare number that means a length gets the suffix.
+    render(
+        node,
+        ctx,
+        resolve,
+        matches!(node, Node::Number { unit: None, .. }),
+    )
+}

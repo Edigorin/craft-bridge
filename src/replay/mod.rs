@@ -117,6 +117,7 @@ pub enum Work {
     Sketch(SketchStep),
     Extrude(ExtrudeStep),
     Revolve(RevolveStep),
+    Primitive(PrimStep),
     /// Recorded but not executed and not model work (a text parameter, an
     /// expression outside the supported subset): never triggers the stop rule.
     Note,
@@ -241,15 +242,54 @@ pub struct ExtrudeStep {
     pub equations: Vec<DimEquation>,
 }
 
+/// One piece of an equation right-hand side: literal syntax, or the runtime
+/// name of a registered dimension (a model-parameter cross-reference).
+#[derive(Debug, Clone, PartialEq)]
+pub enum RhsSeg {
+    Text(String),
+    /// The registry slot of a dimension created elsewhere; rendered at
+    /// runtime as the captured name. Empty after that step falls back.
+    Slot(usize),
+}
+
 /// An equation that drives a feature dimension, captured at runtime by name.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DimEquation {
     /// Which dimension of the feature: 1 for D1, 2 for D2.
     pub which: usize,
-    /// The equation right-hand side in SolidWorks syntax.
+    /// The equation right-hand side in SolidWorks syntax (static text only).
     pub rhs: String,
+    /// Segmented form when the expression references model parameters.
+    pub segs: Vec<RhsSeg>,
     /// The evaluated SI value it must produce (verification).
     pub expect_si: f64,
+    /// The registry slot where the macro records this dimension's runtime
+    /// name after verification; later equations may then reference it.
+    pub slot: usize,
+}
+
+/// Primitives replay as generated sketches plus features.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PrimKind {
+    Box,
+    Cylinder,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PrimStep {
+    pub name: String,
+    pub kind: PrimKind,
+    /// Placement in sketch millimetres (literal only in this phase).
+    pub origin: [f64; 2],
+    /// Sizes in millimetres, in feature order (length/width/height, or
+    /// radius/height), each optionally an equation.
+    pub sizes: Vec<PrimSize>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PrimSize {
+    pub value: f64,
+    pub equation: Option<DimEquation>,
 }
 
 /// How far a revolve turns.
@@ -291,6 +331,9 @@ pub fn plan(recipe: &Value, limits: &Limits) -> Result<Vec<PlannedStep>> {
     let mut design_text: &'static str = "mm";
     // Recipe feature id -> plan index of its sketch step.
     let mut sketch_steps: Vec<(u64, usize)> = Vec::new();
+    // Model parameter name -> registry slot of the dimension that carries it.
+    let mut model_slots: Vec<(String, usize)> = Vec::new();
+    let mut next_slot: usize = 0;
     for (index, entry) in commands.iter().enumerate() {
         let id = entry
             .get("command")
@@ -392,6 +435,8 @@ pub fn plan(recipe: &Value, limits: &Limits) -> Result<Vec<PlannedStep>> {
                 design_text,
                 &steps,
                 &sketch_steps,
+                &mut model_slots,
+                &mut next_slot,
             )?,
             _ => PlannedStep {
                 index,
@@ -431,6 +476,8 @@ fn plan_feature(
     design_text: &'static str,
     steps: &[PlannedStep],
     sketch_steps: &[(u64, usize)],
+    model_slots: &mut Vec<(String, usize)>,
+    next_slot: &mut usize,
 ) -> Result<PlannedStep> {
     let feature = params
         .and_then(|p| p.get("feature"))
@@ -485,7 +532,7 @@ fn plan_feature(
         }
     }
     Ok(match kind {
-        "sketch" => match parse_sketch(name, feature, limits, &model_exprs, env, design_factor, design_text) {
+        "sketch" => match parse_sketch(name, feature, limits, &model_exprs, env, design_factor, design_text, model_slots, next_slot) {
             Ok((sketch, degrade)) => {
                 let dropped = sketch.dropped_constraints.len();
                 let detail = if degrade {
@@ -523,7 +570,7 @@ fn plan_feature(
                 Some(i) => i,
                 None => return Ok(unmappable("the extrude's sketch is not in this recipe".to_string())),
             };
-            match parse_extrude(name, sketch_step, feature, env, design_factor, design_text) {
+            match parse_extrude(name, sketch_step, feature, env, design_factor, design_text, model_slots, next_slot) {
             Ok(extrude) => {
                 let detail = match &extrude.kind {
                     ExtrudeKind::Blind { depth_m, negative } => format!(
@@ -570,7 +617,7 @@ fn plan_feature(
                 Some(sk) => sk,
                 None => return Ok(unmappable("the revolve's sketch did not replay".to_string())),
             };
-            match parse_revolve(name, sketch_step, feature, sketch, env, design_factor, design_text)
+            match parse_revolve(name, sketch_step, feature, sketch, env, design_factor, design_text, model_slots, next_slot)
             {
                 Ok(revolve) => {
                     let detail = match &revolve.kind {
@@ -603,6 +650,32 @@ fn plan_feature(
                 )),
             }
         }
+        "box" | "cylinder" => {
+            let prim_kind = if kind == "box" {
+                PrimKind::Box
+            } else {
+                PrimKind::Cylinder
+            };
+            match parse_prim(name, prim_kind, feature, env, design_factor, design_text, model_slots, next_slot)
+            {
+                Ok(primitive) => {
+                    let what = match primitive.kind {
+                        PrimKind::Box => "box",
+                        PrimKind::Cylinder => "cylinder",
+                    };
+                    PlannedStep {
+                        index,
+                        command: id.to_string(),
+                        status: PlanStatus::Mapped,
+                        detail: format!("{what} replayed as a generated sketch and extrude"),
+                        work: Work::Primitive(primitive),
+                    }
+                }
+                Err(reason) => unmappable(format!(
+                    "{reason}; a fallback body lands with the hybrid-fallback ticket"
+                )),
+            }
+        }
         _ => unmappable(format!(
             "feature type {kind:?} has no translation yet; a fallback body lands with the hybrid-fallback ticket"
         )),
@@ -612,6 +685,7 @@ fn plan_feature(
 /// Parse a sketch. Malformed recipe data is InvalidRecipe; content outside
 /// the tracer subset is Unsupported (the stop boundary) or a degrade trigger
 /// (kept on the sketch and reported).
+#[allow(clippy::too_many_arguments)]
 fn parse_sketch(
     name: String,
     feature: &Value,
@@ -620,6 +694,8 @@ fn parse_sketch(
     env: &ParamEnv,
     design_factor: f64,
     design_text: &'static str,
+    model_slots: &mut Vec<(String, usize)>,
+    next_slot: &mut usize,
 ) -> Result<(SketchStep, bool)> {
     let plane_v = feature
         .get("plane")
@@ -957,17 +1033,20 @@ fn parse_sketch(
         let found = model_exprs.iter().find(|(n, _, _)| *n == param);
         let bound = found.and_then(|(_, expression, unit)| {
             let node = expr::parse(expression).ok()?;
-            let mut used = Vec::new();
-            expr::names(&node, &mut used);
-            if !used.iter().all(|u| env.is_global(u)) {
-                return None;
-            }
             let ctx = expr::Context::for_unit(unit, design_factor, design_text);
             expr::eval(&node, &ctx, &env.lookup()).ok()?;
+            let segs =
+                expr::translate_with(&node, &ctx, &|n| resolve_name(n, env, model_slots)).ok()?;
+            let rhs = expr::translate(&node, &ctx);
+            let slot = *next_slot;
+            *next_slot += 1;
+            model_slots.push((param.clone(), slot));
             Some(DimEquation {
                 which: 0,
-                rhs: expr::translate(&node, &ctx),
+                rhs,
+                segs: coalesce(segs.into_iter().map(seg_from).collect()),
                 expect_si: d.value,
+                slot,
             })
         });
         match bound {
@@ -987,6 +1066,7 @@ fn parse_sketch(
 /// second side with `second_follows_first` is the legacy signed rule and is
 /// outside this subset. Expressions evaluate through the shared engine;
 /// non-literal expressions travel as dimension equations.
+#[allow(clippy::too_many_arguments)]
 fn parse_extrude(
     name: String,
     sketch_step: usize,
@@ -994,6 +1074,8 @@ fn parse_extrude(
     env: &ParamEnv,
     design_factor: f64,
     design_text: &'static str,
+    model_slots: &mut Vec<(String, usize)>,
+    next_slot: &mut usize,
 ) -> std::result::Result<ExtrudeStep, String> {
     let extent = feature
         .get("extent")
@@ -1085,10 +1167,16 @@ fn parse_extrude(
             return Err("extrude distance is not a length".to_string());
         }
         if !literal {
+            let segs = expr::translate_with(&node, &ctx, &|n| resolve_name(n, env, model_slots))
+                .map_err(|e| format!("extrude distance: {e}"))?;
+            let slot = *next_slot;
+            *next_slot += 1;
             equations.push(DimEquation {
                 which,
                 rhs: expr::translate(&node, &ctx),
+                segs: coalesce(segs.into_iter().map(seg_from).collect()),
                 expect_si: q.value,
+                slot,
             });
         }
         Ok(q.value)
@@ -1146,6 +1234,13 @@ fn parse_extrude(
         }
         (other, _) => return Err(format!("extrude direction {other:?} is unknown")),
     };
+    if let Some(names) = feature.get("param_names").and_then(Value::as_array) {
+        for eq in &equations {
+            if let Some(n) = names.get(eq.which - 1).and_then(Value::as_str) {
+                model_slots.push((n.to_string(), eq.slot));
+            }
+        }
+    }
     Ok(ExtrudeStep {
         name,
         sketch_step,
@@ -1178,6 +1273,7 @@ fn resolve_sketch(
 /// explicit in-plane line (replayed as an anchored helper construction line).
 /// Model and construction axes stay outside the subset. Partial angles
 /// require the sketch-normal convention; a full turn is convention-free.
+#[allow(clippy::too_many_arguments)]
 fn parse_revolve(
     name: String,
     sketch_step: usize,
@@ -1186,6 +1282,8 @@ fn parse_revolve(
     env: &ParamEnv,
     design_factor: f64,
     design_text: &'static str,
+    model_slots: &mut Vec<(String, usize)>,
+    next_slot: &mut usize,
 ) -> std::result::Result<RevolveStep, String> {
     if let Some(v) = feature.get("to") {
         let _ = v;
@@ -1345,9 +1443,9 @@ fn parse_revolve(
 
     // Angle.
     let mut equations = Vec::new();
-    let eval_angle = |text: &str,
-                      which: usize,
-                      equations: &mut Vec<DimEquation>|
+    let mut eval_angle = |text: &str,
+                          which: usize,
+                          equations: &mut Vec<DimEquation>|
      -> std::result::Result<f64, String> {
         let node = expr::parse(text).map_err(|e| format!("revolve angle: {e}"))?;
         let literal = matches!(node, expr::Node::Number { .. });
@@ -1363,10 +1461,16 @@ fn parse_revolve(
             return Err("revolve angle is not an angle".to_string());
         }
         if !literal {
+            let segs = expr::translate_with(&node, &ctx, &|n| resolve_name(n, env, model_slots))
+                .map_err(|e| format!("revolve angle: {e}"))?;
+            let slot = *next_slot;
+            *next_slot += 1;
             equations.push(DimEquation {
                 which,
                 rhs: expr::translate(&node, &ctx),
+                segs: coalesce(segs.into_iter().map(seg_from).collect()),
                 expect_si: q.value,
+                slot,
             });
         }
         Ok(q.value)
@@ -1418,6 +1522,13 @@ fn parse_revolve(
             reverse: angle < 0.0,
         },
     };
+    if let Some(names) = feature.get("param_names").and_then(Value::as_array) {
+        for eq in &equations {
+            if let Some(n) = names.get(eq.which - 1).and_then(Value::as_str) {
+                model_slots.push((n.to_string(), eq.slot));
+            }
+        }
+    }
     Ok(RevolveStep {
         name,
         sketch_step,
@@ -1449,4 +1560,185 @@ impl SketchStep {
     pub fn slot_count(&self) -> usize {
         2 * self.lines.len() + self.circles.len()
     }
+}
+
+/// Resolve an expression name for translation: globals become quoted text,
+/// model parameters become registry slots, anything else is unresolvable.
+fn resolve_name(name: &str, env: &ParamEnv, model_slots: &[(String, usize)]) -> expr::NameRef {
+    if env.is_global(name) {
+        expr::NameRef::Global
+    } else if let Some((_, slot)) = model_slots.iter().find(|(n, _)| n == name) {
+        expr::NameRef::Slot(*slot)
+    } else {
+        expr::NameRef::Unknown
+    }
+}
+
+fn seg_from(seg: (String, Option<usize>)) -> RhsSeg {
+    match seg {
+        (text, None) => RhsSeg::Text(text),
+        (_, Some(slot)) => RhsSeg::Slot(slot),
+    }
+}
+
+/// Merge adjacent literal pieces so the generated equation is readable and
+/// testable (" * 2" stays one piece).
+fn coalesce(segs: Vec<RhsSeg>) -> Vec<RhsSeg> {
+    let mut out: Vec<RhsSeg> = Vec::with_capacity(segs.len());
+    for seg in segs {
+        match (out.last_mut(), &seg) {
+            (Some(RhsSeg::Text(acc)), RhsSeg::Text(t)) => acc.push_str(t),
+            _ => out.push(seg),
+        }
+    }
+    out
+}
+
+/// Primitives replay as a generated sketch plus a blind extrude. Placement
+/// (corner/base) must be literal and on the base plane; the axis must be Z;
+/// sizes may be parametric and become dimension equations. Everything else
+/// stops (off-plane placement needs extrude start-offset machinery).
+#[allow(clippy::too_many_arguments)]
+fn parse_prim(
+    name: String,
+    kind: PrimKind,
+    feature: &Value,
+    env: &ParamEnv,
+    design_factor: f64,
+    design_text: &'static str,
+    model_slots: &mut Vec<(String, usize)>,
+    next_slot: &mut usize,
+) -> std::result::Result<PrimStep, String> {
+    match feature
+        .get("operation")
+        .and_then(Value::as_str)
+        .unwrap_or("new_body")
+    {
+        "new_body" | "join" => {}
+        other => {
+            return Err(format!(
+                "primitive operation {other:?} is outside the supported subset"
+            ))
+        }
+    }
+    if let Some(axis) = feature.get("axis") {
+        let ok = axis
+            .as_array()
+            .map(|a| {
+                a.len() == 3
+                    && a[0].as_f64().unwrap_or(1.0).abs() < 1e-9
+                    && a[1].as_f64().unwrap_or(1.0).abs() < 1e-9
+                    && (a[2].as_f64().unwrap_or(0.0) - 1.0).abs() < 1e-9
+            })
+            .unwrap_or(false);
+        if !ok {
+            return Err(
+                "a primitive axis other than Z is outside the supported subset".to_string(),
+            );
+        }
+    }
+    let place_key = match kind {
+        PrimKind::Box => "corner",
+        PrimKind::Cylinder => "base",
+    };
+    let place_v = feature
+        .get(place_key)
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("the primitive has no {place_key}"))?;
+    if place_v.len() != 3 {
+        return Err(format!(
+            "the primitive {place_key} is not three expressions"
+        ));
+    }
+    let mut xyz = [0.0f64; 3];
+    for (i, e) in place_v.iter().enumerate() {
+        let text = e
+            .as_str()
+            .ok_or_else(|| format!("the primitive {place_key} is not an expression string"))?;
+        let node = expr::parse(text).map_err(|e| format!("the primitive {place_key}: {e}"))?;
+        if !matches!(node, expr::Node::Number { .. }) {
+            return Err(format!(
+                "the primitive {place_key} is not a literal in this phase"
+            ));
+        }
+        let ctx = expr::Context {
+            bare_length: 0.001,
+            bare_angle: 1.0,
+            bare_dim: expr::Dim::Length,
+            bare_text: design_text,
+        };
+        let q = expr::eval(&node, &ctx, &env.lookup())
+            .map_err(|e| format!("the primitive {place_key}: {e}"))?;
+        xyz[i] = q.value;
+    }
+    if xyz[2].abs() > 1e-6 {
+        return Err(
+            "the primitive sits off the base plane (extrude start-offset is later work)"
+                .to_string(),
+        );
+    }
+
+    // Sizes: each may be a literal or an equation.
+    let size_keys: &[&str] = match kind {
+        PrimKind::Box => &["length", "width", "height"],
+        PrimKind::Cylinder => &["radius", "height"],
+    };
+    let mut sizes = Vec::new();
+    for key in size_keys {
+        let text = feature
+            .get(key)
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("the primitive has no {key}"))?;
+        let node = expr::parse(text).map_err(|e| format!("the primitive {key}: {e}"))?;
+        let literal = matches!(node, expr::Node::Number { .. });
+        let ctx = expr::Context {
+            bare_length: if literal { 0.001 } else { design_factor },
+            bare_angle: 1.0,
+            bare_dim: expr::Dim::Length,
+            bare_text: design_text,
+        };
+        let q = expr::eval(&node, &ctx, &env.lookup())
+            .map_err(|e| format!("the primitive {key}: {e}"))?;
+        if q.dim != expr::Dim::Length {
+            return Err(format!("the primitive {key} is not a length"));
+        }
+        let value_mm = q.value * 1000.0;
+        if !(value_mm.is_finite() && value_mm > 0.0) {
+            return Err(format!("the primitive {key} is not a positive length"));
+        }
+        let equation = if literal {
+            None
+        } else {
+            let segs = expr::translate_with(&node, &ctx, &|n| resolve_name(n, env, model_slots))
+                .map_err(|e| format!("the primitive {key}: {e}"))?;
+            let slot = *next_slot;
+            *next_slot += 1;
+            Some(DimEquation {
+                which: 0,
+                rhs: expr::translate(&node, &ctx),
+                segs: coalesce(segs.into_iter().map(seg_from).collect()),
+                expect_si: q.value,
+                slot,
+            })
+        };
+        sizes.push(PrimSize {
+            value: value_mm,
+            equation,
+        });
+    }
+    if let Some(names) = feature.get("param_names").and_then(Value::as_array) {
+        for (i, size) in sizes.iter().enumerate() {
+            if let (Some(n), Some(eq)) =
+                (names.get(i).and_then(Value::as_str), size.equation.as_ref())
+            {
+                model_slots.push((n.to_string(), eq.slot));
+            }
+        }
+    }
+    Ok(PrimStep {
+        name,
+        kind,
+        origin: [xyz[0] * 1000.0, xyz[1] * 1000.0],
+        sizes,
+    })
 }

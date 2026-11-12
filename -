@@ -1,0 +1,10 @@
+plan for prim.craftx -> prim.swb
+profile: craft-bridge/replay/1
+counts: 4 mapped, 0 degrade-planned, 0 fallback-planned, 0 not-executed
+
+    0  parameters.add           mapped           equation "width" = 40mm
+    1  timeline.add             mapped           sketch on Xy: 4 lines, 0 circles, 8 relations, 1 dimensions
+    2  timeline.add             mapped           box replayed as a generated sketch and extrude
+    3  timeline.add             mapped           cylinder replayed as a generated sketch and extrude
+
+This is a prediction. The runtime report the macro writes is the truth.
