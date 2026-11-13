@@ -3,7 +3,7 @@
 ' macros are broken". Invoked by tools/seat-harness.ps1 first.
 Option Explicit
 Dim reportPath, f
-reportPath = Environ$("CRAFT_BRIDGE_REPORT")
+reportPath = Environ("CRAFT_BRIDGE_REPORT")
 If reportPath = "" Then
   WScript.Echo "probe: CRAFT_BRIDGE_REPORT is not set"
   WScript.Quit 2

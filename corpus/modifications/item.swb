@@ -196,6 +196,19 @@ Set feat = feat.GetNextFeature
 Loop
 SelectOriginPlane = False
 End Function
+' The first feature type names in the tree: the report names what the
+' scan actually saw when plane selection fails.
+Function TreeSummary() As String
+Dim feat As SldWorks.Feature, s As String, i As Long
+On Error Resume Next
+Set feat = swDoc.FirstFeature
+Do While Not feat Is Nothing And i < 8
+s = s & feat.GetTypeName2() & " "
+i = i + 1
+Set feat = feat.GetNextFeature
+Loop
+TreeSummary = Trim(s)
+End Function
 ' Truncate the report so this run never inherits a previous run's lines.
 Sub StartReport()
 On Error Resume Next

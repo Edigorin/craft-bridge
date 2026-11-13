@@ -87,7 +87,7 @@ Function BuildSketch2() As String
     On Error GoTo HardFail
     Dim ok As Boolean
     ok = SelectOriginPlane("XY")
-    If Not ok Then gMsg = "could not select the XY plane": GoTo SketchFailed
+    If Not ok Then gMsg = "could not select the XY origin plane; tree scan saw: " & TreeSummary(): GoTo SketchFailed
     swSketchMgr.InsertSketch True
     skName2 = swSketchMgr.ActiveSketch.Name
     DrawGeometry2
@@ -289,6 +289,19 @@ End If
 Set feat = feat.GetNextFeature
 Loop
 SelectOriginPlane = False
+End Function
+' The first feature type names in the tree: the report names what the
+' scan actually saw when plane selection fails.
+Function TreeSummary() As String
+Dim feat As SldWorks.Feature, s As String, i As Long
+On Error Resume Next
+Set feat = swDoc.FirstFeature
+Do While Not feat Is Nothing And i < 8
+s = s & feat.GetTypeName2() & " "
+i = i + 1
+Set feat = feat.GetNextFeature
+Loop
+TreeSummary = Trim(s)
 End Function
 ' Truncate the report so this run never inherits a previous run's lines.
 Sub StartReport()

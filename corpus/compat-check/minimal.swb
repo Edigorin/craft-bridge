@@ -50,7 +50,7 @@ Sub main()
     ' ---- step 1: sketch on the Front plane with one line and one circle ----
     stepIdx = 1
     ok = SelectOriginPlane("XY")
-    If Not ok Then Err.Raise vbObjectError + 516, "minimal.swb", "could not select the Front (XY) origin plane"
+    If Not ok Then Err.Raise vbObjectError + 516, "minimal.swb", "could not select the Front (XY) origin plane; tree scan saw: " & TreeSummary()
     Set swSketchMgr = swDoc.SketchManager
     swSketchMgr.InsertSketch True
     Set ln = swSketchMgr.CreateLine(0#, 0#, 0#, 0.04, 0#, 0#)
@@ -178,4 +178,18 @@ Function SelectOriginPlane(ByVal which As String) As Boolean
         Set feat = feat.GetNextFeature
     Loop
     SelectOriginPlane = False
+End Function
+
+' The first feature type names in the tree: the report names what the scan
+' actually saw when plane selection fails.
+Function TreeSummary() As String
+    Dim feat As SldWorks.Feature, s As String, i As Long
+    On Error Resume Next
+    Set feat = swDoc.FirstFeature
+    Do While Not feat Is Nothing And i < 8
+        s = s & feat.GetTypeName2() & " "
+        i = i + 1
+        Set feat = feat.GetNextFeature
+    Loop
+    TreeSummary = Trim(s)
 End Function

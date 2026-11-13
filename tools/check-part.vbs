@@ -50,7 +50,9 @@ Dim refDoc, refVol, skipVolume, minFeatures, treeCount, featWalk
 skipVolume = False
 minFeatures = 0
 Dim scan
-Set scan = CreateObject("Scripting.FileSystemObject").OpenTextFile(expectPath, 1)
+Dim scanFso
+Set scanFso = CreateObject("Scripting.FileSystemObject")
+Set scan = scanFso.OpenTextFile(expectPath, 1)
 Do Until scan.AtEndOfStream
   line = Trim(scan.ReadLine)
   If line = "volume_compare=skip" Then skipVolume = True
@@ -108,7 +110,9 @@ End If
 Dim feat As Object
 On Error Resume Next
 Const swDocPART = 1
-Set f = CreateObject("Scripting.FileSystemObject").OpenTextFile(expectPath, 1)
+Dim walkFso
+Set walkFso = CreateObject("Scripting.FileSystemObject")
+Set f = walkFso.OpenTextFile(expectPath, 1)
 Do Until f.AtEndOfStream
   line = Trim(f.ReadLine)
   If Len(line) > 0 And Left(line, 1) <> "#" Then

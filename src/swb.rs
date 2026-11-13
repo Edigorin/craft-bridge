@@ -413,6 +413,19 @@ pub fn emit(
              Loop\n\
              SelectOriginPlane = False\n\
          End Function\n\
+         ' The first feature type names in the tree: the report names what the\n\
+         ' scan actually saw when plane selection fails.\n\
+         Function TreeSummary() As String\n\
+             Dim feat As SldWorks.Feature, s As String, i As Long\n\
+             On Error Resume Next\n\
+             Set feat = swDoc.FirstFeature\n\
+             Do While Not feat Is Nothing And i < 8\n\
+                 s = s & feat.GetTypeName2() & \" \"\n\
+                 i = i + 1\n\
+                 Set feat = feat.GetNextFeature\n\
+             Loop\n\
+             TreeSummary = Trim(s)\n\
+         End Function\n\
          ' Truncate the report so this run never inherits a previous run's lines.\n\
          Sub StartReport()\n\
              On Error Resume Next\n\
@@ -566,7 +579,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
         vb_lit(plane_code(sk.plane))
     ));
     out.push_str(&format!(
-        "    If Not ok Then gMsg = \"could not select the {} plane\": GoTo SketchFailed\n",
+        "    If Not ok Then gMsg = \"could not select the {} origin plane; tree scan saw: \" & TreeSummary(): GoTo SketchFailed\n",
         plane_code(sk.plane)
     ));
     out.push_str(&format!(
@@ -1044,7 +1057,7 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
         "Function BuildPrim{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n    Dim dd As SldWorks.DisplayDimension\n    Dim seg As Variant\n    Dim sl As SldWorks.SketchLine\n    Dim ci As SldWorks.SketchCircle\n"
     ));
     out.push_str("    ok = SelectOriginPlane(\"XY\")\n");
-    out.push_str("    If Not ok Then gMsg = \"could not select the Front plane\": GoTo ExFail\n");
+    out.push_str("    If Not ok Then gMsg = \"could not select the Front (XY) origin plane; tree scan saw: \" & TreeSummary(): GoTo ExFail\n");
     out.push_str("    swSketchMgr.InsertSketch True\n");
     let (ox, oy) = (pr.origin[0] / 1000.0, pr.origin[1] / 1000.0);
     match pr.kind {
@@ -1319,7 +1332,7 @@ fn emit_pat_subs(index: usize, pt: &crate::replay::PatStep) -> String {
             };
             out.push_str(&format!("    ok = SelectOriginPlane(\"{code}\")\n"));
             out.push_str(
-                "    If Not ok Then gMsg = \"could not select the mirror plane\": GoTo ExFail\n",
+                "    If Not ok Then gMsg = \"could not select the mirror plane; tree scan saw: \" & TreeSummary(): GoTo ExFail\n",
             );
             for seed in seeds {
                 out.push_str(&format!("    feat{seed}.Select True\n"));
