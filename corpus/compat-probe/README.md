@@ -74,10 +74,13 @@ module-size effect", so round two probes recombine:
 | `probe-sketch-extrude` | sketch + extrude families | that pair |
 | `probe-pad` | none, plus 250 appended comment lines | source-size hypothesis (larger than the failing item, zero executable content added) |
 
-If `probe-pad` reports while the full item fails, size is excluded and the
-defect is an interaction. A pair that fails at invocation localizes it; all
-pairs reporting would point at a three-way interaction or at the one
-remaining delta: the full item's stub-free body set as a whole.
+If `probe-pad` reports while the full item fails, a simple raw-source
+byte/line limit is excluded; it cannot exclude limits on executable
+statements, compiled code, constants or compiler resources, which the pad
+probe does not grow. Likewise, a failing pair localizes a suspect
+combination but does not by itself prove an interaction defect: aggregate
+executable-size limits remain possible, and all pairs reporting leaves
+both three-way interactions and aggregate compiler/resource limits open.
 
 ## Seat safety
 
