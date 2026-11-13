@@ -734,14 +734,15 @@ fn solidcraft_frames_are_right_handed_unit_axes() {
         ];
         assert_eq!(cross, n, "the normal must be u x v (right-handed)");
     }
-    // The documented table (docs/mapping.md, Orientation).
+    // The source-pinned table (SolidCraft solidcore/crates/solidcore-record/
+    // src/plane.rs:29-34; docs/mapping.md, Orientation).
     assert_eq!(
         swb::solidcraft_frame(replay::OriginPlane::Xy),
         [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
     );
     assert_eq!(
         swb::solidcraft_frame(replay::OriginPlane::Xz),
-        [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]]
+        [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]]
     );
     assert_eq!(
         swb::solidcraft_frame(replay::OriginPlane::Yz),
@@ -950,4 +951,87 @@ fn generated_modules_have_balanced_vba_strings() {
         macro_text.contains("t = Replace(t, \"\"\"\", \"\\\"\"\")"),
         "JsonStr's quote escape is not the proven form"
     );
+}
+
+#[test]
+fn all_generated_families_have_balanced_vba_strings() {
+    for (name, recipe) in [
+        ("tracer", TRACER),
+        ("stop-rule", TRACER_STOP),
+        ("revolve", TRACER_REVOLVE),
+        ("primitives", TRACER_PRIM),
+        ("modifications", TRACER_MOD),
+        ("patterns", TRACER_PAT),
+    ] {
+        let case = Case::new(recipe);
+        case.build_to("strings.swb", false).unwrap();
+        let macro_text = fs::read_to_string(case.dir.path().join("strings.swb")).unwrap();
+        assert_vba_literals_balance(&macro_text, name);
+    }
+}
+
+#[test]
+fn xz_frame_predicate_is_pinned_with_signs() {
+    let case = Case::new(TRACER);
+    case.build_to("xzpin.swb", false).unwrap();
+    let macro_text = fs::read_to_string(case.dir.path().join("xzpin.swb")).unwrap();
+    // SolidCraft XZ is u=+X, v=-Z, n=+Y (plane.rs:29-34): the v column
+    // reads minus Z and the normal plus Y. Both signs are pinned in the
+    // generated module and in the seat checkpoint alike.
+    let pinned = "VecIs(a(1), a(4), a(7), 0#, 0#, -1#) And VecIs(a(2), a(5), a(8), 0#, 1#, 0#)";
+    assert!(
+        macro_text.contains(pinned),
+        "the generated XZ predicate is not the source-pinned frame"
+    );
+    assert!(
+        include_str!("../corpus/compat-check/minimal.swb").contains(pinned),
+        "the checkpoint XZ predicate is not the source-pinned frame"
+    );
+    let wrong = "VecIs(a(1), a(4), a(7), 0#, 0#, 1#) And VecIs(a(2), a(5), a(8), 0#, -1#, 0#)";
+    assert!(
+        !macro_text.contains(wrong),
+        "the old wrong XZ frame survived"
+    );
+    assert!(!include_str!("../corpus/compat-check/minimal.swb").contains(wrong));
+}
+
+#[test]
+fn xz_revolve_axes_map_world_z_and_lines_with_v_along_minus_z() {
+    // World +Z is the sketch -v direction on XZ (v = -Z, plane.rs:29-34)
+    // and a world line keeps u = x but takes v = -z: origin (3, 0, 5) lands
+    // at (3, -5). Asymmetric on purpose - the old v = +Z mapping is
+    // indistinguishable on symmetric inputs.
+    let world = TRACER_REVOLVE
+        .replace("\"name\": \"XY\"", "\"name\": \"XZ\"")
+        .replace("\"curve\": \"l0\"", "\"axis\": \"z\"")
+        .replace("\"type\": \"sketch_line\"", "\"type\": \"world\"");
+    let steps = plan_of(&world);
+    match &steps[1].work {
+        replay::Work::Revolve(rv) => assert_eq!(
+            rv.axis,
+            replay::AxisSel::Emitted {
+                origin: [0.0, 0.0],
+                dir: [0.0, -1.0]
+            }
+        ),
+        other => panic!("not a revolve: {other:?}"),
+    }
+    let line = TRACER_REVOLVE
+        .replace("\"name\": \"XY\"", "\"name\": \"XZ\"")
+        .replace(
+            "\"curve\": \"l0\"",
+            "\"origin\": [\"3\", \"0\", \"5\"], \"dir\": [0, 0, 1]",
+        )
+        .replace("\"type\": \"sketch_line\"", "\"type\": \"line\"");
+    let steps = plan_of(&line);
+    match &steps[1].work {
+        replay::Work::Revolve(rv) => assert_eq!(
+            rv.axis,
+            replay::AxisSel::Emitted {
+                origin: [3.0, -5.0],
+                dir: [0.0, -1.0]
+            }
+        ),
+        other => panic!("not a revolve: {other:?}"),
+    }
 }

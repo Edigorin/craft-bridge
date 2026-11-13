@@ -149,8 +149,14 @@ at the model origin:
 | SolidCraft plane | sketch u | sketch v | normal (u x v) |
 |---|---|---|---|
 | `XY` | +X | +Y | +Z |
-| `XZ` | +X | +Z | -Y |
+| `XZ` | +X | -Z | +Y |
 | `YZ` | +Y | +Z | +X |
+
+The frames are source-pinned from SolidCraft's own plane table
+(`solidcore/crates/solidcore-record/src/plane.rs:29-34`, in the SolidCraft
+repository), never inferred from the plane-name letters. The XY row is
+seat-verified behaviour; the XZ and YZ rows are source-verified semantics
+whose seat compatibility awaits its first corpus item.
 
 That equality is what "verbatim (u, v)" promises: coordinates land where
 they land in SolidCraft. A plane with the right normal but a different
@@ -240,3 +246,8 @@ Seat findings so far (first contact, SolidWorks revision 34.3.2 / 2026):
 - A `.swb` RunMacro "success" means the VBA did not crash out — the Fail
   handler swallows errors, so only the runtime report proves the work
   happened. Never infer success from the invocation result.
+
+Diagnostic recovery (the macro compiles, runs, and records attributed
+failures) is established separately from full seat replay acceptance (the
+rebuilt model matches the design): the first is a prerequisite for the
+second, never a substitute.

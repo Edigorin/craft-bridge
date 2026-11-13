@@ -69,16 +69,18 @@ fn plane_code(plane: OriginPlane) -> &'static str {
 
 /// The sketch frame each SolidCraft origin plane must produce in the target
 /// part: `u` along the first named axis, `v` along the second, and the
-/// right-handed normal `u x v`. XY: u=X, v=Y, n=+Z. XZ: u=X, v=Z, n=-Y.
+/// right-handed normal `u x v`. XY: u=X, v=Y, n=+Z. XZ: u=X, v=-Z, n=+Y.
 /// YZ: u=Y, v=Z, n=+X. The frame is what "verbatim (u, v)" coordinates need
 /// to land in model space unchanged, so the probe verifies it exactly -
 /// axes and signs - and fails closed on anything else (docs/mapping.md).
-/// Derived from the plane name; the XY row is what the corpus exercises,
-/// the XZ/YZ rows await their first seat run.
+/// Source-pinned from SolidCraft's own plane table
+/// (solidcore/crates/solidcore-record/src/plane.rs:29-34, in the SolidCraft
+/// repository), never inferred from the plane-name letters; the XY row is
+/// what the corpus exercises, the XZ/YZ rows await their first seat run.
 pub fn solidcraft_frame(plane: OriginPlane) -> [[f64; 3]; 3] {
     let (u, v) = match plane {
         OriginPlane::Xy => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
-        OriginPlane::Xz => ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+        OriginPlane::Xz => ([1.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
         OriginPlane::Yz => ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
     };
     let n = [
@@ -185,6 +187,8 @@ pub fn emit(
     out.push_str("Dim gMsg As String\n");
     out.push_str("Dim gPlane As String\n");
     out.push_str("Dim gProbeLog As String\n");
+    out.push_str("Dim gDoc As Object\n");
+    out.push_str("Dim gFeatMgr As Object\n");
     let max_slot = steps
         .iter()
         .filter_map(|s| match &s.work {
@@ -216,18 +220,18 @@ pub fn emit(
     for (index, sk) in &sketches {
         out.push_str(&format!("Dim skName{index} As String\n"));
         out.push_str(&format!(
-            "Dim pt{index}(0 To {}) As SldWorks.SketchPoint\n",
+            "Dim pt{index}(0 To {}) As Object\n",
             sk.slot_count().saturating_sub(1)
         ));
         if !sk.lines.is_empty() {
             out.push_str(&format!(
-                "Dim sl{index}(0 To {}) As SldWorks.SketchLine\n",
+                "Dim sl{index}(0 To {}) As Object\n",
                 sk.lines.len() - 1
             ));
         }
         if !sk.circles.is_empty() {
             out.push_str(&format!(
-                "Dim ci{index}(0 To {}) As SldWorks.SketchCircle\n",
+                "Dim ci{index}(0 To {}) As Object\n",
                 sk.circles.len() - 1
             ));
         }
@@ -262,6 +266,9 @@ pub fn emit(
          If swDoc Is Nothing Then Err.Raise vbObjectError + 515, \"craft-bridge\", \"NewDocument returned nothing\"\n\
          Set swSketchMgr = swDoc.SketchManager\n\
          If swSketchMgr Is Nothing Then Err.Raise vbObjectError + 521, \"craft-bridge\", \"the sketch manager is unavailable\"\n\
+         Set gFeatMgr = swDoc.FeatureManager\n\
+         If gFeatMgr Is Nothing Then Err.Raise vbObjectError + 522, \"craft-bridge\", \"the feature manager is unavailable\"\n\
+         Set gDoc = swDoc\n\
          WriteStep stepIdx, \"document.new\", \"created\", \"fresh part from the default template\"\n\n",
     );
 
@@ -548,8 +555,8 @@ pub fn emit(
          End Function\n\
 \n\
          ' The sketch frame must equal the SolidCraft frame for the plane exactly:\n\
-         ' u and v along the named model axes (with the signs u x v gives for the\n\
-         ' normal), and the sketch origin at the model origin. The model-to-sketch\n\
+         ' u and v exactly as SolidCraft defines them for the plane (its plane.rs\n\
+         ' 29-34): XZ has v = -Z, n = +Y. The sketch origin at the model origin. The model-to-sketch\n\
          ' transform is row-major with rows = model axes in sketch coordinates, so\n\
          ' the sketch axes in model coordinates are its columns - the inverse\n\
          ' transform of the sketch unit vectors: u = (a0, a3, a6),\n\
@@ -567,7 +574,7 @@ pub fn emit(
                  Case \"XY\"\n\
                      ok = VecIs(a(0), a(3), a(6), 1#, 0#, 0#) And VecIs(a(1), a(4), a(7), 0#, 1#, 0#) And VecIs(a(2), a(5), a(8), 0#, 0#, 1#)\n\
                  Case \"XZ\"\n\
-                     ok = VecIs(a(0), a(3), a(6), 1#, 0#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, 1#) And VecIs(a(2), a(5), a(8), 0#, -1#, 0#)\n\
+                     ok = VecIs(a(0), a(3), a(6), 1#, 0#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, -1#) And VecIs(a(2), a(5), a(8), 0#, 1#, 0#)\n\
                  Case \"YZ\"\n\
                      ok = VecIs(a(0), a(3), a(6), 0#, 1#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, 1#) And VecIs(a(2), a(5), a(8), 1#, 0#, 0#)\n\
              End Select\n\
@@ -784,7 +791,7 @@ pub fn emit(
          ' dimensions that reference them.\n\
          Function AddGlobalEquation(ByVal nm As String, ByVal rhs As String, ByVal expect As Double) As String\n\
              On Error GoTo EqFail\n\
-             Dim eqMgr As SldWorks.EquationMgr\n\
+             Dim eqMgr As Object\n\
              Dim eqText As String\n\
              Set eqMgr = swDoc.GetEquationMgr\n\
              If eqMgr Is Nothing Then gMsg = \"the equation manager is missing\": AddGlobalEquation = \"failed\": Exit Function\n\
@@ -804,7 +811,7 @@ pub fn emit(
          ' expectation after a rebuild. Never presence alone.\n\
          Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long) As Boolean\n\
              On Error GoTo EqFail\n\
-             Dim eqMgr As SldWorks.EquationMgr\n\
+             Dim eqMgr As Object\n\
              Dim eqText As String\n\
              Set eqMgr = swDoc.GetEquationMgr\n\
              If eqMgr Is Nothing Then GoTo EqFail\n\
@@ -816,6 +823,7 @@ pub fn emit(
              AddDimEquation = True\n\
              Exit Function\n\
          EqFail:\n\
+             If Err.Number <> 0 Then gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description Else gMsg = \"the dimension equation could not be added\"\n\
              AddDimEquation = False\n\
          End Function\n",
     );
@@ -934,7 +942,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
         out.push_str(&emit_relation(index, rel));
     }
     out.push_str(&format!(
-        "    Relations{index} = True\n    Exit Function\nRelFail:\n    Relations{index} = False\nEnd Function\n\n"
+        "    Relations{index} = True\n    Exit Function\nRelFail:\n    If Err.Number <> 0 Then gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description Else gMsg = \"a sketch relation could not be applied\"\n    Relations{index} = False\nEnd Function\n\n"
     ));
 
     // Dimensions
@@ -945,7 +953,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
         out.push_str(&emit_dimension(index, dim, sk, equation_for(sk, di)));
     }
     out.push_str(&format!(
-        "    Dims{index} = True\n    Exit Function\nDimFail:\n    Dims{index} = False\nEnd Function\n\n"
+        "    Dims{index} = True\n    Exit Function\nDimFail:\n    If Err.Number <> 0 Then gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description Else gMsg = \"a driving dimension could not be added\"\n    Dims{index} = False\nEnd Function\n\n"
     ));
 
     // Verify
@@ -1124,7 +1132,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
     let (call, verify, message) = match &ex.kind {
         ExtrudeKind::Blind { depth_m, negative } => (
             format!(
-                "    Set feat = swDoc.FeatureManager.FeatureExtrusion2(True, False, {}, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
+                "    Set feat = gFeatMgr.FeatureExtrusion2(True, False, {}, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
                 if *negative { "True" } else { "False" },
                 vba_num(*depth_m)
             ),
@@ -1133,7 +1141,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
         ),
         ExtrudeKind::Symmetric { total_m } => (
             format!(
-                "    Set feat = swDoc.FeatureManager.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondMidPlane, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
+                "    Set feat = gFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondMidPlane, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
                 vba_num(*total_m)
             ),
             vec![(1, *total_m)],
@@ -1141,7 +1149,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
         ),
         ExtrudeKind::TwoSided { first_m, second_m } => (
             format!(
-                "    Set feat = swDoc.FeatureManager.FeatureExtrusion2(False, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, {}, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
+                "    Set feat = gFeatMgr.FeatureExtrusion2(False, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, {}, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
                 vba_num(*first_m),
                 vba_num(*second_m)
             ),
@@ -1150,7 +1158,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
         ),
         ExtrudeKind::ThroughAll { negative } => (
             format!(
-                "    Set feat = swDoc.FeatureManager.FeatureExtrusion2(True, False, {}, swEndConditions_e.swEndCondThroughAll, swEndConditions_e.swEndCondBlind, 0#, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
+                "    Set feat = gFeatMgr.FeatureExtrusion2(True, False, {}, swEndConditions_e.swEndCondThroughAll, swEndConditions_e.swEndCondBlind, 0#, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
                 if *negative { "True" } else { "False" }
             ),
             vec![],
@@ -1203,7 +1211,7 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep) -> String {
     let mut out = String::new();
     out.push_str(&format!("' Revolve step {index}: {}\n", vb_lit(&rv.name)));
     out.push_str(&format!(
-        "Function BuildRevolve{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n    Dim ax As SldWorks.SketchLine\n"
+        "Function BuildRevolve{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n    Dim ax As Object\n"
     ));
     out.push_str(&format!(
         "    ok = swDoc.Extension.SelectByID2(skName{}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n",
@@ -1261,7 +1269,7 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep) -> String {
     let (call, verify, message) = match &rv.kind {
         RK::Blind { angle_rad, reverse } => (
             format!(
-                "    Set feat = swDoc.FeatureManager.FeatureRevolve2(True, True, False, False, {}, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n",
+                "    Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, {}, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n",
                 if *reverse { "True" } else { "False" },
                 vba_num(*angle_rad)
             ),
@@ -1270,7 +1278,7 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep) -> String {
         ),
         RK::Symmetric { total_rad } => (
             format!(
-                "    Set feat = swDoc.FeatureManager.FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondMidPlane, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n",
+                "    Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondMidPlane, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n",
                 vba_num(*total_rad)
             ),
             vec![(1, *total_rad)],
@@ -1278,7 +1286,7 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep) -> String {
         ),
         RK::TwoSided { first_rad, second_rad } => (
             format!(
-                "    Set feat = swDoc.FeatureManager.FeatureRevolve2(False, True, False, False, False, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, {}, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n",
+                "    Set feat = gFeatMgr.FeatureRevolve2(False, True, False, False, False, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, {}, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n",
                 vba_num(*first_rad),
                 vba_num(*second_rad)
             ),
@@ -1328,7 +1336,7 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
     let mut out = String::new();
     out.push_str(&format!("' Primitive step {index}: {}\n", vb_lit(&pr.name)));
     out.push_str(&format!(
-        "Function BuildPrim{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim skFeat As SldWorks.Feature\n    Dim primName As String\n    Dim dm As SldWorks.Dimension\n    Dim dd As SldWorks.DisplayDimension\n    Dim seg As Variant\n    Dim sl As SldWorks.SketchLine\n    Dim ci As SldWorks.SketchCircle\n"
+        "Function BuildPrim{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim skFeat As SldWorks.Feature\n    Dim primName As String\n    Dim dm As SldWorks.Dimension\n    Dim dd As SldWorks.DisplayDimension\n    Dim seg As Variant\n    Dim sl As Object\n    Dim ci As Object\n"
     ));
     out.push_str("    ok = OpenSketchOnPlane(\"XY\")\n");
     out.push_str("    If Not ok Then gMsg = \"no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: \" & gProbeLog & \"; tree scan saw: \" & TreeSummary(): GoTo ExFail\n");
@@ -1376,7 +1384,7 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
         "    If Not ok Then gMsg = \"could not select the primitive sketch\": GoTo ExFail\n",
     );
     out.push_str(&format!(
-        "    Set feat = swDoc.FeatureManager.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
+        "    Set feat = gFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
         vba_num(height)
     ));
     out.push_str("    If feat Is Nothing Then gMsg = \"the primitive extrude was not created\": GoTo ExFail\n");
@@ -1428,13 +1436,13 @@ fn emit_size_eq(size: &crate::replay::PrimSize, what: &str) -> String {
 fn rhs_vba(eq: &crate::replay::DimEquation) -> String {
     use crate::replay::RhsSeg;
     if eq.segs.is_empty() {
-        return rhs_vba(eq);
+        return vb_lit(&eq.rhs);
     }
     let mut parts: Vec<String> = Vec::new();
     for seg in &eq.segs {
         match seg {
             RhsSeg::Text(t) => parts.push(vb_lit(t)),
-            RhsSeg::Slot(slot) => parts.push(format!("(\"\"\"\" & regName({slot}) & \"\"\")")),
+            RhsSeg::Slot(slot) => parts.push(format!("(\"\"\"\" & regName({slot}) & \"\"\"\")")),
         }
     }
     parts.join(" & ")
@@ -1497,7 +1505,7 @@ fn emit_mod_subs(index: usize, md: &crate::replay::ModStep) -> String {
             ..
         } => {
             out.push_str(&format!(
-                "    ' feature call shape pending checkpoint verification\n    Set feat = swDoc.FeatureFillet3({}, {}, 0, 0, 0)\n",
+                "    ' feature call shape pending checkpoint verification\n    Set feat = gDoc.FeatureFillet3({}, {}, 0, 0, 0)\n",
                 vba_num(radius / 1000.0),
                 if *tangent_chain { "True" } else { "False" }
             ));
@@ -1509,7 +1517,7 @@ fn emit_mod_subs(index: usize, md: &crate::replay::ModStep) -> String {
             ..
         } => {
             out.push_str(&format!(
-                "    ' feature call shape pending checkpoint verification\n    Set feat = swDoc.FeatureChamfer3(0#, {}, {}, 0#, 0#, 0#, 0#, 0#, 0#, 0#, 0#)\n",
+                "    ' feature call shape pending checkpoint verification\n    Set feat = gDoc.FeatureChamfer3(0#, {}, {}, 0#, 0#, 0#, 0#, 0#, 0#, 0#, 0#)\n",
                 vba_num(distance / 1000.0),
                 vba_num(distance / 1000.0)
             ));
@@ -1518,14 +1526,14 @@ fn emit_mod_subs(index: usize, md: &crate::replay::ModStep) -> String {
         }
         ModKind::Shell { thickness, .. } => {
             out.push_str(&format!(
-                "    ' feature call shape pending checkpoint verification\n    Set feat = swDoc.FeatureShell({}, False, 0#, False, False, False, 0#, 0#, 0#, 0#, 0#)\n",
+                "    ' feature call shape pending checkpoint verification\n    Set feat = gDoc.FeatureShell({}, False, 0#, False, False, False, 0#, 0#, 0#, 0#, 0#)\n",
                 vba_num(thickness / 1000.0)
             ));
             out.push_str(&dim_check(1, thickness / 1000.0, "the shell thickness"));
         }
         ModKind::Draft { angle_rad, .. } => {
             out.push_str(&format!(
-                "    ' feature call shape pending checkpoint verification\n    Set feat = swDoc.FeatureDraft({}, False, 0#, 0#, False, False, False, 0#, 0#, 0#, 0#, 0#, 0#)\n",
+                "    ' feature call shape pending checkpoint verification\n    Set feat = gDoc.FeatureDraft({}, False, 0#, 0#, False, False, False, 0#, 0#, 0#, 0#, 0#, 0#)\n",
                 vba_num(*angle_rad)
             ));
             out.push_str(&dim_check(1, *angle_rad, "the draft angle"));
@@ -1538,7 +1546,7 @@ fn emit_mod_subs(index: usize, md: &crate::replay::ModStep) -> String {
                 None => ("swEndConditions_e.swEndCondThroughAll", "0#".to_string()),
             };
             out.push_str(&format!(
-                "    ' feature call shape pending checkpoint verification\n    Set feat = swDoc.SimpleHole2(True, False, False, {endcond}, {}, {d2}, 0#, 0#, False, False, False, False, 0#, 0#)\n",
+                "    ' feature call shape pending checkpoint verification\n    Set feat = gDoc.SimpleHole2(True, False, False, {endcond}, {}, {d2}, 0#, 0#, False, False, False, False, 0#, 0#)\n",
                 vba_num(diameter / 1000.0)
             ));
             out.push_str(&dim_check(1, diameter / 1000.0, "the hole diameter"));
@@ -1616,9 +1624,7 @@ fn emit_pat_subs(index: usize, pt: &crate::replay::PatStep) -> String {
                 out.push_str(&format!("    feat{seed}.Select True\n"));
             }
             out.push_str("    ' feature call shape pending checkpoint verification\n");
-            out.push_str(
-                "    Set feat = swDoc.FeatureManager.FeatureMirror(True, False, False, 0#, 0#)\n",
-            );
+            out.push_str("    Set feat = gFeatMgr.FeatureMirror(True, False, False, 0#, 0#)\n");
             out.push_str(
                 "    If feat Is Nothing Then gMsg = \"the mirror was not created\": GoTo ExFail\n",
             );

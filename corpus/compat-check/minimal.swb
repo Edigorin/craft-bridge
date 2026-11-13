@@ -192,8 +192,8 @@ Function OpenSketchOnPlane(ByVal which As String) As Boolean
 End Function
 
 ' The sketch frame must equal the SolidCraft frame for the plane exactly:
-' u and v along the named model axes (with the signs u x v gives for the
-' normal), and the sketch origin at the model origin. The model-to-sketch
+' u and v exactly as SolidCraft defines them for the plane (its plane.rs
+' 29-34): XZ has v = -Z, n = +Y. The sketch origin at the model origin. The model-to-sketch
 ' transform is row-major with rows = model axes in sketch coordinates, so
 ' the sketch axes in model coordinates are its columns - the inverse
 ' transform of the sketch unit vectors: u = (a0, a3, a6),
@@ -211,7 +211,7 @@ Function SketchFrameIs(ByVal which As String) As Boolean
         Case "XY"
             ok = VecIs(a(0), a(3), a(6), 1#, 0#, 0#) And VecIs(a(1), a(4), a(7), 0#, 1#, 0#) And VecIs(a(2), a(5), a(8), 0#, 0#, 1#)
         Case "XZ"
-            ok = VecIs(a(0), a(3), a(6), 1#, 0#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, 1#) And VecIs(a(2), a(5), a(8), 0#, -1#, 0#)
+            ok = VecIs(a(0), a(3), a(6), 1#, 0#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, -1#) And VecIs(a(2), a(5), a(8), 0#, 1#, 0#)
         Case "YZ"
             ok = VecIs(a(0), a(3), a(6), 0#, 1#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, 1#) And VecIs(a(2), a(5), a(8), 1#, 0#, 0#)
     End Select

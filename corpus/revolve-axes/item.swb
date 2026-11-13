@@ -9,12 +9,14 @@ Dim reportPath As String
 Dim gMsg As String
 Dim gPlane As String
 Dim gProbeLog As String
+Dim gDoc As Object
+Dim gFeatMgr As Object
 Dim regName(0 To 0) As String
 Dim feat1 As SldWorks.Feature
 Dim feat2 As SldWorks.Feature
 Dim skName0 As String
-Dim pt0(0 To 9) As SldWorks.SketchPoint
-Dim sl0(0 To 4) As SldWorks.SketchLine
+Dim pt0(0 To 9) As Object
+Dim sl0(0 To 4) As Object
 
 Sub main()
     Dim template As String
@@ -39,6 +41,9 @@ Set swDoc = swApp.NewDocument(template, 0, 0, 0)
 If swDoc Is Nothing Then Err.Raise vbObjectError + 515, "craft-bridge", "NewDocument returned nothing"
 Set swSketchMgr = swDoc.SketchManager
 If swSketchMgr Is Nothing Then Err.Raise vbObjectError + 521, "craft-bridge", "the sketch manager is unavailable"
+Set gFeatMgr = swDoc.FeatureManager
+If gFeatMgr Is Nothing Then Err.Raise vbObjectError + 522, "craft-bridge", "the feature manager is unavailable"
+Set gDoc = swDoc
 WriteStep stepIdx, "document.new", "created", "fresh part from the default template"
 
     ' ---- step 0: timeline.add ----
@@ -192,6 +197,7 @@ Function Relations0() As Boolean
     Relations0 = True
     Exit Function
 RelFail:
+    If Err.Number <> 0 Then gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description Else gMsg = "a sketch relation could not be applied"
     Relations0 = False
 End Function
 
@@ -210,6 +216,7 @@ Function Dims0() As Boolean
     Dims0 = True
     Exit Function
 DimFail:
+    If Err.Number <> 0 Then gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description Else gMsg = "a driving dimension could not be added"
     Dims0 = False
 End Function
 
@@ -258,14 +265,14 @@ Function BuildRevolve1() As String
     Dim ok As Boolean
     Dim feat As SldWorks.Feature
     Dim dm As SldWorks.Dimension
-    Dim ax As SldWorks.SketchLine
+    Dim ax As Object
     ok = swDoc.Extension.SelectByID2(skName0, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If Not ok Then gMsg = "could not select the profile sketch": GoTo ExFail
     swSketchMgr.InsertSketch True
     ok = swDoc.Extension.SelectByID2(skName0, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If Not ok Then gMsg = "could not select the profile sketch": GoTo ExFail
     If Not sl0(0).Select(True) Then gMsg = "could not select the revolve axis": GoTo ExFail
-    Set feat = swDoc.FeatureManager.FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 4.71238898038469, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)
+    Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 4.71238898038469, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)
     If feat Is Nothing Then gMsg = "the revolve was not created": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
     If dm Is Nothing Then gMsg = "the revolve angle dimension D1 is missing": GoTo ExFail
@@ -298,7 +305,7 @@ Function BuildRevolve2() As String
     Dim ok As Boolean
     Dim feat As SldWorks.Feature
     Dim dm As SldWorks.Dimension
-    Dim ax As SldWorks.SketchLine
+    Dim ax As Object
     ok = swDoc.Extension.SelectByID2(skName0, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If Not ok Then gMsg = "could not select the profile sketch": GoTo ExFail
     swSketchMgr.InsertSketch True
@@ -311,7 +318,7 @@ Function BuildRevolve2() As String
     ok = swDoc.Extension.SelectByID2(skName0, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If Not ok Then gMsg = "could not select the profile sketch": GoTo ExFail
     If Not ax.Select(True) Then gMsg = "could not select the helper axis": GoTo ExFail
-    Set feat = swDoc.FeatureManager.FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 6.283185307179586, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)
+    Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 6.283185307179586, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)
     If feat Is Nothing Then gMsg = "the revolve was not created": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
     If dm Is Nothing Then gMsg = "the revolve angle dimension D1 is missing": GoTo ExFail
@@ -410,8 +417,8 @@ Loop
 End Function
 
 ' The sketch frame must equal the SolidCraft frame for the plane exactly:
-' u and v along the named model axes (with the signs u x v gives for the
-' normal), and the sketch origin at the model origin. The model-to-sketch
+' u and v exactly as SolidCraft defines them for the plane (its plane.rs
+' 29-34): XZ has v = -Z, n = +Y. The sketch origin at the model origin. The model-to-sketch
 ' transform is row-major with rows = model axes in sketch coordinates, so
 ' the sketch axes in model coordinates are its columns - the inverse
 ' transform of the sketch unit vectors: u = (a0, a3, a6),
@@ -429,7 +436,7 @@ Select Case which
 Case "XY"
 ok = VecIs(a(0), a(3), a(6), 1#, 0#, 0#) And VecIs(a(1), a(4), a(7), 0#, 1#, 0#) And VecIs(a(2), a(5), a(8), 0#, 0#, 1#)
 Case "XZ"
-ok = VecIs(a(0), a(3), a(6), 1#, 0#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, 1#) And VecIs(a(2), a(5), a(8), 0#, -1#, 0#)
+ok = VecIs(a(0), a(3), a(6), 1#, 0#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, -1#) And VecIs(a(2), a(5), a(8), 0#, 1#, 0#)
 Case "YZ"
 ok = VecIs(a(0), a(3), a(6), 0#, 1#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, 1#) And VecIs(a(2), a(5), a(8), 1#, 0#, 0#)
 End Select
@@ -645,7 +652,7 @@ End Function
 ' dimensions that reference them.
 Function AddGlobalEquation(ByVal nm As String, ByVal rhs As String, ByVal expect As Double) As String
 On Error GoTo EqFail
-Dim eqMgr As SldWorks.EquationMgr
+Dim eqMgr As Object
 Dim eqText As String
 Set eqMgr = swDoc.GetEquationMgr
 If eqMgr Is Nothing Then gMsg = "the equation manager is missing": AddGlobalEquation = "failed": Exit Function
@@ -665,7 +672,7 @@ End Function
 ' expectation after a rebuild. Never presence alone.
 Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long) As Boolean
 On Error GoTo EqFail
-Dim eqMgr As SldWorks.EquationMgr
+Dim eqMgr As Object
 Dim eqText As String
 Set eqMgr = swDoc.GetEquationMgr
 If eqMgr Is Nothing Then GoTo EqFail
@@ -677,5 +684,6 @@ If slot >= 0 Then regName(slot) = dm.Name
              AddDimEquation = True
 Exit Function
 EqFail:
+If Err.Number <> 0 Then gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description Else gMsg = "the dimension equation could not be added"
 AddDimEquation = False
 End Function

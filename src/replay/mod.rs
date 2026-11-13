@@ -1507,12 +1507,12 @@ fn parse_revolve(
         },
         "world" => {
             // World axes mapped into the sketch frame (docs/mapping.md):
-            // XY: u=X, v=Y; XZ: u=X, v=Z; YZ: u=Y, v=Z.
+            // XY: u=X, v=Y; XZ: u=X, v=-Z; YZ: u=Y, v=Z (SolidCraft plane.rs:29-34).
             let dir = match (sketch.plane, axis_v.get("axis").and_then(Value::as_str)) {
                 (OriginPlane::Xy, Some("x")) => [1.0, 0.0],
                 (OriginPlane::Xy, Some("y")) => [0.0, 1.0],
                 (OriginPlane::Xz, Some("x")) => [1.0, 0.0],
-                (OriginPlane::Xz, Some("z")) => [0.0, 1.0],
+                (OriginPlane::Xz, Some("z")) => [0.0, -1.0],
                 (OriginPlane::Yz, Some("y")) => [1.0, 0.0],
                 (OriginPlane::Yz, Some("z")) => [0.0, 1.0],
                 _ => return Err("the world axis does not lie in the sketch plane".to_string()),
@@ -1558,7 +1558,8 @@ fn parse_revolve(
                 d[i] = e.as_f64().unwrap_or(0.0);
             }
             // The axis must lie in the sketch plane; its sketch-space frame
-            // follows the same world-axis mapping as above.
+            // follows the same world-axis mapping as above. The evaluated
+            // origin is SI; AxisSel::Emitted carries millimetres.
             let (origin, dir) = match sketch.plane {
                 OriginPlane::Xy => {
                     if d[2].abs() > 1e-9 || xyz[2].abs() > 1e-6 {
@@ -1570,7 +1571,7 @@ fn parse_revolve(
                     if d[1].abs() > 1e-9 || xyz[1].abs() > 1e-6 {
                         return Err("the axis line is not in the XZ sketch plane".to_string());
                     }
-                    ([xyz[0], xyz[2]], [d[0], d[2]])
+                    ([xyz[0], -xyz[2]], [d[0], -d[2]])
                 }
                 OriginPlane::Yz => {
                     if d[0].abs() > 1e-9 || xyz[0].abs() > 1e-6 {
@@ -1584,7 +1585,7 @@ fn parse_revolve(
                 return Err("the axis line direction is zero".to_string());
             }
             AxisSel::Emitted {
-                origin,
+                origin: [origin[0] * 1000.0, origin[1] * 1000.0],
                 dir: [dir[0] / norm, dir[1] / norm],
             }
         }
