@@ -76,7 +76,7 @@ function Move-SeatEvidenceAside {
     )
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
     if ($Suffix -eq "") {
-        $stamp = Get-Date -Format "yyyyMMddTHHmmss"
+        $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmss")
         $unique = [Guid]::NewGuid().ToString("N").Substring(0, 8)
         $Suffix = "$stamp-$unique"
     }

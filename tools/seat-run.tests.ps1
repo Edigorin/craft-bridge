@@ -65,10 +65,10 @@ Check "archive preserves content and clears the source" (($null -ne $arch) -and 
 Set-Content -Path $src -Value "second"
 $threw = $false
 try { Move-SeatEvidenceAside -Path $src -Suffix "first" | Out-Null } catch { $threw = $true }
-Check "archive collision fails closed" ($threw -and (Test-Path -LiteralPath $src) -and ((Get-Content -LiteralPath $arch) -eq "payload-line")) "threw=$threw"
+Check "archive collision fails closed" ($threw -and ((Get-Content -LiteralPath $src) -eq "second") -and ((Get-Content -LiteralPath $arch) -eq "payload-line")) "threw=$threw"
 $threw = $false
-try { Move-SeatEvidenceAside -Path $src -Suffix "bad<suffix>" | Out-Null } catch { $threw = $true }
-Check "archive move failure throws" ($threw -and (Test-Path -LiteralPath $src)) "threw=$threw"
+try { Move-SeatEvidenceAside -Path $src -Suffix "missing-parent\file" | Out-Null } catch { $threw = $true }
+Check "archive move failure throws and preserves the source" ($threw -and ((Get-Content -LiteralPath $src) -eq "second")) "threw=$threw"
 
 if ($failures -gt 0) {
     Write-Host "$failures test(s) failed"
