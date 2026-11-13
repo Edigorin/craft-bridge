@@ -24,10 +24,8 @@ Sub main()
     ' ---- report setup (before any model mutation) ----
     reportPath = ReportPathFromHost()
     If reportPath = "" Then Err.Raise vbObjectError + 513, "craft-bridge", "no report path: CRAFT_BRIDGE_REPORT is unset and no path file exists in TEMP"
-    Open reportPath For Output As #1
-    Print #1, "{""type"":""header"",""macro"":""item.craftx"",""bridge_version"":""0.1.0""}"
-    FlushReport
-
+    StartReport
+    WriteLine "{""type"":""header"",""macro"":""item.craftx"",""bridge_version"":""0.1.0""}"
     ' ---- step 0: timeline.add ----
     stepIdx = 0
     If Not stopModel Then
@@ -61,8 +59,7 @@ Sub main()
     WriteStep stepIdx, "timeline.add", st, gMsg
     If st = "failed" Then stopModel = True
 
-    Print #1, "{""type"":""summary"",""status"":""ok""}"
-    Close #1
+    WriteLine "{""type"":""summary"",""status"":""ok""}"
     Exit Sub
 
 Fail:
@@ -71,10 +68,8 @@ Fail:
     On Error Resume Next
     If reportPath = "" Then reportPath = ReportPathFromHost()
     If reportPath <> "" Then
-        Open reportPath For Append As #1
-        Print #1, "{""type"":""step"",""index"":" & Trim(Str(stepIdx)) & ",""command"":""macro"",""status"":""failed"",""message"":""" & JsonStr(Err.Description) & """}"
-        Print #1, "{""type"":""summary"",""status"":""failed""}"
-        Close #1
+        WriteStep stepIdx, "macro", "failed", Err.Description
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
     End If
 End Sub
 
@@ -274,18 +269,31 @@ HardFail:
 End Function
 
 ' Write one step line and flush it to disk immediately.
-Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)
+' Truncate the report so this run never inherits a previous run's lines.
+Sub StartReport()
 On Error Resume Next
-Print #1, "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
-FlushReport
+Dim f As Integer
+f = FreeFile
+Open reportPath For Output As #f
+Close #f
 End Sub
 
-' Close and reopen the report so the line just written reaches the disk.
-Sub FlushReport()
+' One line, one fresh handle: open, print, close. Nothing to leak,
+' nothing to collide with, and a crash can never hide earlier lines.
+Sub WriteLine(ByVal text As String)
 On Error Resume Next
-Close #1
-Open reportPath For Append As #1
+Dim f As Integer
+f = FreeFile
+Open reportPath For Append As #f
+Print #f, text
+Close #f
 End Sub
+
+Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)
+On Error Resume Next
+WriteLine "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
+End Sub
+
 
 ' The report path travels in the host's environment or in a one-line path
 ' file under %%TEMP%%, because the macro runs inside the SolidWorks process.

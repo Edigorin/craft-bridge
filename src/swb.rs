@@ -162,14 +162,13 @@ pub fn emit(
     out.push_str("    ' ---- report setup (before any model mutation) ----\n");
     out.push_str("    reportPath = ReportPathFromHost()\n");
     out.push_str("    If reportPath = \"\" Then Err.Raise vbObjectError + 513, \"craft-bridge\", \"no report path: CRAFT_BRIDGE_REPORT is unset and no path file exists in TEMP\"\n");
-    out.push_str("    Open reportPath For Output As #1\n");
+    out.push_str("    StartReport\n");
     let header_json = format!(
         "{{\"type\":\"header\",\"macro\":\"{}\",\"bridge_version\":\"{}\"}}",
         json_str_content(artifact),
         json_str_content(bridge_version)
     );
-    out.push_str(&format!("    Print #1, {}\n", vb_lit(&header_json)));
-    out.push_str("    FlushReport\n\n");
+    out.push_str(&format!("    WriteLine {}\n", vb_lit(&header_json)));
 
     for step in steps {
         out.push_str(&format!(
@@ -290,20 +289,20 @@ pub fn emit(
         }
     }
 
-    out.push_str("    Print #1, \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"ok\"\"}\"\n");
-    out.push_str("    Close #1\n    Exit Sub\n\n");
+    out.push_str("    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"ok\"\"}\"\n");
+    out.push_str("    Exit Sub\n\n");
     out.push_str("Fail:\n");
     out.push_str("    ' The report must survive failure: open it if needed, write what happened\n");
     out.push_str("    ' and the completion signal, then leave the model as it is.\n");
     out.push_str("    On Error Resume Next\n");
     out.push_str("    If reportPath = \"\" Then reportPath = ReportPathFromHost()\n");
     out.push_str("    If reportPath <> \"\" Then\n");
-    out.push_str("        Open reportPath For Append As #1\n");
-    out.push_str("        Print #1, \"{\"\"type\"\":\"\"step\"\",\"\"index\"\":\" & Trim(Str(stepIdx)) & \",\"\"command\"\":\"\"macro\"\",\"\"status\"\":\"\"failed\"\",\"\"message\"\":\"\"\" & JsonStr(Err.Description) & \"\"\"}\"\n");
+    out.push_str("        WriteStep stepIdx, \"macro\", \"failed\", Err.Description\n");
+
     out.push_str(
-        "        Print #1, \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"failed\"\"}\"\n",
+        "        WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"failed\"\"}\"\n",
     );
-    out.push_str("        Close #1\n    End If\nEnd Sub\n\n");
+    out.push_str("    End If\nEnd Sub\n\n");
 
     // ---- per-sketch builders ----
     for (index, sk) in &sketches {
@@ -387,18 +386,32 @@ pub fn emit(
     // ---- shared helpers (the checkpoint's, unchanged in spirit) ----
     out.push_str(
         "' Write one step line and flush it to disk immediately.\n\
-         Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)\n\
+         ' Truncate the report so this run never inherits a previous run's lines.\n\
+         Sub StartReport()\n\
              On Error Resume Next\n\
-             Print #1, \"{\"\"type\"\":\"\"step\"\",\"\"index\"\":\" & Trim(Str(idx)) & \",\"\"command\"\":\"\"\" & JsonStr(command) & \"\"\",\"\"status\"\":\"\"\" & JsonStr(status) & \"\"\",\"\"message\"\":\"\"\" & JsonStr(message) & \"\"\"}\"\n\
-             FlushReport\n\
+             Dim f As Integer\n\
+             f = FreeFile\n\
+             Open reportPath For Output As #f\n\
+             Close #f\n\
          End Sub\n\
 \n\
-         ' Close and reopen the report so the line just written reaches the disk.\n\
-         Sub FlushReport()\n\
+         ' One line, one fresh handle: open, print, close. Nothing to leak,\n\
+         ' nothing to collide with, and a crash can never hide earlier lines.\n\
+         Sub WriteLine(ByVal text As String)\n\
              On Error Resume Next\n\
-             Close #1\n\
-             Open reportPath For Append As #1\n\
+             Dim f As Integer\n\
+             f = FreeFile\n\
+             Open reportPath For Append As #f\n\
+             Print #f, text\n\
+             Close #f\n\
          End Sub\n\
+\n\
+         Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)\n\
+             On Error Resume Next\n\
+             WriteLine \"{\"\"type\"\":\"\"step\"\",\"\"index\"\":\" & Trim(Str(idx)) & \",\"\"command\"\":\"\"\" & JsonStr(command) & \"\"\",\"\"status\"\":\"\"\" & JsonStr(status) & \"\"\",\"\"message\"\":\"\"\" & JsonStr(message) & \"\"\"}\"\n\
+
+         End Sub\n\
+\n\
 \n\
          ' The report path travels in the host's environment or in a one-line path\n\
          ' file under %%TEMP%%, because the macro runs inside the SolidWorks process.\n\
