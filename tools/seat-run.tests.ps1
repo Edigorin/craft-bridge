@@ -46,12 +46,29 @@ try {
     $r = Invoke-SeatCommand -FilePath "cmd" -ArgumentList @("/c", $scriptPath) -TimeoutSeconds 30
     Check "spaced path runs" (($r.ExitCode -eq 3) -and ($r.StdOut -match "spaced ok")) "ExitCode=$($r.ExitCode) StdOut='$($r.StdOut)'"
 } finally {
-    Remove-Item -Recurse -Force $dir
+    # Left in place: the owner's seat runs no delete commands.
 }
 
 # 6. timeout: the child is killed, the result says so, and nothing blocks
 $r = Invoke-SeatCommand -FilePath "cmd" -ArgumentList @("/c", "ping -n 30 127.0.0.1 >nul") -TimeoutSeconds 2
 Check "timeout is reported" ($r.TimedOut -and ($null -eq $r.ExitCode)) "TimedOut=$($r.TimedOut) ExitCode=$($r.ExitCode)"
+
+# 7. evidence archival: stale files move aside, never delete (owner rule)
+$adir = Join-Path $env:TEMP ("seat archive test " + [Guid]::NewGuid().ToString("N").Substring(0, 8))
+New-Item -ItemType Directory -Path $adir | Out-Null
+$src = Join-Path $adir "runtime-report.jsonl"
+$gone = Move-SeatEvidenceAside -Path (Join-Path $adir "missing.jsonl")
+Check "archive of absent source is a no-op" ($null -eq $gone) "returned='$gone'"
+Set-Content -Path $src -Value "payload-line"
+$arch = Move-SeatEvidenceAside -Path $src -Suffix "first"
+Check "archive preserves content and clears the source" (($null -ne $arch) -and (-not (Test-Path -LiteralPath $src)) -and ((Get-Content -LiteralPath $arch) -eq "payload-line")) "arch='$arch'"
+Set-Content -Path $src -Value "second"
+$threw = $false
+try { Move-SeatEvidenceAside -Path $src -Suffix "first" | Out-Null } catch { $threw = $true }
+Check "archive collision fails closed" ($threw -and (Test-Path -LiteralPath $src) -and ((Get-Content -LiteralPath $arch) -eq "payload-line")) "threw=$threw"
+$threw = $false
+try { Move-SeatEvidenceAside -Path $src -Suffix "bad<suffix>" | Out-Null } catch { $threw = $true }
+Check "archive move failure throws" ($threw -and (Test-Path -LiteralPath $src)) "threw=$threw"
 
 if ($failures -gt 0) {
     Write-Host "$failures test(s) failed"

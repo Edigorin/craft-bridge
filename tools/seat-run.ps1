@@ -62,3 +62,31 @@ function Invoke-SeatCommand {
     }
     return [pscustomobject]$result
 }
+
+function Move-SeatEvidenceAside {
+    # Move a possibly-stale evidence file aside, never delete it: the owner's
+    # seat runs no delete commands. The name is collision-resistant (UTC
+    # timestamp plus a random fragment) or an explicit test suffix; nothing
+    # is ever overwritten. Any failure throws, so a caller that archives
+    # before running fails closed BEFORE the macro is invoked. Returns the
+    # archive path, or $null when the source was absent.
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$Suffix = ""
+    )
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    if ($Suffix -eq "") {
+        $stamp = Get-Date -Format "yyyyMMddTHHmmss"
+        $unique = [Guid]::NewGuid().ToString("N").Substring(0, 8)
+        $Suffix = "$stamp-$unique"
+    }
+    $dest = "$Path.prev-$Suffix"
+    if (Test-Path -LiteralPath $dest) {
+        throw "refusing to overwrite existing archive: $dest"
+    }
+    Move-Item -LiteralPath $Path -Destination $dest
+    if (Test-Path -LiteralPath $Path) {
+        throw "failed to move evidence aside: $Path"
+    }
+    return $dest
+}

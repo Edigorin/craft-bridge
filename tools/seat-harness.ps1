@@ -31,7 +31,7 @@ $failed = 0
 # ---- probe: plain VBScript writes the report the macros must write ----
 $probeReport = Join-Path $ReportDir "probe-report.jsonl"
 $env:CRAFT_BRIDGE_REPORT = $probeReport
-if (Test-Path $probeReport) { Remove-Item $probeReport }
+Move-SeatEvidenceAside -Path $probeReport | Out-Null
 $pr = Invoke-SeatCommand -FilePath "cscript" -ArgumentList @("//nologo", (Join-Path $PSScriptRoot "seat-probe.vbs")) -TimeoutSeconds 120
 $probeOut = @($pr.StdOut -split "`r?`n") + @($pr.StdErr -split "`r?`n") | Where-Object { $_ -ne "" }
 $probeOk = (-not $pr.TimedOut) -and ($pr.ExitCode -eq 0) -and (Test-Path $probeReport) -and (Get-Content $probeReport | Select-String -Pattern 'summary' -Quiet)
@@ -62,7 +62,7 @@ foreach ($item in $items) {
 
         $itemReport = Join-Path $ReportDir "$name-runtime-report.jsonl"
         $env:CRAFT_BRIDGE_REPORT = $itemReport
-        if (Test-Path $itemReport) { Remove-Item $itemReport }
+        Move-SeatEvidenceAside -Path $itemReport | Out-Null
         Set-Content -Path $pathFile -Value @($itemReport, $item.FullName)
 
         $r = Invoke-SeatCommand -FilePath "cscript" -ArgumentList @("//nologo", (Join-Path $PSScriptRoot "run-macro.vbs"), $macro) -TimeoutSeconds 300
@@ -86,7 +86,7 @@ foreach ($item in $items) {
         # Check the rebuilt part: fresh evidence only - an old checks file is
         # removed first and an empty or malformed one is a failure.
         $checkOut = Join-Path $ReportDir "$name-checks.txt"
-        if (Test-Path $checkOut) { Remove-Item $checkOut }
+        Move-SeatEvidenceAside -Path $checkOut | Out-Null
         $r = Invoke-SeatCommand -FilePath "cscript" -ArgumentList @("//nologo", (Join-Path $PSScriptRoot "check-part.vbs"), $expect, $stepRef, $checkOut) -TimeoutSeconds 300
         $r.StdOut | Set-Content (Join-Path $ReportDir "$name-check.log")
         $r.StdErr | Set-Content (Join-Path $ReportDir "$name-check.err.log")
@@ -120,7 +120,8 @@ foreach ($item in $items) {
         $results += [ordered]@{ item = $name; passed = $false; error = $_.Exception.Message; logs = $tail }
     }
 }
-Remove-Item $pathFile -ErrorAction SilentlyContinue
+# The path file is left in place: the seat runs no delete commands, and
+# every run overwrites it before use.
 $report = [ordered]@{ generated_by = "craft-bridge seat-harness"; items = $results; failed = $failed }
 $report | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $ReportDir "harness-report.json")
 Write-Host ""

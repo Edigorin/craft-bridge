@@ -45,7 +45,7 @@ if ($actual -ne $ExpectSha256.ToUpperInvariant()) {
 # ---- report setup: only inside the operator-chosen directory ----
 $reportDirFull = (Resolve-Path $ReportDir).Path
 $reportPath = Join-Path $reportDirFull "runtime-report.jsonl"
-if (Test-Path $reportPath) { Remove-Item $reportPath } # never trust a stale report
+Move-SeatEvidenceAside -Path $reportPath | Out-Null # never trust a stale report (archived, never deleted)
 # The macro runs inside the SolidWorks process, which may be an instance that
 # is already open and inherited an older environment. The path therefore also
 # travels as a one-line file under %TEMP%, which every process can see.
@@ -104,7 +104,8 @@ if (-not $complete) {
     Get-ChildItem $reportDirFull | Out-String | Add-Content (Join-Path $reportDirFull "smoke-log.txt")
     throw "the runtime report is truncated: no summary line (macro crashed or is still running)"
 }
-Remove-Item $pathFile -ErrorAction SilentlyContinue
+# The path file is left in place: the seat runs no delete commands, and
+# every run overwrites it before use.
 
 # ---- check the report ----
 $created = 0; $degraded = 0; $failed = 0; $notExecuted = 0; $steps = 0; $summaryStatus = "?"
