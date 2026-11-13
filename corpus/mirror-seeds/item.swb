@@ -63,12 +63,16 @@ Sub main()
     Exit Sub
 
 Fail:
+    ' Capture the error FIRST: executing On Error resets Err.
+    Dim errNum As Long, errMsg As String
+    errNum = Err.Number
+    errMsg = Err.Description
     ' The report must survive failure: open it if needed, write what happened
     ' and the completion signal, then leave the model as it is.
     On Error Resume Next
     If reportPath = "" Then reportPath = ReportPathFromHost()
     If reportPath <> "" Then
-        WriteStep stepIdx, "macro", "failed", Err.Description
+        WriteStep stepIdx, "macro", "failed", "err " & Trim(Str(errNum)) & ": " & errMsg
         WriteLine "{""type"":""summary"",""status"":""failed""}"
     End If
 End Sub
@@ -235,8 +239,8 @@ ExFail:
     Exit Function
 
 HardFail:
+    gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description
     On Error Resume Next
-    gMsg = Err.Description
     BuildExtrude1 = "failed"
 End Function
 
@@ -263,8 +267,8 @@ ExFail:
     Exit Function
 
 HardFail:
+    gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description
     On Error Resume Next
-    gMsg = Err.Description
     BuildPat2 = "failed"
 End Function
 
