@@ -49,10 +49,10 @@ foreach ($item in $items) {
     Set-Content -Path $pathFile -Value @($itemReport, $item.FullName)
 
     $proc = Start-Process -FilePath "cscript" -ArgumentList @("//nologo", (Join-Path $PSScriptRoot "run-macro.vbs"), $macro) -NoNewWindow -PassThru -RedirectStandardOutput (Join-Path $ReportDir "$name-runner.log") -RedirectStandardError (Join-Path $ReportDir "$name-runner.err.log")
-    if (-not $proc.WaitForExit(300000)) { $proc.Dispose(); throw "$name: the macro runner timed out" }
-    if (-not (Test-Path $itemReport)) { throw "$name: no runtime report" }
+    if (-not $proc.WaitForExit(300000)) { $proc.Dispose(); throw "${name}: the macro runner timed out" }
+    if (-not (Test-Path $itemReport)) { throw "${name}: no runtime report" }
     $lines = Get-Content $itemReport
-    if (-not ($lines[-1] -match '"type":"summary"')) { throw "$name: truncated runtime report" }
+    if (-not ($lines[-1] -match '"type":"summary"')) { throw "${name}: truncated runtime report" }
     $bad = @($lines | Where-Object { $_ -match '"status":"failed"' })
     if ($bad.Count -gt 0) { $failed++; Write-Host "  runtime: FAILED steps" } else { Write-Host "  runtime: complete" }
 
@@ -60,7 +60,7 @@ foreach ($item in $items) {
     $saved = Join-Path $ReportDir "$name.sldprt"
     $checkOut = Join-Path $ReportDir "$name-checks.txt"
     $proc = Start-Process -FilePath "cscript" -ArgumentList @("//nologo", (Join-Path $PSScriptRoot "check-part.vbs"), $expect, $stepRef, $checkOut) -NoNewWindow -PassThru -RedirectStandardOutput (Join-Path $ReportDir "$name-check.log") -RedirectStandardError (Join-Path $ReportDir "$name-check.err.log")
-    if (-not $proc.WaitForExit(300000)) { $proc.Dispose(); throw "$name: the checker timed out" }
+    if (-not $proc.WaitForExit(300000)) { $proc.Dispose(); throw "${name}: the checker timed out" }
     $checks = if (Test-Path $checkOut) { Get-Content $checkOut } else { @("check:checker=failed") }
     $itemFailed = ($bad.Count -gt 0) -or (@($checks | Where-Object { $_ -match "=fail" }).Count -gt 0)
     if ($itemFailed) { $failed++ }
