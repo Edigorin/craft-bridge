@@ -771,7 +771,7 @@ pub fn emit(
          Function JsonStr(ByVal s As String) As String\n\
              Dim t As String\n\
              t = Replace(s, \"\\\", \"\\\\\")\n\
-             t = Replace(t, \"\"\"\", \"\\\"\")\n\
+             t = Replace(t, \"\"\"\", \"\\\"\"\")\n\
              t = Replace(t, vbCrLf, \"\\n\")\n\
              t = Replace(t, vbCr, \"\\n\")\n\
              t = Replace(t, vbLf, \"\\n\")\n\

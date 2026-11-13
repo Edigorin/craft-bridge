@@ -900,3 +900,54 @@ fn probe_cleanup_covers_every_discard_path() {
         );
     }
 }
+
+/// One line of VBA must have balanced string literals. Inside a literal,
+/// `""` is an escaped quote; a lone `"` closes. An unclosed literal is a
+/// silent compile failure: RunMacro just returns False on the seat and no
+/// report is ever written - exactly what an unterminated `"\""`  in JsonStr
+/// did to every generated macro until 2026-11-13.
+fn assert_vba_literals_balance(text: &str, what: &str) {
+    for (i, line) in text.lines().enumerate() {
+        let mut in_string = false;
+        let mut chars = line.chars().peekable();
+        while let Some(c) = chars.next() {
+            if in_string {
+                if c == '"' {
+                    if chars.peek() == Some(&'"') {
+                        chars.next(); // "" = one literal quote
+                    } else {
+                        in_string = false;
+                    }
+                }
+            } else if c == '"' {
+                in_string = true;
+            } else if c == '\'' {
+                break; // comment: rest of line is free text
+            }
+        }
+        assert!(
+            !in_string,
+            "{what}: unterminated VBA string literal at line {}: {}",
+            i + 1,
+            line
+        );
+    }
+}
+
+#[test]
+fn generated_modules_have_balanced_vba_strings() {
+    let case = Case::new(TRACER);
+    case.build_to("strings.swb", false).unwrap();
+    let macro_text = fs::read_to_string(case.dir.path().join("strings.swb")).unwrap();
+    assert_vba_literals_balance(&macro_text, "generated");
+    assert_vba_literals_balance(
+        include_str!("../corpus/compat-check/minimal.swb"),
+        "checkpoint",
+    );
+    // The specific trap: JsonStr must produce the 5-char VBA literal "\"".." ,
+    // i.e. bytes 22 5c 22 22 22 - one quote more than the unterminated form.
+    assert!(
+        macro_text.contains("t = Replace(t, \"\"\"\", \"\\\"\"\")"),
+        "JsonStr's quote escape is not the proven form"
+    );
+}

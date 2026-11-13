@@ -479,7 +479,7 @@ End Function
 Function JsonStr(ByVal s As String) As String
 Dim t As String
 t = Replace(s, "\", "\\")
-t = Replace(t, """", "\"")
+t = Replace(t, """", "\""")
 t = Replace(t, vbCrLf, "\n")
 t = Replace(t, vbCr, "\n")
 t = Replace(t, vbLf, "\n")
