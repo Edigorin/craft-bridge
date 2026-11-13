@@ -83,12 +83,14 @@ Sub main()
     Exit Sub
 
 Fail:
-    ' The report must survive early failure: the write is stateless, so this
-    ' works whether or not a line was written before.
+    ' Capture the error FIRST: executing an On Error statement resets Err.
+    Dim errNum As Long, errMsg As String
+    errNum = Err.Number
+    errMsg = Err.Description
     On Error Resume Next
     If reportPath = "" Then reportPath = ReportPathFromHost()
     If reportPath <> "" Then
-        WriteStep stepIdx, "macro", "failed", Err.Description
+        WriteStep stepIdx, "macro", "failed", "err " & Trim(Str(errNum)) & ": " & errMsg
         WriteLine "{""type"":""summary"",""status"":""failed""}"
     End If
 End Sub

@@ -292,6 +292,9 @@ pub fn emit(
     out.push_str("    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"ok\"\"}\"\n");
     out.push_str("    Exit Sub\n\n");
     out.push_str("Fail:\n");
+    out.push_str("    ' Capture the error FIRST: executing On Error resets Err.\n");
+    out.push_str("    Dim errNum As Long, errMsg As String\n");
+    out.push_str("    errNum = Err.Number\n    errMsg = Err.Description\n");
     out.push_str("    ' The report must survive failure: open it if needed, write what happened\n");
     out.push_str("    ' and the completion signal, then leave the model as it is.\n");
     out.push_str("    On Error Resume Next\n");
@@ -873,7 +876,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
         ));
     }
     out.push_str(&format!(
-        "    Set feat{index} = feat\n    gMsg = {}\n    BuildExtrude{index} = \"created\"\n    Exit Function\n\nExFail:\n    BuildExtrude{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    On Error Resume Next\n    gMsg = Err.Description\n    BuildExtrude{index} = \"failed\"\nEnd Function\n\n",
+        "    Set feat{index} = feat\n    gMsg = {}\n    BuildExtrude{index} = \"created\"\n    Exit Function\n\nExFail:\n    BuildExtrude{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description\n    On Error Resume Next\n    BuildExtrude{index} = \"failed\"\nEnd Function\n\n",
         vb_lit(&message)
     ));
     out
@@ -999,7 +1002,7 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep) -> String {
         ));
     }
     out.push_str(&format!(
-        "    Set feat{index} = feat\n    gMsg = {}\n    BuildRevolve{index} = \"created\"\n    Exit Function\n\nExFail:\n    BuildRevolve{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    On Error Resume Next\n    gMsg = Err.Description\n    BuildRevolve{index} = \"failed\"\nEnd Function\n\n",
+        "    Set feat{index} = feat\n    gMsg = {}\n    BuildRevolve{index} = \"created\"\n    Exit Function\n\nExFail:\n    BuildRevolve{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description\n    On Error Resume Next\n    BuildRevolve{index} = \"failed\"\nEnd Function\n\n",
         vb_lit(&format!("{message}; sweep direction and volume are acceptance checks"))
     ));
     out
@@ -1074,7 +1077,7 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
         out.push_str(&emit_size_eq(last, "the primitive height"));
     }
     out.push_str(&format!(
-        "    gMsg = \"primitive created\"\n    BuildPrim{index} = \"created\"\n    Exit Function\n\nExFail:\n    BuildPrim{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    On Error Resume Next\n    gMsg = Err.Description\n    BuildPrim{index} = \"failed\"\nEnd Function\n\n"
+        "    gMsg = \"primitive created\"\n    BuildPrim{index} = \"created\"\n    Exit Function\n\nExFail:\n    BuildPrim{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description\n    On Error Resume Next\n    BuildPrim{index} = \"failed\"\nEnd Function\n\n"
     ));
     out
 }
@@ -1250,7 +1253,7 @@ fn emit_mod_subs(index: usize, md: &crate::replay::ModStep) -> String {
         )
     };
     out.push_str(&format!(
-        "    gMsg = {}\n    BuildMod{index} = \"{}\"\n    Exit Function\n\nExFail:\n    BuildMod{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    On Error Resume Next\n    gMsg = Err.Description\n    BuildMod{index} = \"failed\"\nEnd Function\n\n",
+        "    gMsg = {}\n    BuildMod{index} = \"{}\"\n    Exit Function\n\nExFail:\n    BuildMod{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description\n    On Error Resume Next\n    BuildMod{index} = \"failed\"\nEnd Function\n\n",
         vb_lit(&format!("created{degrade_note}")),
         if md.degraded_variants.is_empty() { "created" } else { "degraded" }
     ));
@@ -1321,7 +1324,7 @@ fn emit_pat_subs(index: usize, pt: &crate::replay::PatStep) -> String {
         )
     };
     out.push_str(&format!(
-        "    gMsg = {}\n    BuildPat{index} = \"{}\"\n    Exit Function\n\nExFail:\n    BuildPat{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    On Error Resume Next\n    gMsg = Err.Description\n    BuildPat{index} = \"failed\"\nEnd Function\n\n",
+        "    gMsg = {}\n    BuildPat{index} = \"{}\"\n    Exit Function\n\nExFail:\n    BuildPat{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description\n    On Error Resume Next\n    BuildPat{index} = \"failed\"\nEnd Function\n\n",
         vb_lit(&format!("created{degrade_note}")),
         if pt.degraded_variants.is_empty() { "created" } else { "degraded" }
     ));
@@ -1343,7 +1346,7 @@ Function Fallback{index}() As String\n\
     ));
     out.push_str("    ClearSlotsAll\n");
     out.push_str(&format!(
-        "    gMsg = \"fallback body imported from the boundary snapshot\"\n    Fallback{index} = \"fallback\"\n    Exit Function\n\nHardFail:\n    On Error Resume Next\n    gMsg = Err.Description\n    Fallback{index} = \"failed\"\nEnd Function\n\n"
+        "    gMsg = \"fallback body imported from the boundary snapshot\"\n    Fallback{index} = \"fallback\"\n    Exit Function\n\nHardFail:\n    gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description\n    On Error Resume Next\n    Fallback{index} = \"failed\"\nEnd Function\n\n"
     ));
     out
 }
