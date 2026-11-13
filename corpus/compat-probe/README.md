@@ -73,6 +73,8 @@ module-size effect", so round two probes recombine:
 | `probe-eq-extrude` | equations + extrude family | that pair |
 | `probe-sketch-extrude` | sketch + extrude families | that pair |
 | `probe-pad` | none, plus 250 appended comment lines | source-size hypothesis (larger than the failing item, zero executable content added) |
+| `probe-litpad` | equations + sketch, plus a dead sub with 30 string assignments | string-literal count/bytes as a binding metric |
+| `probe-execpad2` | equations + sketch, plus a dead sub with 50 arithmetic statements | executable-statement count as a binding metric |
 
 If `probe-pad` reports while the full item fails, a simple raw-source
 byte/line limit is excluded; it cannot exclude limits on executable
@@ -81,6 +83,14 @@ probe does not grow. Likewise, a failing pair localizes a suspect
 combination but does not by itself prove an interaction defect: aggregate
 executable-size limits remain possible, and all pairs reporting leaves
 both three-way interactions and aggregate compiler/resource limits open.
+
+The filler probes can only support threshold hypotheses, never uniquely
+identify one: `probe-litpad` also adds statements, a procedure and a
+local; `probe-execpad2` grows simple arithmetic code, not the item's
+COM-call, type and branch metadata. A failure in exactly one supports the
+metric it uniquely grows; both reporting weakens only those two simple
+aggregate-count hypotheses, leaving combined, compiled-size and other
+compiler-resource limits - and the three-body interaction - open.
 
 ## Seat safety
 
