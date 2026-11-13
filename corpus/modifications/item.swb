@@ -218,7 +218,7 @@ OpenSketchOnPlane = True
 Exit Function
 Else
 gProbeLog = gProbeLog & feat.Name & ": " & FrameText() & "; "
-If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, "craft-bridge", "the probe sketch could not be deleted"
+If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, "craft-bridge", "the probe sketch could not be confirmed deleted; probed: " & gProbeLog
 End If
 End If
 End If
@@ -242,12 +242,13 @@ Set skFeat = swSketchMgr.ActiveSketch
 If skFeat Is Nothing Then
 gProbeLog = gProbeLog & feat.Name & ": no sketch opened; "
 ElseIf SketchFrameIs(which) Then
-If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, "craft-bridge", "the probe sketch could not be deleted"
+gProbeLog = gProbeLog & feat.Name & ": " & FrameText() & "; "
+If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, "craft-bridge", "the probe sketch could not be confirmed deleted; probed: " & gProbeLog
 PlaneNameFor = feat.Name
 Exit Function
 Else
 gProbeLog = gProbeLog & feat.Name & ": " & FrameText() & "; "
-If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, "craft-bridge", "the probe sketch could not be deleted"
+If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, "craft-bridge", "the probe sketch could not be confirmed deleted; probed: " & gProbeLog
 End If
 End If
 End If
@@ -306,24 +307,79 @@ Function Vec3Text(ByVal x As Double, ByVal y As Double, ByVal z As Double) As St
 Vec3Text = Trim(Str(x)) & "," & Trim(Str(y)) & "," & Trim(Str(z))
 End Function
 
-' Close the probe sketch and delete exactly the feature that was created
-' for it - never a blind EditDelete. Closing an empty sketch may already
-' have removed it; deletion is then unnecessary. The deletion is verified:
-' if the feature still selects afterwards it leaked, and the caller fails
-' closed. True = the probe sketch is confirmed gone.
-Function DiscardProbeSketch(ByVal skFeat As SldWorks.Feature) As Boolean
-Dim ok As Boolean
+' A live feature-tree lookup by name. Returns the feature when a complete
+' walk found it; returns Nothing with uncertain = False only when a
+' complete walk proves it absent; uncertain = True whenever the walk or
+' the name failed. Absence is never inferred from a failed query, and an
+' empty name is never sent to any API.
+Function FindFeatureByName(ByVal nm As String, ByRef uncertain As Boolean) As SldWorks.Feature
+Dim feat As SldWorks.Feature, fn As String
+Set FindFeatureByName = Nothing
+uncertain = True
+If nm = "" Then Exit Function
 On Error Resume Next
-swSketchMgr.InsertSketch True
-ok = skFeat.Select(False)
-If ok Then
-swDoc.EditDelete
 Err.Clear
-ok = False
-ok = skFeat.Select(False)
-If ok Then swDoc.ClearSelection2 True
+Set feat = swDoc.FirstFeature
+Do While Not feat Is Nothing
+If Err.Number <> 0 Then Exit Function
+Err.Clear
+fn = feat.Name
+If Err.Number <> 0 Then Exit Function
+If fn = nm Then
+Set FindFeatureByName = feat
+uncertain = False
+Exit Function
 End If
-DiscardProbeSketch = Not ok
+Err.Clear
+Set feat = feat.GetNextFeature
+Loop
+If Err.Number = 0 Then uncertain = False
+End Function
+
+' Close the probe sketch and delete exactly the feature that was created
+' for it - never a blind EditDelete, never a stale-object test. The name
+' is captured while the object is alive and validated; the close is
+' confirmed; the delete runs from a clean selection of the one feature the
+' live tree returns; and the deletion is verified the same way. Closing an
+' empty sketch may already have removed it - that is a clean result. True
+' = the probe sketch is proven gone; every uncertain state fails closed.
+Function DiscardProbeSketch(ByVal skFeat As SldWorks.Feature) As Boolean
+Dim nm As String, cur As Object, live As SldWorks.Feature
+Dim uncertain As Boolean
+DiscardProbeSketch = False
+On Error Resume Next
+Err.Clear
+nm = skFeat.Name
+If Err.Number <> 0 Then Exit Function
+If nm = "" Then Exit Function
+Err.Clear
+Set cur = swSketchMgr.ActiveSketch
+If Err.Number <> 0 Then Exit Function
+If Not cur Is Nothing Then
+Err.Clear
+swSketchMgr.InsertSketch True
+If Err.Number <> 0 Then Exit Function
+Err.Clear
+Set cur = swSketchMgr.ActiveSketch
+If Err.Number <> 0 Then Exit Function
+If Not cur Is Nothing Then Exit Function
+End If
+Set live = FindFeatureByName(nm, uncertain)
+If live Is Nothing Then
+DiscardProbeSketch = Not uncertain
+Exit Function
+End If
+Err.Clear
+swDoc.ClearSelection2 True
+If Err.Number <> 0 Then Exit Function
+Err.Clear
+If Not live.Select(False) Then Exit Function
+Err.Clear
+swDoc.EditDelete
+If Err.Number <> 0 Then Exit Function
+Err.Clear
+Set live = FindFeatureByName(nm, uncertain)
+DiscardProbeSketch = (live Is Nothing) And (Not uncertain)
 End Function
 
 ' Close the sketch only if one is actually open: InsertSketch toggles, so a

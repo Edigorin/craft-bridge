@@ -19,6 +19,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "seat-run.ps1")
 
 # ---- provenance checks: committed, unmodified, byte-verified ----
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -32,9 +33,9 @@ git -C $repo ls-files --error-unmatch -- $rel 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw "refusing to run: $rel is not a committed file"
 }
-git -C $repo diff --quiet -- $rel
+git -C $repo diff HEAD --quiet -- $rel
 if ($LASTEXITCODE -ne 0) {
-    throw "refusing to run: $rel has uncommitted changes"
+    throw "refusing to run: $rel differs from HEAD (staged changes count as uncommitted here - commit it first)"
 }
 $actual = (Get-FileHash -Algorithm SHA256 $macroFull).Hash
 if ($actual -ne $ExpectSha256.ToUpperInvariant()) {
@@ -60,19 +61,25 @@ Set-Content -Path $pathFile -Value @($reportPath, $macroDir)
 Write-Host "running $rel (sha256 verified) - report: $reportPath"
 $runner = Join-Path $repo "tools\run-macro.vbs"
 $logPath = Join-Path $reportDirFull "smoke-log.txt"
-$proc = Start-Process -FilePath "cscript" `
-    -ArgumentList @("//nologo", $runner, $macroFull) `
-    -NoNewWindow -PassThru `
-    -RedirectStandardOutput $logPath `
-    -RedirectStandardError (Join-Path $reportDirFull "smoke-log-err.txt")
-if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
-    $proc.Kill()
+$r = Invoke-SeatCommand -FilePath "cscript" -ArgumentList @("//nologo", $runner, $macroFull) -TimeoutSeconds $TimeoutSeconds
+# Preserve the logs before any exit-code verdict can fail the run.
+$r.StdOut | Set-Content $logPath
+$r.StdErr | Set-Content (Join-Path $reportDirFull "smoke-log-err.txt")
+$r.StdOut -split "`r?`n" | ForEach-Object { Write-Host $_ }
+
+# The runner's exit code is the gate, and it is checked BEFORE the report
+# is trusted: a report produced under a failed invocation proves nothing.
+if ($r.TimedOut) {
     Get-ChildItem $reportDirFull | Out-String | Add-Content $logPath
-    throw "the macro runner did not return within $TimeoutSeconds s - a modal dialog in the SolidWorks window is the usual cause; check it"
+    throw "the macro runner did not return within $TimeoutSeconds s - a modal dialog in the SolidWorks window is the usual cause; killing the runner does not stop the macro inside SolidWorks - resolve it there before rerunning"
 }
-$vbsExit = $proc.ExitCode
-Get-Content $logPath | ForEach-Object { Write-Host $_ }
-Write-Host "runner exit code: $vbsExit"
+if ($null -eq $r.ExitCode) {
+    throw "the runner exit code is unreadable; refusing to trust the run"
+}
+Write-Host "runner exit code: $($r.ExitCode)"
+if ($r.ExitCode -ne 0) {
+    throw "the runner exited with code $($r.ExitCode); refusing to trust any report from this run"
+}
 
 # ---- wait for the report ----
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)

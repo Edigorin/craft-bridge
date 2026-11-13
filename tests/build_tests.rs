@@ -847,3 +847,56 @@ fn checkpoint_tracks_the_verified_conventions() {
     assert!(checkpoint.contains("Function DiscardProbeSketch"));
     assert!(checkpoint.contains("VecIs(a(2), a(5), a(8)"));
 }
+
+#[test]
+fn probe_cleanup_covers_every_discard_path() {
+    // The cleanup contract (plan review 2026-11-13): absence is proven by a
+    // live tree walk, never inferred from a failed select; the name is
+    // validated before any API sees it; every uncertain state fails closed.
+    // These are text-level pins of the emitted VBA - the seat proves the
+    // execution (docs/spec.md: goldens prove text, not behavior).
+    let case = Case::new(TRACER);
+    case.build_to("cleanup.swb", false).unwrap();
+    let macro_text = fs::read_to_string(case.dir.path().join("cleanup.swb")).unwrap();
+    let checkpoint = include_str!("../corpus/compat-check/minimal.swb");
+    for (name, text) in [
+        ("generated", macro_text.as_str()),
+        ("checkpoint", checkpoint),
+    ] {
+        // Name/query errors: an empty or unreadable name never reaches an API,
+        // and a failed walk reports uncertainty, not absence.
+        assert!(
+            text.contains("If nm = \"\" Then Exit Function"),
+            "{name}: empty names are not rejected"
+        );
+        assert!(
+            text.contains("uncertain = True"),
+            "{name}: a failed query is not flagged uncertain"
+        );
+        assert!(
+            text.contains("If Err.Number = 0 Then uncertain = False"),
+            "{name}: only a complete walk proves absence"
+        );
+        // Auto-removal: closing an empty sketch may already have removed it;
+        // that is clean only when absence is proven (Not uncertain).
+        assert!(
+            text.contains("DiscardProbeSketch = Not uncertain"),
+            "{name}: auto-removal is not bounded by the proof"
+        );
+        // Surviving sketch + deletion failure: the delete runs on the live
+        // feature and the result is re-verified, failing closed on anything
+        // but proven absence.
+        assert!(
+            text.contains("If Not live.Select(False) Then Exit Function"),
+            "{name}: the delete is not anchored to the live feature"
+        );
+        assert!(
+            text.contains("DiscardProbeSketch = (live Is Nothing) And (Not uncertain)"),
+            "{name}: the deletion is not re-verified"
+        );
+        assert!(
+            text.contains("swDoc.ClearSelection2 True"),
+            "{name}: the delete does not start from a clean selection"
+        );
+    }
+}

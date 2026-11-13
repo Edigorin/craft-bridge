@@ -13,6 +13,7 @@ param(
     [switch]$AllowDegraded
 )
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "seat-run.ps1")
 $corpus = Join-Path $RepoRoot "corpus"
 New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null
 $pathFile = Join-Path $env:TEMP "craft-bridge-report-path.txt"
@@ -31,8 +32,9 @@ $failed = 0
 $probeReport = Join-Path $ReportDir "probe-report.jsonl"
 $env:CRAFT_BRIDGE_REPORT = $probeReport
 if (Test-Path $probeReport) { Remove-Item $probeReport }
-$probeOut = & cscript //nologo (Join-Path $PSScriptRoot "seat-probe.vbs") 2>&1 | ForEach-Object { "$_" }
-$probeOk = (Test-Path $probeReport) -and (Get-Content $probeReport | Select-String -Pattern 'summary' -Quiet)
+$pr = Invoke-SeatCommand -FilePath "cscript" -ArgumentList @("//nologo", (Join-Path $PSScriptRoot "seat-probe.vbs")) -TimeoutSeconds 120
+$probeOut = @($pr.StdOut -split "`r?`n") + @($pr.StdErr -split "`r?`n") | Where-Object { $_ -ne "" }
+$probeOk = (-not $pr.TimedOut) -and ($pr.ExitCode -eq 0) -and (Test-Path $probeReport) -and (Get-Content $probeReport | Select-String -Pattern 'summary' -Quiet)
 Write-Host "== probe (plain VBScript report write): $(if ($probeOk) { 'ok' } else { 'FAILED' })"
 $probeOut | ForEach-Object { Write-Host "  $_" }
 $results += [ordered]@{ item = "probe-vbs-report-write"; passed = [bool]$probeOk; output = @($probeOut) }
@@ -63,16 +65,18 @@ foreach ($item in $items) {
         if (Test-Path $itemReport) { Remove-Item $itemReport }
         Set-Content -Path $pathFile -Value @($itemReport, $item.FullName)
 
-        $proc = Start-Process -FilePath "cscript" -ArgumentList @("//nologo", (Join-Path $PSScriptRoot "run-macro.vbs"), $macro) -NoNewWindow -PassThru -RedirectStandardOutput (Join-Path $ReportDir "$name-runner.log") -RedirectStandardError (Join-Path $ReportDir "$name-runner.err.log")
-        if (-not $proc.WaitForExit(300000)) {
-            $proc.Dispose()
+        $r = Invoke-SeatCommand -FilePath "cscript" -ArgumentList @("//nologo", (Join-Path $PSScriptRoot "run-macro.vbs"), $macro) -TimeoutSeconds 300
+        $r.StdOut | Set-Content (Join-Path $ReportDir "$name-runner.log")
+        $r.StdErr | Set-Content (Join-Path $ReportDir "$name-runner.err.log")
+        if ($r.TimedOut) {
             Write-Host "  TIMEOUT: the macro runner is still connected to SolidWorks"
-            Write-Host "  stopping the seat run: resolve the outstanding operation in SolidWorks, then rerun"
+            Write-Host "  stopping the seat run: killing the runner does not stop the macro inside SolidWorks - resolve it there, then rerun"
             $results += [ordered]@{ item = $name; passed = $false; error = "macro runner timed out; seat run stopped" }
             $failed++
             break
         }
-        if ($proc.ExitCode -ne 0) { throw "${name}: run-macro.vbs exited $($proc.ExitCode)" }
+        if ($null -eq $r.ExitCode) { throw "${name}: run-macro.vbs exit code is unreadable" }
+        if ($r.ExitCode -ne 0) { throw "${name}: run-macro.vbs exited $($r.ExitCode)" }
         if (-not (Test-Path $itemReport)) { throw "${name}: no runtime report" }
         $lines = @(Get-Content $itemReport)
         if ($lines.Count -eq 0 -or -not ($lines[-1] -match '"type":"summary"')) { throw "${name}: truncated runtime report" }
@@ -83,16 +87,18 @@ foreach ($item in $items) {
         # removed first and an empty or malformed one is a failure.
         $checkOut = Join-Path $ReportDir "$name-checks.txt"
         if (Test-Path $checkOut) { Remove-Item $checkOut }
-        $proc = Start-Process -FilePath "cscript" -ArgumentList @("//nologo", (Join-Path $PSScriptRoot "check-part.vbs"), $expect, $stepRef, $checkOut) -NoNewWindow -PassThru -RedirectStandardOutput (Join-Path $ReportDir "$name-check.log") -RedirectStandardError (Join-Path $ReportDir "$name-check.err.log")
-        if (-not $proc.WaitForExit(300000)) {
-            $proc.Dispose()
+        $r = Invoke-SeatCommand -FilePath "cscript" -ArgumentList @("//nologo", (Join-Path $PSScriptRoot "check-part.vbs"), $expect, $stepRef, $checkOut) -TimeoutSeconds 300
+        $r.StdOut | Set-Content (Join-Path $ReportDir "$name-check.log")
+        $r.StdErr | Set-Content (Join-Path $ReportDir "$name-check.err.log")
+        if ($r.TimedOut) {
             Write-Host "  TIMEOUT: the checker is still connected to SolidWorks"
-            Write-Host "  stopping the seat run: resolve the outstanding operation in SolidWorks, then rerun"
+            Write-Host "  stopping the seat run: killing the checker does not stop its work inside SolidWorks - resolve it there, then rerun"
             $results += [ordered]@{ item = $name; passed = $false; error = "checker timed out; seat run stopped" }
             $failed++
             break
         }
-        if ($proc.ExitCode -ne 0) { throw "${name}: check-part.vbs exited $($proc.ExitCode)" }
+        if ($null -eq $r.ExitCode) { throw "${name}: check-part.vbs exit code is unreadable" }
+        if ($r.ExitCode -ne 0) { throw "${name}: check-part.vbs exited $($r.ExitCode)" }
         if (-not (Test-Path $checkOut) -or (Get-Item $checkOut).Length -eq 0) { throw "${name}: the checker wrote no evidence" }
         $checks = @(Get-Content $checkOut)
         if (@($checks | Where-Object { $_ -notmatch '^(check|detail|volume):' }).Count -gt 0) { throw "${name}: malformed checker evidence" }
