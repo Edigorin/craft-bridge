@@ -59,6 +59,26 @@ Interpretation requires the baseline first:
 A probe that reports is diagnostic evidence only. It is never acceptance
 evidence, and no gate is relaxed for it.
 
+## Round two: recombination
+
+Round one outcome: `probe-shape` reported, `probe-control` did not (whole-
+module compilation confirmed), and all three family probes reported with
+their real bodies visibly executing - yet the full item still fails at
+invocation. The matrix branch is "interactions between families or a
+module-size effect", so round two probes recombine:
+
+| probe | keeps real bodies | tests |
+|---|---|---|
+| `probe-eq-sketch` | equations + sketch families | that pair |
+| `probe-eq-extrude` | equations + extrude family | that pair |
+| `probe-sketch-extrude` | sketch + extrude families | that pair |
+| `probe-pad` | none, plus 250 appended comment lines | source-size hypothesis (larger than the failing item, zero executable content added) |
+
+If `probe-pad` reports while the full item fails, size is excluded and the
+defect is an interaction. A pair that fails at invocation localizes it; all
+pairs reporting would point at a three-way interaction or at the one
+remaining delta: the full item's stub-free body set as a whole.
+
 ## Seat safety
 
 Probes are committed synthetic corpus items and run only through
