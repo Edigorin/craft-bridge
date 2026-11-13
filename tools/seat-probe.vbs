@@ -9,7 +9,9 @@ If reportPath = "" Then
   WScript.Quit 2
 End If
 On Error Resume Next
-Set f = CreateObject("Scripting.FileSystemObject").CreateTextFile(reportPath, True)
+Dim fso
+Set fso = CreateObject("Scripting.FileSystemObject")
+Set f = fso.CreateTextFile(reportPath, True)
 If Err.Number <> 0 Then
   WScript.Echo "probe: cannot write the report: " & Err.Description
   WScript.Quit 3

@@ -28,7 +28,9 @@ If swDoc Is Nothing Then
 End If
 
 Dim outFile
-Set outFile = CreateObject("Scripting.FileSystemObject").CreateTextFile(outPath, True)
+Dim fso
+Set fso = CreateObject("Scripting.FileSystemObject")
+Set outFile = fso.CreateTextFile(outPath, True)
 
 ' ---- the rebuilt part's mass properties ----
 Dim rebuiltVol, mp

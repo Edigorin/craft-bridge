@@ -397,7 +397,7 @@ fn mirrors_replay_over_verified_native_seeds() {
         "the seed never registers"
     );
     assert!(
-        macro_text.contains("Front Plane"),
+        macro_text.contains("SelectOriginPlane(\"XY\")"),
         "the origin mirror plane is not selected"
     );
     let outcome = case.build_to("pat2.swb", false).unwrap();

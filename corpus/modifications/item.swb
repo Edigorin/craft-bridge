@@ -172,6 +172,30 @@ HardFail:
 End Function
 
 ' Write one step line and flush it to disk immediately.
+' Origin planes by tree position (Front, Top, Right): plane names are
+' localized, but RefPlane type names are not, and a fresh part always
+' lists the origin planes first.
+Function SelectOriginPlane(ByVal which As String) As Boolean
+Dim feat As SldWorks.Feature, n As Long, want As Long
+Select Case which
+Case "XY": want = 0
+Case "XZ": want = 1
+Case "YZ": want = 2
+Case Else: want = 0
+End Select
+Set feat = swDoc.FirstFeature
+Do While Not feat Is Nothing
+If feat.GetTypeName2() = "RefPlane" Then
+If n = want Then
+SelectOriginPlane = feat.Select(False)
+Exit Function
+End If
+n = n + 1
+End If
+Set feat = feat.GetNextFeature
+Loop
+SelectOriginPlane = False
+End Function
 ' Truncate the report so this run never inherits a previous run's lines.
 Sub StartReport()
 On Error Resume Next

@@ -59,11 +59,11 @@ pub fn json_str_content(s: &str) -> String {
     out
 }
 
-fn plane_name(plane: OriginPlane) -> &'static str {
+fn plane_code(plane: OriginPlane) -> &'static str {
     match plane {
-        OriginPlane::Xy => "Front Plane",
-        OriginPlane::Xz => "Top Plane",
-        OriginPlane::Yz => "Right Plane",
+        OriginPlane::Xy => "XY",
+        OriginPlane::Xz => "XZ",
+        OriginPlane::Yz => "YZ",
     }
 }
 
@@ -389,6 +389,30 @@ pub fn emit(
     // ---- shared helpers (the checkpoint's, unchanged in spirit) ----
     out.push_str(
         "' Write one step line and flush it to disk immediately.\n\
+         ' Origin planes by tree position (Front, Top, Right): plane names are\n\
+         ' localized, but RefPlane type names are not, and a fresh part always\n\
+         ' lists the origin planes first.\n\
+         Function SelectOriginPlane(ByVal which As String) As Boolean\n\
+             Dim feat As SldWorks.Feature, n As Long, want As Long\n\
+             Select Case which\n\
+                 Case \"XY\": want = 0\n\
+                 Case \"XZ\": want = 1\n\
+                 Case \"YZ\": want = 2\n\
+                 Case Else: want = 0\n\
+             End Select\n\
+             Set feat = swDoc.FirstFeature\n\
+             Do While Not feat Is Nothing\n\
+                 If feat.GetTypeName2() = \"RefPlane\" Then\n\
+                     If n = want Then\n\
+                         SelectOriginPlane = feat.Select(False)\n\
+                         Exit Function\n\
+                     End If\n\
+                     n = n + 1\n\
+                 End If\n\
+                 Set feat = feat.GetNextFeature\n\
+             Loop\n\
+             SelectOriginPlane = False\n\
+         End Function\n\
          ' Truncate the report so this run never inherits a previous run's lines.\n\
          Sub StartReport()\n\
              On Error Resume Next\n\
@@ -538,12 +562,12 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
         "Function BuildSketch{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n"
     ));
     out.push_str(&format!(
-        "    ok = swDoc.Extension.SelectByID2({}, \"PLANE\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n",
-        vb_lit(plane_name(sk.plane))
+        "    ok = SelectOriginPlane({})\n",
+        vb_lit(plane_code(sk.plane))
     ));
     out.push_str(&format!(
         "    If Not ok Then gMsg = \"could not select the {} plane\": GoTo SketchFailed\n",
-        plane_name(sk.plane)
+        plane_code(sk.plane)
     ));
     out.push_str(&format!(
         "    swSketchMgr.InsertSketch True\n    skName{index} = swSketchMgr.ActiveSketch.Name\n",
@@ -1019,7 +1043,7 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
     out.push_str(&format!(
         "Function BuildPrim{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n    Dim dd As SldWorks.DisplayDimension\n    Dim seg As Variant\n    Dim sl As SldWorks.SketchLine\n    Dim ci As SldWorks.SketchCircle\n"
     ));
-    out.push_str("    ok = swDoc.Extension.SelectByID2(\"Front Plane\", \"PLANE\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n");
+    out.push_str("    ok = SelectOriginPlane(\"XY\")\n");
     out.push_str("    If Not ok Then gMsg = \"could not select the Front plane\": GoTo ExFail\n");
     out.push_str("    swSketchMgr.InsertSketch True\n");
     let (ox, oy) = (pr.origin[0] / 1000.0, pr.origin[1] / 1000.0);
@@ -1288,14 +1312,12 @@ fn emit_pat_subs(index: usize, pt: &crate::replay::PatStep) -> String {
                     "    If feat{seed} Is Nothing Then gMsg = \"a seed feature did not verify\": GoTo ExFail\n"
                 ));
             }
-            let plane_name = match plane {
-                crate::replay::OriginPlane::Xy => "Front Plane",
-                crate::replay::OriginPlane::Xz => "Top Plane",
-                crate::replay::OriginPlane::Yz => "Right Plane",
+            let code = match plane {
+                crate::replay::OriginPlane::Xy => "XY",
+                crate::replay::OriginPlane::Xz => "XZ",
+                crate::replay::OriginPlane::Yz => "YZ",
             };
-            out.push_str(&format!(
-                "    ok = swDoc.Extension.SelectByID2(\"{plane_name}\", \"PLANE\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n"
-            ));
+            out.push_str(&format!("    ok = SelectOriginPlane(\"{code}\")\n"));
             out.push_str(
                 "    If Not ok Then gMsg = \"could not select the mirror plane\": GoTo ExFail\n",
             );
