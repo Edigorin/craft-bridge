@@ -67,6 +67,80 @@ fn plane_code(plane: OriginPlane) -> &'static str {
     }
 }
 
+/// The sketch frame each SolidCraft origin plane must produce in the target
+/// part: `u` along the first named axis, `v` along the second, and the
+/// right-handed normal `u x v`. XY: u=X, v=Y, n=+Z. XZ: u=X, v=Z, n=-Y.
+/// YZ: u=Y, v=Z, n=+X. The frame is what "verbatim (u, v)" coordinates need
+/// to land in model space unchanged, so the probe verifies it exactly -
+/// axes and signs - and fails closed on anything else (docs/mapping.md).
+/// Derived from the plane name; the XY row is what the corpus exercises,
+/// the XZ/YZ rows await their first seat run.
+pub fn solidcraft_frame(plane: OriginPlane) -> [[f64; 3]; 3] {
+    let (u, v) = match plane {
+        OriginPlane::Xy => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+        OriginPlane::Xz => ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+        OriginPlane::Yz => ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
+    };
+    let n = [
+        u[1] * v[2] - u[2] * v[1],
+        u[2] * v[0] - u[0] * v[2],
+        u[0] * v[1] - u[1] * v[0],
+    ];
+    [u, v, n]
+}
+
+/// The sketch frame in model coordinates, read from one
+/// `ModelToSketchTransform.ArrayData` value (16 doubles: rotation 0-8,
+/// translation 9-11, scale 12, row-major, row-vector convention).
+///
+/// With `p_sketch = p_model * R + t`, row i of R is the model basis vector
+/// `e_i` expressed in sketch coordinates, so the sketch basis expressed in
+/// MODEL coordinates is the columns of R: u = (a0, a3, a6),
+/// v = (a1, a4, a7), normal = (a2, a5, a8). Equivalently: the sketch normal
+/// is sketch-space (0, 0, 1) transformed by the inverse transform. The
+/// translation is the model origin in sketch coordinates, so a zero
+/// translation means the sketch - and therefore the plane - runs through the
+/// model origin. This is the arithmetic the generated probe performs; the
+/// tests pin it with non-symmetric frames.
+pub fn sketch_frame_from_array_data(a: &[f64; 16]) -> [[f64; 3]; 3] {
+    [
+        [a[0], a[3], a[6]], // sketch u axis, model coordinates
+        [a[1], a[4], a[7]], // sketch v axis, model coordinates
+        [a[2], a[5], a[8]], // sketch normal, model coordinates
+    ]
+}
+
+/// The model origin in sketch coordinates (translation of the same
+/// transform): nonzero means the sketch origin is offset from the model
+/// origin, so verbatim coordinates would land shifted.
+pub fn sketch_origin_from_array_data(a: &[f64; 16]) -> [f64; 3] {
+    [a[9], a[10], a[11]]
+}
+
+/// A frame vector as report text, e.g. `u=(1,0,0)`.
+fn frame_desc(frame: [[f64; 3]; 3]) -> String {
+    fn one(v: [f64; 3]) -> String {
+        let f = |x: f64| {
+            if x == 0.0 {
+                "0".to_string()
+            } else if x == 1.0 {
+                "1".to_string()
+            } else if x == -1.0 {
+                "-1".to_string()
+            } else {
+                x.to_string()
+            }
+        };
+        format!("{},{},{}", f(v[0]), f(v[1]), f(v[2]))
+    }
+    format!(
+        "u=({}) v=({}) n=({})",
+        one(frame[0]),
+        one(frame[1]),
+        one(frame[2])
+    )
+}
+
 fn mm(v: f64) -> f64 {
     v / 1000.0
 }
@@ -109,6 +183,8 @@ pub fn emit(
     out.push_str("Dim swSketchMgr As SketchManager\n");
     out.push_str("Dim reportPath As String\n");
     out.push_str("Dim gMsg As String\n");
+    out.push_str("Dim gPlane As String\n");
+    out.push_str("Dim gProbeLog As String\n");
     let max_slot = steps
         .iter()
         .filter_map(|s| match &s.work {
@@ -123,9 +199,12 @@ pub fn emit(
             _ => None,
         })
         .max();
-    if let Some(m) = max_slot {
-        out.push_str(&format!("Dim regName(0 To {}) As String\n", m));
-    }
+    // Always declared: AddDimEquation references regName even when the
+    // recipe carries no equations (plan review).
+    out.push_str(&format!(
+        "Dim regName(0 To {}) As String\n",
+        max_slot.unwrap_or(0)
+    ));
     for s in steps {
         if matches!(
             s.work,
@@ -169,6 +248,22 @@ pub fn emit(
         json_str_content(bridge_version)
     );
     out.push_str(&format!("    WriteLine {}\n", vb_lit(&header_json)));
+
+    // The fresh-part bootstrap is not a recipe step: it runs with stepIdx
+    // still -1 so recipe step numbers stay aligned with the plan report. The
+    // checkpoint proved this shape on the seat (docs/mapping.md, Document
+    // handling); the enum is spelled fully qualified per the checkpoint.
+    out.push_str(
+        "\n    ' ---- fresh part from the default template (before recipe step 0) ----\n\
+         Set swApp = Application.SldWorks\n\
+         template = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)\n\
+         If template = \"\" Then Err.Raise vbObjectError + 514, \"craft-bridge\", \"no default part template is configured\"\n\
+         Set swDoc = swApp.NewDocument(template, 0, 0, 0)\n\
+         If swDoc Is Nothing Then Err.Raise vbObjectError + 515, \"craft-bridge\", \"NewDocument returned nothing\"\n\
+         Set swSketchMgr = swDoc.SketchManager\n\
+         If swSketchMgr Is Nothing Then Err.Raise vbObjectError + 521, \"craft-bridge\", \"the sketch manager is unavailable\"\n\
+         WriteStep stepIdx, \"document.new\", \"created\", \"fresh part from the default template\"\n\n",
+    );
 
     for step in steps {
         out.push_str(&format!(
@@ -379,53 +474,175 @@ pub fn emit(
     }
     if !snapshots.is_empty() {
         out.push_str(&emit_delete_created(steps));
-        if max_slot.is_some() {
-            out.push_str(
-                "Sub ClearSlotsAll()\n    Dim i As Long\n    For i = 0 To UBound(regName)\n        regName(i) = \"\"\n    Next i\nEnd Sub\n\n",
-            );
-        }
     }
+    // Always defined: AddDimEquation and every fallback builder reference it
+    // regardless of the recipe's equation slots (plan review).
+    out.push_str(
+        "Sub ClearSlotsAll()\n    Dim i As Long\n    For i = 0 To UBound(regName)\n        regName(i) = \"\"\n    Next i\nEnd Sub\n\n",
+    );
 
     // ---- shared helpers (the checkpoint's, unchanged in spirit) ----
     out.push_str(
         "' Write one step line and flush it to disk immediately.\n\
-         ' Origin planes by tree position (Front, Top, Right): plane names are\n\
-         ' localized, but RefPlane type names are not, and a fresh part always\n\
-         ' lists the origin planes first.\n\
-         Function SelectOriginPlane(ByVal which As String) As Boolean\n\
-             Dim feat As SldWorks.Feature, n As Long, want As Long\n\
-             Select Case which\n\
-                 Case \"XY\": want = 0\n\
-                 Case \"XZ\": want = 1\n\
-                 Case \"YZ\": want = 2\n\
-                 Case Else: want = 0\n\
-             End Select\n\
+         ' The plane whose sketch frame exactly matches the SolidCraft frame for the\n\
+         ' requested plane: axes, signs, and the sketch origin at the model origin.\n\
+         ' Plane names and tree positions are per config (one seat maps Front to the\n\
+         ' ZY plane), so no name or position is trusted; and verbatim (u, v) replay\n\
+         ' only lands coordinates where they belong on the frame the recipe implies.\n\
+         ' Anything else is refused and fails closed - coordinates are never\n\
+         ' silently reinterpreted (docs/mapping.md, Orientation). The probe leaves\n\
+         ' the sketch open on success. On failure the probe sketch is closed,\n\
+         ' deleted as one owned feature, and the deletion is verified.\n\
+         Function OpenSketchOnPlane(ByVal which As String) As Boolean\n\
+             Dim feat As SldWorks.Feature, skFeat As SldWorks.Feature, ok As Boolean\n\
              Set feat = swDoc.FirstFeature\n\
              Do While Not feat Is Nothing\n\
-                 If feat.GetTypeName2() = \"RefPlane\" Then\n\
-                     If n = want Then\n\
-                         SelectOriginPlane = feat.Select(False)\n\
-                         Exit Function\n\
+                 If InStr(1, feat.GetTypeName2(), \"lane\", vbTextCompare) > 0 Then\n\
+                     ok = feat.Select(False)\n\
+                     If ok Then\n\
+                         swSketchMgr.InsertSketch True\n\
+                         Set skFeat = swSketchMgr.ActiveSketch\n\
+                         If skFeat Is Nothing Then\n\
+                             gProbeLog = gProbeLog & feat.Name & \": no sketch opened; \"\n\
+                         ElseIf SketchFrameIs(which) Then\n\
+                             OpenSketchOnPlane = True\n\
+                             Exit Function\n\
+                         Else\n\
+                             gProbeLog = gProbeLog & feat.Name & \": \" & FrameText() & \"; \"\n\
+                             If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, \"craft-bridge\", \"the probe sketch could not be deleted\"\n\
+                         End If\n\
                      End If\n\
-                     n = n + 1\n\
                  End If\n\
                  Set feat = feat.GetNextFeature\n\
              Loop\n\
-             SelectOriginPlane = False\n\
+             OpenSketchOnPlane = False\n\
          End Function\n\
-         ' The first feature type names in the tree: the report names what the\n\
-         ' scan actually saw when plane selection fails.\n\
+\n\
+         ' The plane feature's own runtime name (never assumed) for call shapes that\n\
+         ' need the plane selected as a FEATURE, like mirrors. The probe sketch is\n\
+         ' discarded: the mirror needs the plane, not a sketch.\n\
+         Function PlaneNameFor(ByVal which As String) As String\n\
+             Dim feat As SldWorks.Feature, skFeat As SldWorks.Feature, ok As Boolean\n\
+             Set feat = swDoc.FirstFeature\n\
+             Do While Not feat Is Nothing\n\
+                 If InStr(1, feat.GetTypeName2(), \"lane\", vbTextCompare) > 0 Then\n\
+                     ok = feat.Select(False)\n\
+                     If ok Then\n\
+                         swSketchMgr.InsertSketch True\n\
+                         Set skFeat = swSketchMgr.ActiveSketch\n\
+                         If skFeat Is Nothing Then\n\
+                             gProbeLog = gProbeLog & feat.Name & \": no sketch opened; \"\n\
+                         ElseIf SketchFrameIs(which) Then\n\
+                             If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, \"craft-bridge\", \"the probe sketch could not be deleted\"\n\
+                             PlaneNameFor = feat.Name\n\
+                             Exit Function\n\
+                         Else\n\
+                             gProbeLog = gProbeLog & feat.Name & \": \" & FrameText() & \"; \"\n\
+                             If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, \"craft-bridge\", \"the probe sketch could not be deleted\"\n\
+                         End If\n\
+                     End If\n\
+                 End If\n\
+                 Set feat = feat.GetNextFeature\n\
+             Loop\n\
+         End Function\n\
+\n\
+         ' The sketch frame must equal the SolidCraft frame for the plane exactly:\n\
+         ' u and v along the named model axes (with the signs u x v gives for the\n\
+         ' normal), and the sketch origin at the model origin. The model-to-sketch\n\
+         ' transform is row-major with rows = model axes in sketch coordinates, so\n\
+         ' the sketch axes in model coordinates are its columns - the inverse\n\
+         ' transform of the sketch unit vectors: u = (a0, a3, a6),\n\
+         ' v = (a1, a4, a7), n = (a2, a5, a8) - and the translation\n\
+         ' (a9, a10, a11) is the model origin in sketch coordinates, which must\n\
+         ' vanish. Pinned against non-symmetric frames in tests/build_tests.rs.\n\
+         Function SketchFrameIs(ByVal which As String) As Boolean\n\
+             Dim tr As Variant, a As Variant, ok As Boolean\n\
+             On Error Resume Next\n\
+             Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform\n\
+             If Err.Number <> 0 Then Exit Function\n\
+             a = tr.ArrayData\n\
+             If Abs(a(9)) > 0.000001 Or Abs(a(10)) > 0.000001 Or Abs(a(11)) > 0.000001 Then Exit Function\n\
+             Select Case which\n\
+                 Case \"XY\"\n\
+                     ok = VecIs(a(0), a(3), a(6), 1#, 0#, 0#) And VecIs(a(1), a(4), a(7), 0#, 1#, 0#) And VecIs(a(2), a(5), a(8), 0#, 0#, 1#)\n\
+                 Case \"XZ\"\n\
+                     ok = VecIs(a(0), a(3), a(6), 1#, 0#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, 1#) And VecIs(a(2), a(5), a(8), 0#, -1#, 0#)\n\
+                 Case \"YZ\"\n\
+                     ok = VecIs(a(0), a(3), a(6), 0#, 1#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, 1#) And VecIs(a(2), a(5), a(8), 1#, 0#, 0#)\n\
+             End Select\n\
+             SketchFrameIs = ok\n\
+         End Function\n\
+\n\
+         ' Direction equality with sign, on normalized vectors: the transform may\n\
+         ' carry a uniform scale, the axes must still be exactly the expected ones.\n\
+         Function VecIs(ByVal ax As Double, ByVal ay As Double, ByVal az As Double, ByVal bx As Double, ByVal by As Double, ByVal bz As Double) As Boolean\n\
+             Dim L As Double\n\
+             L = Sqr(ax * ax + ay * ay + az * az)\n\
+             If Abs(L) < 0.000001 Then Exit Function\n\
+             VecIs = Abs(ax / L - bx) < 0.000001 And Abs(ay / L - by) < 0.000001 And Abs(az / L - bz) < 0.000001\n\
+         End Function\n\
+\n\
+         ' The active sketch's frame as report text: the fail-closed messages name\n\
+         ' exactly what each probed plane offered.\n\
+         Function FrameText() As String\n\
+             Dim tr As Variant, a As Variant\n\
+             On Error Resume Next\n\
+             Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform\n\
+             If Err.Number <> 0 Then FrameText = \"(no frame)\": Exit Function\n\
+             a = tr.ArrayData\n\
+             FrameText = \"u=(\" & Vec3Text(a(0), a(3), a(6)) & \") v=(\" & Vec3Text(a(1), a(4), a(7)) & \") n=(\" & Vec3Text(a(2), a(5), a(8)) & \") o=(\" & Vec3Text(a(9), a(10), a(11)) & \")\"\n\
+         End Function\n\
+\n\
+         Function Vec3Text(ByVal x As Double, ByVal y As Double, ByVal z As Double) As String\n\
+             Vec3Text = Trim(Str(x)) & \",\" & Trim(Str(y)) & \",\" & Trim(Str(z))\n\
+         End Function\n\
+\n\
+         ' Close the probe sketch and delete exactly the feature that was created\n\
+         ' for it - never a blind EditDelete. Closing an empty sketch may already\n\
+         ' have removed it; deletion is then unnecessary. The deletion is verified:\n\
+         ' if the feature still selects afterwards it leaked, and the caller fails\n\
+         ' closed. True = the probe sketch is confirmed gone.\n\
+         Function DiscardProbeSketch(ByVal skFeat As SldWorks.Feature) As Boolean\n\
+             Dim ok As Boolean\n\
+             On Error Resume Next\n\
+             swSketchMgr.InsertSketch True\n\
+             ok = skFeat.Select(False)\n\
+             If ok Then\n\
+                 swDoc.EditDelete\n\
+                 Err.Clear\n\
+                 ok = False\n\
+                 ok = skFeat.Select(False)\n\
+                 If ok Then swDoc.ClearSelection2 True\n\
+             End If\n\
+             DiscardProbeSketch = Not ok\n\
+         End Function\n\
+\n\
+         ' Close the sketch only if one is actually open: InsertSketch toggles, so a\n\
+         ' blind call would open a new sketch when none is active.\n\
+         Sub CloseSketchIfOpen()\n\
+             Dim sk As Object\n\
+             On Error Resume Next\n\
+             Set sk = swSketchMgr.ActiveSketch\n\
+             If Not sk Is Nothing Then swSketchMgr.InsertSketch True\n\
+         End Sub\n\
+\n\
+         ' The first feature type names in the tree: the report names what the scan\n\
+         ' actually saw when plane selection fails.\n\
          Function TreeSummary() As String\n\
-             Dim feat As SldWorks.Feature, s As String, i As Long\n\
+             Dim feat As SldWorks.Feature, s As String, planes As String, i As Long\n\
              On Error Resume Next\n\
              Set feat = swDoc.FirstFeature\n\
-             Do While Not feat Is Nothing And i < 8\n\
-                 s = s & feat.GetTypeName2() & \" \"\n\
+             Do While Not feat Is Nothing And i < 300\n\
+                 If InStr(1, feat.GetTypeName2(), \"lane\", vbTextCompare) > 0 Then\n\
+                     planes = planes & feat.GetTypeName2() & \"/\" & feat.Name & \" \"\n\
+                 End If\n\
+                 If i < 10 Then s = s & feat.GetTypeName2() & \" \"\n\
                  i = i + 1\n\
                  Set feat = feat.GetNextFeature\n\
              Loop\n\
-             TreeSummary = Trim(s)\n\
+             TreeSummary = Trim(Str(i)) & \" features; plane-like: [\" & Trim(planes) & \"]; first: \" & s\n\
          End Function\n\
+\n\
          ' Truncate the report so this run never inherits a previous run's lines.\n\
          Sub StartReport()\n\
              On Error Resume Next\n\
@@ -474,7 +691,7 @@ pub fn emit(
                  Close #f\n\
                  If Err.Number = 0 Then ReportPathFromHost = Trim(oneLine)\n\
              End If\n\
-         End Sub\n\
+         End Function\n\
 \n\
          ' The directory of the macro (its sidecar snapshots live there): the\n\
          ' second line of the host's path file.\n\
@@ -572,18 +789,19 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     };
     out.push_str(&format!("' Sketch step {index}: {}\n", vb_lit(&sk.name)));
     out.push_str(&format!(
-        "Function BuildSketch{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n"
+        "Function BuildSketch{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim skFeat As SldWorks.Feature\n"
     ));
     out.push_str(&format!(
-        "    ok = SelectOriginPlane({})\n",
+        "    ok = OpenSketchOnPlane({})\n",
         vb_lit(plane_code(sk.plane))
     ));
     out.push_str(&format!(
-        "    If Not ok Then gMsg = \"could not select the {} origin plane; tree scan saw: \" & TreeSummary(): GoTo SketchFailed\n",
-        plane_code(sk.plane)
+        "    If Not ok Then gMsg = \"no origin plane carries the {} frame {}; probed: \" & gProbeLog & \"; tree scan saw: \" & TreeSummary(): GoTo SketchFailed\n",
+        plane_code(sk.plane),
+        frame_desc(solidcraft_frame(sk.plane))
     ));
     out.push_str(&format!(
-        "    swSketchMgr.InsertSketch True\n    skName{index} = swSketchMgr.ActiveSketch.Name\n",
+        "    Set skFeat = swSketchMgr.ActiveSketch\n    skName{index} = skFeat.Name\n",
     ));
     out.push_str(&format!("    DrawGeometry{index}\n"));
     out.push_str(&format!(
@@ -608,9 +826,9 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     out.push_str(&format!(
         "    gMsg = \"rebuilt as geometry plus driving dimensions\"\n    BuildSketch{index} = \"degraded\"\n    Exit Function\n\n"
     ));
-    out.push_str("SketchFailed:\n    On Error Resume Next\n    swSketchMgr.InsertSketch True\n");
+    out.push_str("SketchFailed:\n    On Error Resume Next\n    CloseSketchIfOpen\n");
     out.push_str(&format!(
-        "    BuildSketch{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    On Error Resume Next\n    swSketchMgr.InsertSketch True\n    gMsg = Err.Description\n    BuildSketch{index} = \"failed\"\nEnd Function\n\n"
+        "    BuildSketch{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    ' Capture the error FIRST: executing an On Error statement resets Err.\n    Dim errNum As Long, errMsg As String\n    errNum = Err.Number\n    errMsg = Err.Description\n    On Error Resume Next\n    CloseSketchIfOpen\n    gMsg = \"err \" & Trim(Str(errNum)) & \": \" & errMsg\n    BuildSketch{index} = \"failed\"\nEnd Function\n\n"
     ));
 
     // DrawGeometry
@@ -1039,7 +1257,7 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep) -> String {
         ));
     }
     out.push_str(&format!(
-        "    Set feat{index} = feat\n    gMsg = {}\n    BuildRevolve{index} = \"created\"\n    Exit Function\n\nExFail:\n    BuildRevolve{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description\n    On Error Resume Next\n    BuildRevolve{index} = \"failed\"\nEnd Function\n\n",
+        "    Set feat{index} = feat\n    gMsg = {}\n    BuildRevolve{index} = \"created\"\n    Exit Function\n\nExFail:\n    On Error Resume Next\n    CloseSketchIfOpen\n    BuildRevolve{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    ' Capture the error FIRST: executing an On Error statement resets Err.\n    Dim errNum As Long, errMsg As String\n    errNum = Err.Number\n    errMsg = Err.Description\n    On Error Resume Next\n    CloseSketchIfOpen\n    gMsg = \"err \" & Trim(Str(errNum)) & \": \" & errMsg\n    BuildRevolve{index} = \"failed\"\nEnd Function\n\n",
         vb_lit(&format!("{message}; sweep direction and volume are acceptance checks"))
     ));
     out
@@ -1054,11 +1272,10 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
     let mut out = String::new();
     out.push_str(&format!("' Primitive step {index}: {}\n", vb_lit(&pr.name)));
     out.push_str(&format!(
-        "Function BuildPrim{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n    Dim dd As SldWorks.DisplayDimension\n    Dim seg As Variant\n    Dim sl As SldWorks.SketchLine\n    Dim ci As SldWorks.SketchCircle\n"
+        "Function BuildPrim{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim skFeat As SldWorks.Feature\n    Dim primName As String\n    Dim dm As SldWorks.Dimension\n    Dim dd As SldWorks.DisplayDimension\n    Dim seg As Variant\n    Dim sl As SldWorks.SketchLine\n    Dim ci As SldWorks.SketchCircle\n"
     ));
-    out.push_str("    ok = SelectOriginPlane(\"XY\")\n");
-    out.push_str("    If Not ok Then gMsg = \"could not select the Front (XY) origin plane; tree scan saw: \" & TreeSummary(): GoTo ExFail\n");
-    out.push_str("    swSketchMgr.InsertSketch True\n");
+    out.push_str("    ok = OpenSketchOnPlane(\"XY\")\n");
+    out.push_str("    If Not ok Then gMsg = \"no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: \" & gProbeLog & \"; tree scan saw: \" & TreeSummary(): GoTo ExFail\n");
     let (ox, oy) = (pr.origin[0] / 1000.0, pr.origin[1] / 1000.0);
     match pr.kind {
         PrimKind::Box => {
@@ -1093,10 +1310,12 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
             out.push_str(&emit_size(1, &pr.sizes[0], "the cylinder radius"));
         }
     }
-    out.push_str("    swDoc.ClearSelection2 True\n    swSketchMgr.InsertSketch True\n");
+    out.push_str(
+        "    Set skFeat = swSketchMgr.ActiveSketch\n    If skFeat Is Nothing Then gMsg = \"the primitive sketch was not created\": GoTo ExFail\n    primName = skFeat.Name\n    swDoc.ClearSelection2 True\n    swSketchMgr.InsertSketch True\n",
+    );
     // The blind extrude carries the last size (height).
     let height = pr.sizes.last().map(|s| s.value / 1000.0).unwrap_or(0.0);
-    out.push_str("    ok = swDoc.Extension.SelectByID2(swSketchMgr.ActiveSketch.Name, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n");
+    out.push_str("    ok = swDoc.Extension.SelectByID2(primName, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n");
     out.push_str(
         "    If Not ok Then gMsg = \"could not select the primitive sketch\": GoTo ExFail\n",
     );
@@ -1114,7 +1333,7 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
         out.push_str(&emit_size_eq(last, "the primitive height"));
     }
     out.push_str(&format!(
-        "    gMsg = \"primitive created\"\n    BuildPrim{index} = \"created\"\n    Exit Function\n\nExFail:\n    BuildPrim{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description\n    On Error Resume Next\n    BuildPrim{index} = \"failed\"\nEnd Function\n\n"
+        "    gMsg = \"primitive created\"\n    BuildPrim{index} = \"created\"\n    Exit Function\n\nExFail:\n    On Error Resume Next\n    CloseSketchIfOpen\n    BuildPrim{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    ' Capture the error FIRST: executing an On Error statement resets Err.\n    Dim errNum As Long, errMsg As String\n    errNum = Err.Number\n    errMsg = Err.Description\n    On Error Resume Next\n    CloseSketchIfOpen\n    gMsg = \"err \" & Trim(Str(errNum)) & \": \" & errMsg\n    BuildPrim{index} = \"failed\"\nEnd Function\n\n"
     ));
     out
 }
@@ -1330,10 +1549,13 @@ fn emit_pat_subs(index: usize, pt: &crate::replay::PatStep) -> String {
                 crate::replay::OriginPlane::Xz => "XZ",
                 crate::replay::OriginPlane::Yz => "YZ",
             };
-            out.push_str(&format!("    ok = SelectOriginPlane(\"{code}\")\n"));
-            out.push_str(
-                "    If Not ok Then gMsg = \"could not select the mirror plane; tree scan saw: \" & TreeSummary(): GoTo ExFail\n",
-            );
+            out.push_str(&format!("    gPlane = PlaneNameFor(\"{code}\")\n"));
+            out.push_str(&format!(
+                "    If gPlane = \"\" Then gMsg = \"no origin plane carries the {code} frame {desc}; probed: \" & gProbeLog & \"; tree scan saw: \" & TreeSummary(): GoTo ExFail\n",
+                desc = frame_desc(solidcraft_frame(*plane))
+            ));
+            out.push_str("    ok = swDoc.Extension.SelectByID2(gPlane, \"PLANE\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n");
+            out.push_str("    If Not ok Then gMsg = \"the mirror plane could not be selected\": GoTo ExFail\n");
             for seed in seeds {
                 out.push_str(&format!("    feat{seed}.Select True\n"));
             }

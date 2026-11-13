@@ -4,7 +4,7 @@
 # Review this script and corpus/compat-check/minimal.swb before running.
 
 param(
-    [string]$ExpectSha256 = "0448e4cc527c9cfb835e69a2853a7ac0c1cb50150cb5bd3f5cfbc59da04889cb"
+    [string]$ExpectSha256 = "966e4fd3cc2bba4922498473f9f88011aba2a79986f30715075f136e6c5b2c05"
 )
 
 $ErrorActionPreference = "Stop"

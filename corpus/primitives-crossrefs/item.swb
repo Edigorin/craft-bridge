@@ -7,6 +7,8 @@ Dim swDoc As SldWorks.ModelDoc2
 Dim swSketchMgr As SketchManager
 Dim reportPath As String
 Dim gMsg As String
+Dim gPlane As String
+Dim gProbeLog As String
 Dim regName(0 To 2) As String
 Dim feat2 As SldWorks.Feature
 Dim feat3 As SldWorks.Feature
@@ -28,6 +30,17 @@ Sub main()
     If reportPath = "" Then Err.Raise vbObjectError + 513, "craft-bridge", "no report path: CRAFT_BRIDGE_REPORT is unset and no path file exists in TEMP"
     StartReport
     WriteLine "{""type"":""header"",""macro"":""item.craftx"",""bridge_version"":""0.1.0""}"
+
+    ' ---- fresh part from the default template (before recipe step 0) ----
+Set swApp = Application.SldWorks
+template = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
+If template = "" Then Err.Raise vbObjectError + 514, "craft-bridge", "no default part template is configured"
+Set swDoc = swApp.NewDocument(template, 0, 0, 0)
+If swDoc Is Nothing Then Err.Raise vbObjectError + 515, "craft-bridge", "NewDocument returned nothing"
+Set swSketchMgr = swDoc.SketchManager
+If swSketchMgr Is Nothing Then Err.Raise vbObjectError + 521, "craft-bridge", "the sketch manager is unavailable"
+WriteStep stepIdx, "document.new", "created", "fresh part from the default template"
+
     ' ---- step 0: parameters.add ----
     stepIdx = 0
     If Not stopModel Then
@@ -94,10 +107,11 @@ End Sub
 Function BuildSketch1() As String
     On Error GoTo HardFail
     Dim ok As Boolean
-    ok = SelectOriginPlane("XY")
-    If Not ok Then gMsg = "could not select the XY origin plane; tree scan saw: " & TreeSummary(): GoTo SketchFailed
-    swSketchMgr.InsertSketch True
-    skName1 = swSketchMgr.ActiveSketch.Name
+    Dim skFeat As SldWorks.Feature
+    ok = OpenSketchOnPlane("XY")
+    If Not ok Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo SketchFailed
+    Set skFeat = swSketchMgr.ActiveSketch
+    skName1 = skFeat.Name
     DrawGeometry1
     If Not Relations1() Then GoTo Degrade
     If Not Dims1() Then GoTo Degrade
@@ -121,14 +135,18 @@ CleanSketch1
 
 SketchFailed:
     On Error Resume Next
-    swSketchMgr.InsertSketch True
+    CloseSketchIfOpen
     BuildSketch1 = "failed"
     Exit Function
 
 HardFail:
+    ' Capture the error FIRST: executing an On Error statement resets Err.
+    Dim errNum As Long, errMsg As String
+    errNum = Err.Number
+    errMsg = Err.Description
     On Error Resume Next
-    swSketchMgr.InsertSketch True
-    gMsg = Err.Description
+    CloseSketchIfOpen
+    gMsg = "err " & Trim(Str(errNum)) & ": " & errMsg
     BuildSketch1 = "failed"
 End Function
 
@@ -242,14 +260,15 @@ Function BuildPrim2() As String
     On Error GoTo HardFail
     Dim ok As Boolean
     Dim feat As SldWorks.Feature
+    Dim skFeat As SldWorks.Feature
+    Dim primName As String
     Dim dm As SldWorks.Dimension
     Dim dd As SldWorks.DisplayDimension
     Dim seg As Variant
     Dim sl As SldWorks.SketchLine
     Dim ci As SldWorks.SketchCircle
-    ok = SelectOriginPlane("XY")
-    If Not ok Then gMsg = "could not select the Front (XY) origin plane; tree scan saw: " & TreeSummary(): GoTo ExFail
-    swSketchMgr.InsertSketch True
+    ok = OpenSketchOnPlane("XY")
+    If Not ok Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo ExFail
     seg = swSketchMgr.CreateCornerRectangle(0.0, 0.0, 0#, 0.08, 0.02, 0#)
     Set sl = seg(0)
     sl.Select False
@@ -268,9 +287,12 @@ Function BuildPrim2() As String
     Set dm = dd.GetDimension2(0)
     If dm Is Nothing Then GoTo ExFail
     If Abs(dm.SystemValue - 0.02) > 0.000001 Then gMsg = "the box width does not match": GoTo ExFail
+    Set skFeat = swSketchMgr.ActiveSketch
+    If skFeat Is Nothing Then gMsg = "the primitive sketch was not created": GoTo ExFail
+    primName = skFeat.Name
     swDoc.ClearSelection2 True
     swSketchMgr.InsertSketch True
-    ok = swDoc.Extension.SelectByID2(swSketchMgr.ActiveSketch.Name, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    ok = swDoc.Extension.SelectByID2(primName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If Not ok Then gMsg = "could not select the primitive sketch": GoTo ExFail
     Set feat = swDoc.FeatureManager.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.01, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)
     If feat Is Nothing Then gMsg = "the primitive extrude was not created": GoTo ExFail
@@ -282,12 +304,19 @@ Function BuildPrim2() As String
     Exit Function
 
 ExFail:
+    On Error Resume Next
+    CloseSketchIfOpen
     BuildPrim2 = "failed"
     Exit Function
 
 HardFail:
-    gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description
+    ' Capture the error FIRST: executing an On Error statement resets Err.
+    Dim errNum As Long, errMsg As String
+    errNum = Err.Number
+    errMsg = Err.Description
     On Error Resume Next
+    CloseSketchIfOpen
+    gMsg = "err " & Trim(Str(errNum)) & ": " & errMsg
     BuildPrim2 = "failed"
 End Function
 
@@ -296,14 +325,15 @@ Function BuildPrim3() As String
     On Error GoTo HardFail
     Dim ok As Boolean
     Dim feat As SldWorks.Feature
+    Dim skFeat As SldWorks.Feature
+    Dim primName As String
     Dim dm As SldWorks.Dimension
     Dim dd As SldWorks.DisplayDimension
     Dim seg As Variant
     Dim sl As SldWorks.SketchLine
     Dim ci As SldWorks.SketchCircle
-    ok = SelectOriginPlane("XY")
-    If Not ok Then gMsg = "could not select the Front (XY) origin plane; tree scan saw: " & TreeSummary(): GoTo ExFail
-    swSketchMgr.InsertSketch True
+    ok = OpenSketchOnPlane("XY")
+    If Not ok Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo ExFail
     Set ci = swSketchMgr.CreateCircleByRadius(0.0, 0.0, 0#, 0.04)
     ci.Select False
     Set dd = swDoc.AddDimension2(0#, 0#, 0#)
@@ -312,9 +342,12 @@ Function BuildPrim3() As String
     If dm Is Nothing Then GoTo ExFail
     If Abs(dm.SystemValue - 0.04) > 0.000001 Then gMsg = "the cylinder radius does not match": GoTo ExFail
     If Not AddDimEquation(dm, """width""", 0.04, 2) Then gMsg = "the cylinder radius equation did not evaluate": GoTo ExFail
+    Set skFeat = swSketchMgr.ActiveSketch
+    If skFeat Is Nothing Then gMsg = "the primitive sketch was not created": GoTo ExFail
+    primName = skFeat.Name
     swDoc.ClearSelection2 True
     swSketchMgr.InsertSketch True
-    ok = swDoc.Extension.SelectByID2(swSketchMgr.ActiveSketch.Name, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    ok = swDoc.Extension.SelectByID2(primName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If Not ok Then gMsg = "could not select the primitive sketch": GoTo ExFail
     Set feat = swDoc.FeatureManager.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.005, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)
     If feat Is Nothing Then gMsg = "the primitive extrude was not created": GoTo ExFail
@@ -326,53 +359,189 @@ Function BuildPrim3() As String
     Exit Function
 
 ExFail:
+    On Error Resume Next
+    CloseSketchIfOpen
     BuildPrim3 = "failed"
     Exit Function
 
 HardFail:
-    gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description
+    ' Capture the error FIRST: executing an On Error statement resets Err.
+    Dim errNum As Long, errMsg As String
+    errNum = Err.Number
+    errMsg = Err.Description
     On Error Resume Next
+    CloseSketchIfOpen
+    gMsg = "err " & Trim(Str(errNum)) & ": " & errMsg
     BuildPrim3 = "failed"
 End Function
 
+Sub ClearSlotsAll()
+    Dim i As Long
+    For i = 0 To UBound(regName)
+        regName(i) = ""
+    Next i
+End Sub
+
 ' Write one step line and flush it to disk immediately.
-' Origin planes by tree position (Front, Top, Right): plane names are
-' localized, but RefPlane type names are not, and a fresh part always
-' lists the origin planes first.
-Function SelectOriginPlane(ByVal which As String) As Boolean
-Dim feat As SldWorks.Feature, n As Long, want As Long
-Select Case which
-Case "XY": want = 0
-Case "XZ": want = 1
-Case "YZ": want = 2
-Case Else: want = 0
-End Select
+' The plane whose sketch frame exactly matches the SolidCraft frame for the
+' requested plane: axes, signs, and the sketch origin at the model origin.
+' Plane names and tree positions are per config (one seat maps Front to the
+' ZY plane), so no name or position is trusted; and verbatim (u, v) replay
+' only lands coordinates where they belong on the frame the recipe implies.
+' Anything else is refused and fails closed - coordinates are never
+' silently reinterpreted (docs/mapping.md, Orientation). The probe leaves
+' the sketch open on success. On failure the probe sketch is closed,
+' deleted as one owned feature, and the deletion is verified.
+Function OpenSketchOnPlane(ByVal which As String) As Boolean
+Dim feat As SldWorks.Feature, skFeat As SldWorks.Feature, ok As Boolean
 Set feat = swDoc.FirstFeature
 Do While Not feat Is Nothing
-If feat.GetTypeName2() = "RefPlane" Then
-If n = want Then
-SelectOriginPlane = feat.Select(False)
+If InStr(1, feat.GetTypeName2(), "lane", vbTextCompare) > 0 Then
+ok = feat.Select(False)
+If ok Then
+swSketchMgr.InsertSketch True
+Set skFeat = swSketchMgr.ActiveSketch
+If skFeat Is Nothing Then
+gProbeLog = gProbeLog & feat.Name & ": no sketch opened; "
+ElseIf SketchFrameIs(which) Then
+OpenSketchOnPlane = True
 Exit Function
+Else
+gProbeLog = gProbeLog & feat.Name & ": " & FrameText() & "; "
+If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, "craft-bridge", "the probe sketch could not be deleted"
 End If
-n = n + 1
+End If
 End If
 Set feat = feat.GetNextFeature
 Loop
-SelectOriginPlane = False
+OpenSketchOnPlane = False
 End Function
-' The first feature type names in the tree: the report names what the
-' scan actually saw when plane selection fails.
+
+' The plane feature's own runtime name (never assumed) for call shapes that
+' need the plane selected as a FEATURE, like mirrors. The probe sketch is
+' discarded: the mirror needs the plane, not a sketch.
+Function PlaneNameFor(ByVal which As String) As String
+Dim feat As SldWorks.Feature, skFeat As SldWorks.Feature, ok As Boolean
+Set feat = swDoc.FirstFeature
+Do While Not feat Is Nothing
+If InStr(1, feat.GetTypeName2(), "lane", vbTextCompare) > 0 Then
+ok = feat.Select(False)
+If ok Then
+swSketchMgr.InsertSketch True
+Set skFeat = swSketchMgr.ActiveSketch
+If skFeat Is Nothing Then
+gProbeLog = gProbeLog & feat.Name & ": no sketch opened; "
+ElseIf SketchFrameIs(which) Then
+If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, "craft-bridge", "the probe sketch could not be deleted"
+PlaneNameFor = feat.Name
+Exit Function
+Else
+gProbeLog = gProbeLog & feat.Name & ": " & FrameText() & "; "
+If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, "craft-bridge", "the probe sketch could not be deleted"
+End If
+End If
+End If
+Set feat = feat.GetNextFeature
+Loop
+End Function
+
+' The sketch frame must equal the SolidCraft frame for the plane exactly:
+' u and v along the named model axes (with the signs u x v gives for the
+' normal), and the sketch origin at the model origin. The model-to-sketch
+' transform is row-major with rows = model axes in sketch coordinates, so
+' the sketch axes in model coordinates are its columns - the inverse
+' transform of the sketch unit vectors: u = (a0, a3, a6),
+' v = (a1, a4, a7), n = (a2, a5, a8) - and the translation
+' (a9, a10, a11) is the model origin in sketch coordinates, which must
+' vanish. Pinned against non-symmetric frames in tests/build_tests.rs.
+Function SketchFrameIs(ByVal which As String) As Boolean
+Dim tr As Variant, a As Variant, ok As Boolean
+On Error Resume Next
+Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
+If Err.Number <> 0 Then Exit Function
+a = tr.ArrayData
+If Abs(a(9)) > 0.000001 Or Abs(a(10)) > 0.000001 Or Abs(a(11)) > 0.000001 Then Exit Function
+Select Case which
+Case "XY"
+ok = VecIs(a(0), a(3), a(6), 1#, 0#, 0#) And VecIs(a(1), a(4), a(7), 0#, 1#, 0#) And VecIs(a(2), a(5), a(8), 0#, 0#, 1#)
+Case "XZ"
+ok = VecIs(a(0), a(3), a(6), 1#, 0#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, 1#) And VecIs(a(2), a(5), a(8), 0#, -1#, 0#)
+Case "YZ"
+ok = VecIs(a(0), a(3), a(6), 0#, 1#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, 1#) And VecIs(a(2), a(5), a(8), 1#, 0#, 0#)
+End Select
+SketchFrameIs = ok
+End Function
+
+' Direction equality with sign, on normalized vectors: the transform may
+' carry a uniform scale, the axes must still be exactly the expected ones.
+Function VecIs(ByVal ax As Double, ByVal ay As Double, ByVal az As Double, ByVal bx As Double, ByVal by As Double, ByVal bz As Double) As Boolean
+Dim L As Double
+L = Sqr(ax * ax + ay * ay + az * az)
+If Abs(L) < 0.000001 Then Exit Function
+VecIs = Abs(ax / L - bx) < 0.000001 And Abs(ay / L - by) < 0.000001 And Abs(az / L - bz) < 0.000001
+End Function
+
+' The active sketch's frame as report text: the fail-closed messages name
+' exactly what each probed plane offered.
+Function FrameText() As String
+Dim tr As Variant, a As Variant
+On Error Resume Next
+Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
+If Err.Number <> 0 Then FrameText = "(no frame)": Exit Function
+a = tr.ArrayData
+FrameText = "u=(" & Vec3Text(a(0), a(3), a(6)) & ") v=(" & Vec3Text(a(1), a(4), a(7)) & ") n=(" & Vec3Text(a(2), a(5), a(8)) & ") o=(" & Vec3Text(a(9), a(10), a(11)) & ")"
+End Function
+
+Function Vec3Text(ByVal x As Double, ByVal y As Double, ByVal z As Double) As String
+Vec3Text = Trim(Str(x)) & "," & Trim(Str(y)) & "," & Trim(Str(z))
+End Function
+
+' Close the probe sketch and delete exactly the feature that was created
+' for it - never a blind EditDelete. Closing an empty sketch may already
+' have removed it; deletion is then unnecessary. The deletion is verified:
+' if the feature still selects afterwards it leaked, and the caller fails
+' closed. True = the probe sketch is confirmed gone.
+Function DiscardProbeSketch(ByVal skFeat As SldWorks.Feature) As Boolean
+Dim ok As Boolean
+On Error Resume Next
+swSketchMgr.InsertSketch True
+ok = skFeat.Select(False)
+If ok Then
+swDoc.EditDelete
+Err.Clear
+ok = False
+ok = skFeat.Select(False)
+If ok Then swDoc.ClearSelection2 True
+End If
+DiscardProbeSketch = Not ok
+End Function
+
+' Close the sketch only if one is actually open: InsertSketch toggles, so a
+' blind call would open a new sketch when none is active.
+Sub CloseSketchIfOpen()
+Dim sk As Object
+On Error Resume Next
+Set sk = swSketchMgr.ActiveSketch
+If Not sk Is Nothing Then swSketchMgr.InsertSketch True
+End Sub
+
+' The first feature type names in the tree: the report names what the scan
+' actually saw when plane selection fails.
 Function TreeSummary() As String
-Dim feat As SldWorks.Feature, s As String, i As Long
+Dim feat As SldWorks.Feature, s As String, planes As String, i As Long
 On Error Resume Next
 Set feat = swDoc.FirstFeature
-Do While Not feat Is Nothing And i < 8
-s = s & feat.GetTypeName2() & " "
+Do While Not feat Is Nothing And i < 300
+If InStr(1, feat.GetTypeName2(), "lane", vbTextCompare) > 0 Then
+planes = planes & feat.GetTypeName2() & "/" & feat.Name & " "
+End If
+If i < 10 Then s = s & feat.GetTypeName2() & " "
 i = i + 1
 Set feat = feat.GetNextFeature
 Loop
-TreeSummary = Trim(s)
+TreeSummary = Trim(Str(i)) & " features; plane-like: [" & Trim(planes) & "]; first: " & s
 End Function
+
 ' Truncate the report so this run never inherits a previous run's lines.
 Sub StartReport()
 On Error Resume Next
@@ -420,7 +589,7 @@ Line Input #f, oneLine
 Close #f
 If Err.Number = 0 Then ReportPathFromHost = Trim(oneLine)
 End If
-End Sub
+End Function
 
 ' The directory of the macro (its sidecar snapshots live there): the
 ' second line of the host's path file.

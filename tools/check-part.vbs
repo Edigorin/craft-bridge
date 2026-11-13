@@ -32,13 +32,24 @@ Dim fso
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set outFile = fso.CreateTextFile(outPath, True)
 
+' VBScript has no Str(); CStr follows the host locale's decimal separator.
+' Normalize to a period so the report parses anywhere. The separator is
+' extracted from CStr(1.5) rather than assumed.
+Function NumStr(ByVal n)
+  Dim s, sep
+  s = CStr(n)
+  sep = Replace(Replace(CStr(1.5), "1", ""), "5", "")
+  If sep <> "." And sep <> "" Then s = Replace(s, sep, ".")
+  NumStr = s
+End Function
+
 ' ---- the rebuilt part's mass properties ----
 Dim rebuiltVol, mp
 Err.Clear
 Set mp = swDoc.Extension.CreateMassProperty()
 If Err.Number = 0 Then
   rebuiltVol = mp.Volume
-  outFile.WriteLine "volume:rebuilt=" & Trim(Str(rebuiltVol))
+  outFile.WriteLine "volume:rebuilt=" & NumStr(rebuiltVol)
 Else
   outFile.WriteLine "check:mass=fail"
   outFile.WriteLine "detail:mass=cannot read the rebuilt part's mass properties: " & Err.Description
@@ -68,18 +79,17 @@ Do While Not featWalk Is Nothing
   treeCount = treeCount + 1
   Set featWalk = featWalk.GetNextFeature
 Loop
-outFile.WriteLine "detail:tree_count=" & Trim(Str(treeCount))
+outFile.WriteLine "detail:tree_count=" & NumStr(treeCount)
 If treeCount >= minFeatures Then
   outFile.WriteLine "check:tree_count=pass"
 Else
   outFile.WriteLine "check:tree_count=fail"
-  outFile.WriteLine "detail:tree_count=expected at least " & Trim(Str(minFeatures))
+  outFile.WriteLine "detail:tree_count=expected at least " & NumStr(minFeatures)
 End If
 
 If skipVolume Then
   outFile.WriteLine "check:mass=skipped"
 End If
-Dim refDoc, refVol
 If Not skipVolume Then
 Err.Clear
 Set refDoc = swApp.LoadFile4(stepPath, "r", Nothing, "")
@@ -90,13 +100,13 @@ Else
   Set mp = refDoc.Extension.CreateMassProperty()
   If Err.Number = 0 Then
     refVol = mp.Volume
-    outFile.WriteLine "volume:step_reference=" & Trim(Str(refVol))
+    outFile.WriteLine "volume:step_reference=" & NumStr(refVol)
     If rebuiltVol > 0 And refVol > 0 Then
       If Abs(rebuiltVol - refVol) / refVol < 0.001 Then
         outFile.WriteLine "check:mass_vs_reference=pass"
       Else
         outFile.WriteLine "check:mass_vs_reference=fail"
-        outFile.WriteLine "detail:mass_vs_reference=rebuilt " & Trim(Str(rebuiltVol)) & " reference " & Trim(Str(refVol))
+        outFile.WriteLine "detail:mass_vs_reference=rebuilt " & NumStr(rebuiltVol) & " reference " & NumStr(refVol)
       End If
     End If
   End If
@@ -107,7 +117,7 @@ End If
 ' harness decides per item whether the comparison applies.
 
 ' ---- expected features and dimensions ----
-Dim feat As Object
+Dim feat
 On Error Resume Next
 Const swDocPART = 1
 Dim walkFso
@@ -140,11 +150,11 @@ Do Until f.AtEndOfStream
         Err.Clear
         Set dp = swDoc.Parameter(dimName)
         If Err.Number = 0 And Not dp Is Nothing Then
-          If Abs(dp.SystemValue - CDbl(parts(1))) < 0.000001 Then
+          If Abs(dp.SystemValue - Val(parts(1))) < 0.000001 Then
             outFile.WriteLine "check:dim:" & dimName & "=pass"
           Else
             outFile.WriteLine "check:dim:" & dimName & "=fail"
-            outFile.WriteLine "detail:dim:" & dimName & "=value " & Trim(Str(dp.SystemValue)) & " expected " & parts(1)
+            outFile.WriteLine "detail:dim:" & dimName & "=value " & NumStr(dp.SystemValue) & " expected " & parts(1)
           End If
         Else
           outFile.WriteLine "check:dim:" & dimName & "=fail"

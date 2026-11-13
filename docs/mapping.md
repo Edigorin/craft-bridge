@@ -118,7 +118,7 @@ solved value with the binding reported as a degrade trigger.
 
 | SolidCraft | SolidWorks API | Checkpoint-verified |
 |---|---|---|
-| `type: "sketch"`, `plane: {type:"origin", name:"XY"\|"XZ"\|"YZ"}` | `SelectByID2` on the matching origin plane (see Orientation), `SketchManager.InsertSketch True` | partial |
+| `type: "sketch"`, `plane: {type:"origin", name:"XY"\|"XZ"\|"YZ"}` | probe for the origin plane carrying the SolidCraft frame (see Orientation), `SketchManager.InsertSketch True` on it | partial |
 | `points[]`: `{"id", "pos": [u, v] (mm), "fixed"}` | entity endpoints drawn at `u/1000, v/1000, 0` metres | yes |
 | `curves[]` line: `{"id","type":"line","a","b","construction"}` (a/b: **indices into points[]**) | `SketchManager.CreateLine(x1,y1,0,x2,y2,0)` | yes |
 | `curves[]` circle: `{"id","type":"circle","c","r","construction"}` | `SketchManager.CreateCircleByRadius(cx,cy,0,r)` | yes |
@@ -135,11 +135,32 @@ solved value with the binding reported as a degrade trigger.
 | any other relation type (`pattern_point`, `point_along`, `pierce`, `symmetric`, `arc_sweep`, …) | **degrade trigger**: recorded, never silently dropped | n/a |
 | any other entity (`arc`, `spline`, `ellipse`, `conic`) | **degrade trigger** for the tracer phase | n/a |
 
-**Orientation:** SolidCraft is Z-up, SolidWorks is Y-up. Sketch-space
-coordinates are replayed verbatim (u, v) on the role-matching origin plane
-(XY→Front, XZ→Top, YZ→Right), so the *shape* is exact and the world
-orientation is SolidWorks-native. Preserving the original world orientation is
-a later nicety, not part of fidelity.
+**Orientation (the frame contract):** SolidCraft is Z-up, SolidWorks is
+Y-up, and a seat's origin planes are not portable: one seat maps Front to
+the ZY plane, names are localized, and tree positions vary. So the target
+plane is found by **probing**, never by name, role or tree position: the
+macro opens a throwaway sketch on each plane-like feature and reads its
+frame from `ModelToSketchTransform` (the sketch axes in model coordinates
+are the columns of the rotation; the translation is the model origin in
+sketch coordinates). The plane is accepted only when that frame **exactly
+equals** the SolidCraft frame for the plane — axes, signs, and sketch origin
+at the model origin:
+
+| SolidCraft plane | sketch u | sketch v | normal (u x v) |
+|---|---|---|---|
+| `XY` | +X | +Y | +Z |
+| `XZ` | +X | +Z | -Y |
+| `YZ` | +Y | +Z | +X |
+
+That equality is what "verbatim (u, v)" promises: coordinates land where
+they land in SolidCraft. A plane with the right normal but a different
+in-plane orientation, or an offset origin, is **refused** and the step fails
+closed; the report names every probed plane's observed frame so the mismatch
+is legible. Coordinates are never silently reinterpreted, and full
+coordinate equivalence is never claimed beyond this verified frame (plan
+review 2026-11: the earlier role-matching text conflicted with the probe
+and is gone). Preserving the original *view* orientation in SolidWorks is a
+later nicety, not part of fidelity.
 
 **Solve verification (runtime):** after relations and driving dimensions are
 added, the macro reads the solved geometry back (line endpoints via

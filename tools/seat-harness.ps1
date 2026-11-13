@@ -47,12 +47,13 @@ foreach ($item in $items) {
         $stepRef = Join-Path $item.FullName "reference.step"
         Write-Host "== $name"
 
-        # Provenance: tracked, unmodified, byte-verified.
+        # Provenance: tracked, unmodified against HEAD (staged changes count
+        # as uncommitted here), byte-verified.
         $rel = $macro.Substring($RepoRoot.Length).TrimStart("\", "/") -replace "\\", "/"
         git -C $RepoRoot ls-files --error-unmatch -- $rel 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "${name}: $rel is not a committed file" }
-        git -C $RepoRoot diff --quiet -- $rel
-        if ($LASTEXITCODE -ne 0) { throw "${name}: $rel has uncommitted changes" }
+        git -C $RepoRoot diff HEAD --quiet -- $rel
+        if ($LASTEXITCODE -ne 0) { throw "${name}: $rel differs from HEAD (commit it first)" }
         $sha = (Get-FileHash -Algorithm SHA256 $macro).Hash.ToLower()
         $expectSha = (Select-String -Path $expect -Pattern "^sha256=").Line -replace "^sha256=", ""
         if ($sha -ne $expectSha.ToLower()) { throw "${name}: sha256 $sha != $expectSha" }
@@ -63,18 +64,38 @@ foreach ($item in $items) {
         Set-Content -Path $pathFile -Value @($itemReport, $item.FullName)
 
         $proc = Start-Process -FilePath "cscript" -ArgumentList @("//nologo", (Join-Path $PSScriptRoot "run-macro.vbs"), $macro) -NoNewWindow -PassThru -RedirectStandardOutput (Join-Path $ReportDir "$name-runner.log") -RedirectStandardError (Join-Path $ReportDir "$name-runner.err.log")
-        if (-not $proc.WaitForExit(300000)) { $proc.Dispose(); throw "${name}: the macro runner timed out" }
+        if (-not $proc.WaitForExit(300000)) {
+            $proc.Dispose()
+            Write-Host "  TIMEOUT: the macro runner is still connected to SolidWorks"
+            Write-Host "  stopping the seat run: resolve the outstanding operation in SolidWorks, then rerun"
+            $results += [ordered]@{ item = $name; passed = $false; error = "macro runner timed out; seat run stopped" }
+            $failed++
+            break
+        }
+        if ($proc.ExitCode -ne 0) { throw "${name}: run-macro.vbs exited $($proc.ExitCode)" }
         if (-not (Test-Path $itemReport)) { throw "${name}: no runtime report" }
-        $lines = Get-Content $itemReport
-        if (-not ($lines[-1] -match '"type":"summary"')) { throw "${name}: truncated runtime report" }
+        $lines = @(Get-Content $itemReport)
+        if ($lines.Count -eq 0 -or -not ($lines[-1] -match '"type":"summary"')) { throw "${name}: truncated runtime report" }
         $bad = @($lines | Where-Object { $_ -match '"status":"failed"' })
         if ($bad.Count -gt 0) { Write-Host "  runtime: FAILED steps" } else { Write-Host "  runtime: complete" }
 
-        # Save the rebuilt part as evidence and check it.
+        # Check the rebuilt part: fresh evidence only - an old checks file is
+        # removed first and an empty or malformed one is a failure.
         $checkOut = Join-Path $ReportDir "$name-checks.txt"
+        if (Test-Path $checkOut) { Remove-Item $checkOut }
         $proc = Start-Process -FilePath "cscript" -ArgumentList @("//nologo", (Join-Path $PSScriptRoot "check-part.vbs"), $expect, $stepRef, $checkOut) -NoNewWindow -PassThru -RedirectStandardOutput (Join-Path $ReportDir "$name-check.log") -RedirectStandardError (Join-Path $ReportDir "$name-check.err.log")
-        if (-not $proc.WaitForExit(300000)) { $proc.Dispose(); throw "${name}: the checker timed out" }
-        $checks = if (Test-Path $checkOut) { Get-Content $checkOut } else { @("check:checker=failed") }
+        if (-not $proc.WaitForExit(300000)) {
+            $proc.Dispose()
+            Write-Host "  TIMEOUT: the checker is still connected to SolidWorks"
+            Write-Host "  stopping the seat run: resolve the outstanding operation in SolidWorks, then rerun"
+            $results += [ordered]@{ item = $name; passed = $false; error = "checker timed out; seat run stopped" }
+            $failed++
+            break
+        }
+        if ($proc.ExitCode -ne 0) { throw "${name}: check-part.vbs exited $($proc.ExitCode)" }
+        if (-not (Test-Path $checkOut) -or (Get-Item $checkOut).Length -eq 0) { throw "${name}: the checker wrote no evidence" }
+        $checks = @(Get-Content $checkOut)
+        if (@($checks | Where-Object { $_ -notmatch '^(check|detail|volume):' }).Count -gt 0) { throw "${name}: malformed checker evidence" }
         $itemFailed = ($bad.Count -gt 0) -or (@($checks | Where-Object { $_ -match '=fail' }).Count -gt 0)
         if ($itemFailed) { $failed++ }
         $results += [ordered]@{ item = $name; runtime_ok = ($bad.Count -eq 0); checks = $checks; passed = -not $itemFailed }

@@ -397,8 +397,16 @@ fn mirrors_replay_over_verified_native_seeds() {
         "the seed never registers"
     );
     assert!(
-        macro_text.contains("SelectOriginPlane(\"XY\")"),
-        "the origin mirror plane is not selected"
+        macro_text.contains("gPlane = PlaneNameFor(\"XY\")"),
+        "the origin mirror plane is not probed"
+    );
+    assert!(
+        macro_text.contains("If gPlane = \"\" Then"),
+        "the empty probe result is not guarded"
+    );
+    assert!(
+        macro_text.contains("SelectByID2(gPlane, \"PLANE\""),
+        "the probe-read plane name is not selected"
     );
     let outcome = case.build_to("pat2.swb", false).unwrap();
     assert_eq!(outcome.plan.steps[2].status, PlanStatus::Mapped);
@@ -420,6 +428,73 @@ fn body_patterns_and_feature_patterns_are_honest_stops() {
     );
     let steps = plan_of(&recipe);
     assert_eq!(steps[2].status, PlanStatus::FallbackPlanned);
+}
+
+#[test]
+fn equation_free_macros_declare_their_shared_state() {
+    // A recipe with no equations at all: AddDimEquation and the fallback
+    // helpers still reference regName/ClearSlotsAll, so the generated module
+    // must declare and define them unconditionally (plan review).
+    let recipe = r#"{
+      "about": { "design": "Plain", "format": "solidcraft/53", "replay": "craft-bridge build", "version": "0.40.0-rc.4" },
+      "commands": [
+        { "command": "document.units", "params": { "units": "mm" } },
+        {
+          "command": "timeline.add",
+          "params": {
+            "feature": {
+              "id": 1,
+              "name": "Profile",
+              "plane": { "name": "XY", "type": "origin" },
+              "sketch": {
+                "constraints": [
+                  { "id": "k1", "l": 0, "type": "horizontal" },
+                  { "id": "k2", "l": 1, "type": "vertical" }
+                ],
+                "counters": { "k": 2, "l": 4, "p": 4 },
+                "curves": [
+                  { "a": 0, "b": 1, "construction": false, "id": "l1", "type": "line" },
+                  { "a": 1, "b": 2, "construction": false, "id": "l2", "type": "line" },
+                  { "a": 2, "b": 3, "construction": false, "id": "l3", "type": "line" },
+                  { "a": 3, "b": 0, "construction": false, "id": "l4", "type": "line" }
+                ],
+                "points": [
+                  { "fixed": true, "id": "origin", "pos": [0.0, 0.0] },
+                  { "id": "p1", "pos": [40.0, 0.0] },
+                  { "id": "p2", "pos": [40.0, 20.0] },
+                  { "id": "p3", "pos": [0.0, 20.0] }
+                ]
+              },
+              "suppressed": false,
+              "type": "sketch"
+            }
+          }
+        }
+      ]
+    }"#;
+    let case = Case::new(recipe);
+    case.build_to("plain.swb", false).unwrap();
+    let macro_text = fs::read_to_string(case.dir.path().join("plain.swb")).unwrap();
+    assert!(
+        macro_text.contains("Dim regName(0 To 0) As String"),
+        "regName is not declared for an equation-free recipe"
+    );
+    assert!(
+        macro_text.contains("Sub ClearSlotsAll()"),
+        "ClearSlotsAll is not defined for an equation-free recipe"
+    );
+    // Finding 1a: a Function closed by End Sub is a VBA compile error.
+    let host_body = macro_text
+        .split("Function ReportPathFromHost() As String")
+        .nth(1)
+        .expect("no ReportPathFromHost")
+        .split("Function MacroDirFromHost()")
+        .next()
+        .unwrap();
+    assert!(
+        host_body.contains("End Function") && !host_body.contains("End Sub"),
+        "ReportPathFromHost is not closed with End Function"
+    );
 }
 
 #[test]
@@ -462,6 +537,10 @@ fn fallback_snapshots_produce_sidecars_and_fallback_builders() {
     assert!(macro_text.contains("Fallback1()"), "no fallback builder");
     assert!(macro_text.contains("ImportFile"), "no snapshot import");
     assert!(macro_text.contains("DeleteCreated"), "no pre-step restore");
+    assert!(
+        macro_text.contains("Sub ClearSlotsAll()"),
+        "the slot-invalidation helper is not defined"
+    );
     assert!(
         macro_text.contains("ClearSlotsAll"),
         "stale bindings are not invalidated"
@@ -524,4 +603,247 @@ fn artifacts_without_snapshots_report_the_missing_fallback() {
     let macro_text = fs::read_to_string(case.dir.path().join("nosnap.swb")).unwrap();
     assert!(macro_text.contains("replay terminates here"));
     assert!(!macro_text.contains("ImportFile"));
+}
+
+// ---- plane frames: the model-to-sketch transform derivation ----
+
+/// Build one `ModelToSketchTransform.ArrayData` from a known sketch frame
+/// (u, v, normal in model coordinates) and origin offset. Rows of the
+/// rotation are model axes in sketch coordinates, so its columns are the
+/// sketch axes in model coordinates: element (i, j) = axis_j[i].
+fn array_data_from_frame(u: [f64; 3], v: [f64; 3], n: [f64; 3], o: [f64; 3]) -> [f64; 16] {
+    let axes = [u, v, n];
+    let mut a = [0.0; 16];
+    for i in 0..3 {
+        for j in 0..3 {
+            a[3 * i + j] = axes[j][i];
+        }
+    }
+    a[9] = o[0];
+    a[10] = o[1];
+    a[11] = o[2];
+    a[12] = 1.0;
+    a
+}
+
+#[test]
+fn sketch_frame_extraction_follows_the_inverse_transform() {
+    use swb::{sketch_frame_from_array_data, sketch_origin_from_array_data};
+
+    // Identity: the sketch frame is the model frame.
+    let a = array_data_from_frame(
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, 0.0],
+    );
+    assert_eq!(
+        sketch_frame_from_array_data(&a),
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    );
+
+    // Non-symmetric axis permutation (u=Y, v=Z, n=X): the cyclic case a
+    // misconfigured seat produces. The naive read of the third ROW of the
+    // model-to-sketch rotation gives (0, 0, 1) here, not the true normal
+    // (1, 0, 0) - the extraction must follow the columns.
+    let a = array_data_from_frame(
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+    );
+    let frame = sketch_frame_from_array_data(&a);
+    assert_eq!(frame, [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]);
+    assert_ne!(
+        frame[2],
+        [a[6], a[7], a[8]],
+        "row read is wrong for this frame"
+    );
+
+    // Signed axes, the other cyclic permutation (u=Z, v=X, n=Y).
+    let a = array_data_from_frame(
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0],
+    );
+    assert_eq!(
+        sketch_frame_from_array_data(&a),
+        [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+    );
+
+    // A frame with sign flips (u=X, v=-Y, n=-Z).
+    let a = array_data_from_frame(
+        [1.0, 0.0, 0.0],
+        [0.0, -1.0, 0.0],
+        [0.0, 0.0, -1.0],
+        [0.0, 0.0, 0.0],
+    );
+    assert_eq!(
+        sketch_frame_from_array_data(&a),
+        [[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]]
+    );
+
+    // The translation is read back as the model origin in sketch
+    // coordinates: a nonzero value means verbatim coordinates would land
+    // shifted, and the probe fails closed on it.
+    let a = array_data_from_frame(
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.01, -0.02, 0.03],
+    );
+    assert_eq!(sketch_origin_from_array_data(&a), [0.01, -0.02, 0.03]);
+
+    // A uniform scale in element 12 scales the extracted axes, which the
+    // probe tolerates by comparing directions after normalization.
+    let mut a = array_data_from_frame(
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+    );
+    for x in a.iter_mut().take(9) {
+        *x *= 2.0;
+    }
+    a[12] = 2.0;
+    let frame = sketch_frame_from_array_data(&a);
+    let n = frame[2];
+    let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+    assert_eq!([n[0] / len, n[1] / len, n[2] / len], [1.0, 0.0, 0.0]);
+}
+
+#[test]
+fn solidcraft_frames_are_right_handed_unit_axes() {
+    use replay::OriginPlane;
+    use swb::solidcraft_frame;
+    for plane in [OriginPlane::Xy, OriginPlane::Xz, OriginPlane::Yz] {
+        let [u, v, n] = solidcraft_frame(plane);
+        for axis in [u, v, n] {
+            let len = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+            assert!((len - 1.0).abs() < 1e-12, "axes must be unit length");
+        }
+        assert!(
+            u[0] * v[0] + u[1] * v[1] + u[2] * v[2] == 0.0,
+            "u must be perpendicular to v"
+        );
+        let cross = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
+        assert_eq!(cross, n, "the normal must be u x v (right-handed)");
+    }
+    // The documented table (docs/mapping.md, Orientation).
+    assert_eq!(
+        swb::solidcraft_frame(replay::OriginPlane::Xy),
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    );
+    assert_eq!(
+        swb::solidcraft_frame(replay::OriginPlane::Xz),
+        [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]]
+    );
+    assert_eq!(
+        swb::solidcraft_frame(replay::OriginPlane::Yz),
+        [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]
+    );
+}
+
+#[test]
+fn plane_probing_is_frame_checked_and_owns_its_probe_sketch() {
+    let case = Case::new(TRACER);
+    case.build_to("frame.swb", false).unwrap();
+    let macro_text = fs::read_to_string(case.dir.path().join("frame.swb")).unwrap();
+    // The derivation: the sketch axes are the columns of the rotation, the
+    // origin is the translation.
+    assert!(
+        macro_text.contains("VecIs(a(0), a(3), a(6), 1#, 0#, 0#)"),
+        "the u axis is not read as the first column"
+    );
+    assert!(
+        macro_text.contains("VecIs(a(2), a(5), a(8), 0#, 0#, 1#)"),
+        "the normal is not read as the third column"
+    );
+    assert!(
+        macro_text
+            .contains("Abs(a(9)) > 0.000001 Or Abs(a(10)) > 0.000001 Or Abs(a(11)) > 0.000001"),
+        "the probe does not reject planes that miss the model origin"
+    );
+    // Probe ownership: delete exactly the created feature and verify it.
+    assert!(
+        macro_text.contains("Function DiscardProbeSketch"),
+        "the probe sketch is not owned"
+    );
+    assert!(
+        macro_text.contains("Sub CloseSketchIfOpen()"),
+        "cleanup is not guarded by active-sketch state"
+    );
+    // Fail-closed messages name the observed frames.
+    assert!(
+        macro_text.contains("& gProbeLog &"),
+        "the failure report does not name the probed frames"
+    );
+    // Sketch failure errors are captured before cleanup runs.
+    let hard_fail = macro_text.find("HardFail:").expect("no HardFail");
+    let region = &macro_text[hard_fail..];
+    let capture = region
+        .find("errNum = Err.Number")
+        .expect("no error capture");
+    let cleanup = region
+        .find("CloseSketchIfOpen")
+        .expect("no guarded cleanup");
+    assert!(
+        capture < cleanup,
+        "cleanup must not run before the error is captured"
+    );
+}
+
+#[test]
+fn generated_macros_bootstrap_the_document_before_the_recipe() {
+    let case = Case::new(TRACER);
+    case.build_to("boot.swb", false).unwrap();
+    let macro_text = fs::read_to_string(case.dir.path().join("boot.swb")).unwrap();
+    let boot = macro_text
+        .find("Set swApp = Application.SldWorks")
+        .expect("no bootstrap");
+    let first_step = macro_text.find("stepIdx = 0").expect("no recipe step 0");
+    assert!(
+        boot < first_step,
+        "the bootstrap must precede recipe step 0"
+    );
+    assert!(
+        macro_text.contains("swUserPreferenceStringValue_e.swDefaultTemplatePart"),
+        "the template enum is not spelled fully qualified"
+    );
+    assert!(
+        macro_text.contains("Set swSketchMgr = swDoc.SketchManager"),
+        "the sketch manager is not initialized"
+    );
+    assert!(
+        macro_text.contains("If swSketchMgr Is Nothing Then"),
+        "the sketch manager initialization is not validated"
+    );
+    assert!(
+        macro_text.contains("WriteStep stepIdx, \"document.new\", \"created\""),
+        "the bootstrap is not reported to the runtime log"
+    );
+}
+
+#[test]
+fn checkpoint_tracks_the_verified_conventions() {
+    let checkpoint = include_str!("../corpus/compat-check/minimal.swb");
+    // Finding 6: the dimension is captured from the AddDimension2 return,
+    // never by a name that probe-sketch creation could shift.
+    assert!(
+        !checkpoint.contains("D1@Sketch1"),
+        "the checkpoint still assumes sketch numbering"
+    );
+    assert!(
+        checkpoint.contains("dd.GetDimension2(0)"),
+        "the checkpoint does not capture the created dimension"
+    );
+    // The checkpoint probes with the same frame contract as the generator.
+    assert!(checkpoint.contains("Function SketchFrameIs"));
+    assert!(checkpoint.contains("Function DiscardProbeSketch"));
+    assert!(checkpoint.contains("VecIs(a(2), a(5), a(8)"));
 }
