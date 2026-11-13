@@ -26,7 +26,20 @@ if (-not $items) { throw "no corpus items found under $corpus" }
 
 $results = @()
 $failed = 0
+
+# Probe 0: plain VBScript can write the report where the macros must.
+$probeReport = Join-Path $ReportDir "probe-report.jsonl"
+$env:CRAFT_BRIDGE_REPORT = $probeReport
+if (Test-Path $probeReport) { Remove-Item $probeReport }
+$probeOut = & cscript //nologo (Join-Path $PSScriptRoot "seat-probe.vbs") 2>&1 | ForEach-Object { "$_" }
+$probeOk = (Test-Path $probeReport) -and ((Get-Content $probeReport | Select-String -Pattern 'summary' -Quiet))
+Write-Host "== probe (plain VBScript report write): $(if ($probeOk) { 'ok' } else { 'FAILED' })"
+$probeOut | ForEach-Object { Write-Host "  $_" }
+$results += [ordered]@{ item = "probe-vbs-report-write"; passed = [bool]$probeOk; output = @($probeOut) }
+if (-not $probeOk) { $failed++ }
+$probeLog = $null
 foreach ($item in $items) {
+  try {
     $name = $item.Name
     $macro = Join-Path $item.FullName "item.swb"
     $expect = Join-Path $item.FullName "expect.txt"
