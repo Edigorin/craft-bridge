@@ -1314,3 +1314,57 @@ fn emitted_modules_are_structurally_sound() {
         "checkpoint",
     );
 }
+
+/// Mirrors the emitted CloseMode VBA semantics line by line - the one-line
+/// counterexample must never authorize a close, and a clean two-line EOF
+/// means keep-open. The emitted-text assertion pins the header guard that
+/// makes this mirror true.
+fn close_mode_of(lines: &[&str]) -> &'static str {
+    if lines.len() < 2 {
+        return "unknown";
+    }
+    if lines.len() == 2 {
+        return "keep";
+    }
+    if lines[2].trim() == "close-after-run" {
+        "close"
+    } else {
+        "unknown"
+    }
+}
+
+#[test]
+fn close_mode_parsing_is_tri_state_and_fail_closed() {
+    assert_eq!(
+        close_mode_of(&["r", "d"]),
+        "keep",
+        "a clean two-line file keeps open"
+    );
+    assert_eq!(close_mode_of(&["r", "d", "close-after-run"]), "close");
+    assert_eq!(
+        close_mode_of(&["close-after-run"]),
+        "unknown",
+        "a one-line file must never authorize a close"
+    );
+    assert_eq!(
+        close_mode_of(&["r", "d", "keep-open"]),
+        "unknown",
+        "unsupported tokens are rejected"
+    );
+    assert_eq!(close_mode_of(&[]), "unknown");
+    let case = Case::new(TRACER);
+    case.build_to("modecheck.swb", false).unwrap();
+    let generated = fs::read_to_string(case.dir.path().join("modecheck.swb")).unwrap();
+    for (name, text) in [
+        ("generated", generated.as_str()),
+        (
+            "checkpoint",
+            include_str!("../corpus/compat-check/minimal.swb"),
+        ),
+    ] {
+        assert!(
+            text.contains("If Not ok Then Exit Function"),
+            "{name}: a failed header read can still authorize a close"
+        );
+    }
+}

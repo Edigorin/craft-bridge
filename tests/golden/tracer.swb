@@ -640,6 +640,7 @@ Err.Clear
 If ok Then Line Input #f, oneLine
 e3 = Err.Number
 Close #f
+If Not ok Then Exit Function
 If e3 = 0 Then
 If Trim(oneLine) = "close-after-run" Then CloseMode = "close" Else CloseMode = "unknown"
 ElseIf e3 = 62 And ok Then
