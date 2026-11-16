@@ -1573,7 +1573,7 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
     // SketchAddConstraints), so application is established behaviourally:
     // the constraint's own predicate must hold on the solved geometry.
     let apply = |c: &str| {
-        format!("    swDoc.SketchAddConstraints \"{c}\"\n    swDoc.ClearSelection2 True\n")
+        format!("    swDoc.SketchAddConstraints \"{c}\"\n    swDoc.ClearSelection2 True\n    swDoc.EditRebuild3\n")
     };
     // Level checks per classified axis: 0 = the pair shares t (Y), 1 = s (X).
     let level_pts = |a: usize, b: usize, axis0: bool, label: &str| {
@@ -1600,7 +1600,7 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
                       check0: &str,
                       check1: &str| {
         format!(
-            "    Select Case AxisClass({index}, {is_horiz})\n    Case 0\n{sel}    swDoc.SketchAddConstraints \"sgHorizontal\"\n    swDoc.ClearSelection2 True\n{check0}    Case 1\n{sel}    swDoc.SketchAddConstraints \"sgVertical\"\n    swDoc.ClearSelection2 True\n{check1}    Case Else\n    gOmit = gOmit & \"relation {label}: the SC {dir} axis is not axis-aligned in this sketch frame (non-permutation map); \"\n    End Select\n"
+            "    Select Case AxisClass({index}, {is_horiz})\n    Case 0\n{sel}    swDoc.SketchAddConstraints \"sgHorizontal\"\n    swDoc.ClearSelection2 True\n    swDoc.EditRebuild3\n{check0}    Case 1\n{sel}    swDoc.SketchAddConstraints \"sgVertical\"\n    swDoc.ClearSelection2 True\n    swDoc.EditRebuild3\n{check1}    Case Else\n    gOmit = gOmit & \"relation {label}: the SC {dir} axis is not axis-aligned in this sketch frame (non-permutation map); \"\n    End Select\n"
         )
     };
     match *rel {

@@ -240,27 +240,32 @@ Function Relations1() As Boolean
     If Not pt1(2).Select(True) Then gMsg = "the point slot 2 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgCoincident"
     swDoc.ClearSelection2 True
+    swDoc.EditRebuild3
     If Abs(pt1(1).X - pt1(2).X) > TOL Or Abs(pt1(1).Y - pt1(2).Y) > TOL Then gMsg = "the points-coincident 1-2 relation did not coincide the points": GoTo RelFail
     If Not pt1(3).Select(False) Then gMsg = "the point slot 3 would not select": GoTo RelFail
     If Not pt1(4).Select(True) Then gMsg = "the point slot 4 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgCoincident"
     swDoc.ClearSelection2 True
+    swDoc.EditRebuild3
     If Abs(pt1(3).X - pt1(4).X) > TOL Or Abs(pt1(3).Y - pt1(4).Y) > TOL Then gMsg = "the points-coincident 3-4 relation did not coincide the points": GoTo RelFail
     If Not pt1(5).Select(False) Then gMsg = "the point slot 5 would not select": GoTo RelFail
     If Not pt1(6).Select(True) Then gMsg = "the point slot 6 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgCoincident"
     swDoc.ClearSelection2 True
+    swDoc.EditRebuild3
     If Abs(pt1(5).X - pt1(6).X) > TOL Or Abs(pt1(5).Y - pt1(6).Y) > TOL Then gMsg = "the points-coincident 5-6 relation did not coincide the points": GoTo RelFail
     If Not pt1(0).Select(False) Then gMsg = "the point slot 0 would not select": GoTo RelFail
     If Not pt1(7).Select(True) Then gMsg = "the point slot 7 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgCoincident"
     swDoc.ClearSelection2 True
+    swDoc.EditRebuild3
     If Abs(pt1(0).X - pt1(7).X) > TOL Or Abs(pt1(0).Y - pt1(7).Y) > TOL Then gMsg = "the points-coincident 0-7 relation did not coincide the points": GoTo RelFail
     Select Case AxisClass(1, True)
     Case 0
     If Not sl1(0).Select(False) Then gMsg = "the line 0 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgHorizontal"
     swDoc.ClearSelection2 True
+    swDoc.EditRebuild3
     vA = sl1(0).GetStartPoint
     vB = sl1(0).GetEndPoint
     If Abs(vA(1) - vB(1)) > TOL Then gMsg = "the line-horizontal 0 relation did not level the classified axis": GoTo RelFail
@@ -268,6 +273,7 @@ Function Relations1() As Boolean
     If Not sl1(0).Select(False) Then gMsg = "the line 0 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgVertical"
     swDoc.ClearSelection2 True
+    swDoc.EditRebuild3
     vA = sl1(0).GetStartPoint
     vB = sl1(0).GetEndPoint
     If Abs(vA(0) - vB(0)) > TOL Then gMsg = "the line-horizontal 0 relation did not level the classified axis": GoTo RelFail
@@ -279,6 +285,7 @@ Function Relations1() As Boolean
     If Not sl1(1).Select(False) Then gMsg = "the line 1 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgHorizontal"
     swDoc.ClearSelection2 True
+    swDoc.EditRebuild3
     vA = sl1(1).GetStartPoint
     vB = sl1(1).GetEndPoint
     If Abs(vA(1) - vB(1)) > TOL Then gMsg = "the line-vertical 1 relation did not level the classified axis": GoTo RelFail
@@ -286,6 +293,7 @@ Function Relations1() As Boolean
     If Not sl1(1).Select(False) Then gMsg = "the line 1 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgVertical"
     swDoc.ClearSelection2 True
+    swDoc.EditRebuild3
     vA = sl1(1).GetStartPoint
     vB = sl1(1).GetEndPoint
     If Abs(vA(0) - vB(0)) > TOL Then gMsg = "the line-vertical 1 relation did not level the classified axis": GoTo RelFail
@@ -297,6 +305,7 @@ Function Relations1() As Boolean
     If Not sl1(2).Select(False) Then gMsg = "the line 2 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgHorizontal"
     swDoc.ClearSelection2 True
+    swDoc.EditRebuild3
     vA = sl1(2).GetStartPoint
     vB = sl1(2).GetEndPoint
     If Abs(vA(1) - vB(1)) > TOL Then gMsg = "the line-horizontal 2 relation did not level the classified axis": GoTo RelFail
@@ -304,6 +313,7 @@ Function Relations1() As Boolean
     If Not sl1(2).Select(False) Then gMsg = "the line 2 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgVertical"
     swDoc.ClearSelection2 True
+    swDoc.EditRebuild3
     vA = sl1(2).GetStartPoint
     vB = sl1(2).GetEndPoint
     If Abs(vA(0) - vB(0)) > TOL Then gMsg = "the line-horizontal 2 relation did not level the classified axis": GoTo RelFail
@@ -315,6 +325,7 @@ Function Relations1() As Boolean
     If Not sl1(3).Select(False) Then gMsg = "the line 3 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgHorizontal"
     swDoc.ClearSelection2 True
+    swDoc.EditRebuild3
     vA = sl1(3).GetStartPoint
     vB = sl1(3).GetEndPoint
     If Abs(vA(1) - vB(1)) > TOL Then gMsg = "the line-vertical 3 relation did not level the classified axis": GoTo RelFail
@@ -322,6 +333,7 @@ Function Relations1() As Boolean
     If Not sl1(3).Select(False) Then gMsg = "the line 3 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgVertical"
     swDoc.ClearSelection2 True
+    swDoc.EditRebuild3
     vA = sl1(3).GetStartPoint
     vB = sl1(3).GetEndPoint
     If Abs(vA(0) - vB(0)) > TOL Then gMsg = "the line-vertical 3 relation did not level the classified axis": GoTo RelFail
