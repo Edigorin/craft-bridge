@@ -73,7 +73,7 @@ Fail:
     errNum = Err.Number
     errMsg = Err.Description
     On Error Resume Next
-    WriteLine "{""type"":""step"",""index"":-1,""command"":""probe"",""status"":""failed"",""message"":"""" & JsonStr("err " & Trim(Str(errNum)) & ": " & errMsg) & """"}"
+    WriteLine "{""type"":""step"",""index"":-1,""command"":""probe"",""status"":""failed"",""message"":""" & JsonStr("err " & Trim(Str(errNum)) & ": " & errMsg) & """}"
     cleanupMode = CloseMode()
     If cleanupMode = "close" Then CloseOwnedDoc closedOk
     WriteLine "{""type"":""summary"",""status"":""failed""}"
