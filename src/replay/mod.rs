@@ -223,14 +223,27 @@ pub enum DimKind {
 /// How far a blind extrude reaches.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExtrudeKind {
-    /// One side, blind depth in metres.
+    /// One side, blind depth in metres. `negative` = the material goes
+    /// against the source normal (direction: negative, a negative distance,
+    /// or both - a negative distance turns its own side over).
     Blind { depth_m: f64, negative: bool },
     /// Symmetric about the sketch plane; total thickness in metres (the
     /// legacy_per_side convention is folded in at parse time).
     Symmetric { total_m: f64 },
-    /// Two blind sides, each in metres.
-    TwoSided { first_m: f64, second_m: f64 },
-    /// Through everything in one direction.
+    /// Two blind sides, each in metres, with the side each END sits on:
+    /// `first_negative` / `second_negative` are the signs of the two ends
+    /// (e1 = direction-sign * distance, e2 = -direction-sign * distance2,
+    /// source-pinned from SolidCraft's #2700 two-sided semantics). The body
+    /// spans between the two ends; ends on the same side of the sketch plane
+    /// are refused at replay (no supported call shape spans them).
+    TwoSided {
+        first_m: f64,
+        second_m: f64,
+        first_negative: bool,
+        second_negative: bool,
+    },
+    /// Through everything in one direction (its saved distance only names
+    /// the side; it carries no depth dimension and no equation).
     ThroughAll { negative: bool },
 }
 
@@ -366,7 +379,11 @@ pub struct PrimSize {
     pub equation: Option<DimEquation>,
 }
 
-/// How far a revolve turns.
+/// How far a revolve turns. A blind angle keeps its sign as `reverse` (a
+/// negative angle turns its own sweep over); the two-sided angles keep
+/// their SIGNS because the swept interval is [-second, +first] (SolidCraft
+/// `revolve_extent_for_handle`): a non-positive angle is an interval offset
+/// from the sketch plane and is refused at replay, never silently folded.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RevolveKind {
     Blind { angle_rad: f64, reverse: bool },
@@ -671,7 +688,11 @@ fn plan_feature(
                     ExtrudeKind::Symmetric { total_m } => {
                         format!("symmetric extrude {} mm total", total_m * 1000.0)
                     }
-                    ExtrudeKind::TwoSided { first_m, second_m } => format!(
+                    ExtrudeKind::TwoSided {
+                        first_m,
+                        second_m,
+                        ..
+                    } => format!(
                         "two-sided extrude {} + {} mm",
                         first_m * 1000.0,
                         second_m * 1000.0
@@ -1307,9 +1328,11 @@ fn parse_extrude(
         .unwrap_or(false);
 
     // Evaluate one expression: literal numbers read as millimetres, bare
-    // numbers inside non-literal expressions read in the design unit.
+    // numbers inside non-literal expressions read in the design unit. The
+    // result carries the evaluated value and whether the expression was a
+    // literal (legacy symmetric scaling refuses non-literals).
     let mut equations = Vec::new();
-    let mut eval_len = |text: &str, which: usize| -> std::result::Result<f64, String> {
+    let mut eval_len = |text: &str, which: usize| -> std::result::Result<(f64, bool), String> {
         let node = expr::parse(text).map_err(|e| format!("extrude distance: {e}"))?;
         let literal = matches!(node, expr::Node::Number { .. });
         let ctx = expr::Context {
@@ -1336,42 +1359,81 @@ fn parse_extrude(
                 slot,
             });
         }
-        Ok(q.value)
+        Ok((q.value, literal))
     };
 
-    let distance = extent
-        .get("distance")
-        .and_then(Value::as_str)
-        .ok_or("extrude distance is not an expression string".to_string())?;
     if through_all {
-        let negative = match direction {
-            "positive" => false,
-            "negative" => true,
+        // Two Sides with a through-all first side is a different call shape
+        // than the probed one: never silently dropped (it used to be).
+        if extent.get("distance2").is_some() {
+            return Err(
+                "two-sided through-all (through_all with distance2) is outside the supported subset"
+                    .to_string(),
+            );
+        }
+        let dir_sign = match direction {
+            "positive" => 1.0,
+            "negative" => -1.0,
             other => {
                 return Err(format!(
                     "extrude direction {other:?} with through-all is outside the supported subset"
                 ))
             }
         };
+        // The saved distance only names the SIDE (#10415: through all keeps
+        // the side a saved negative distance points to). Evaluate it for its
+        // sign only - through-all carries no depth dimension, so no depth
+        // equation and no live slot may be allocated for it.
+        let side = match extent.get("distance").and_then(Value::as_str) {
+            None => 1.0,
+            Some(text) => {
+                let node = expr::parse(text).map_err(|e| format!("extrude distance: {e}"))?;
+                let literal = matches!(node, expr::Node::Number { .. });
+                let ctx = expr::Context {
+                    bare_length: if literal { 0.001 } else { design_factor },
+                    bare_angle: 1.0,
+                    bare_dim: expr::Dim::Length,
+                    bare_text: design_text,
+                };
+                let q = expr::eval(&node, &ctx, &env.lookup())
+                    .map_err(|e| format!("extrude distance: {e}"))?;
+                if q.dim != expr::Dim::Length {
+                    return Err("extrude distance is not a length".to_string());
+                }
+                if q.value < 0.0 {
+                    -1.0
+                } else {
+                    1.0
+                }
+            }
+        };
         return Ok(ExtrudeStep {
             name,
             sketch_step,
-            kind: ExtrudeKind::ThroughAll { negative },
-            equations,
+            kind: ExtrudeKind::ThroughAll {
+                negative: dir_sign * side < 0.0,
+            },
+            equations: Vec::new(),
         });
     }
-    let d1 = eval_len(distance, 1)?;
+    let distance = extent
+        .get("distance")
+        .and_then(Value::as_str)
+        .ok_or("extrude distance is not an expression string".to_string())?;
+    let (d1, d1_literal) = eval_len(distance, 1)?;
 
     let kind = match (direction, extent.get("distance2").and_then(Value::as_str)) {
-        ("positive", None) => ExtrudeKind::Blind {
-            depth_m: d1.abs(),
-            negative: false,
-        },
-        ("negative", None) => ExtrudeKind::Blind {
-            depth_m: d1.abs(),
-            negative: true,
-        },
         ("symmetric", None) => {
+            if !total_distance && !d1_literal {
+                // legacy_per_side doubles the thickness while the equation
+                // would drive the doubled dimension from the unscaled
+                // expression (and downstream references carry no scale):
+                // refused, never silently misbuilt.
+                return Err(
+                    "a legacy_per_side symmetric extrude with a non-literal distance is outside the supported subset (its doubled dimension cannot track the unscaled expression)"
+                        .to_string(),
+                );
+            }
             let total = if total_distance {
                 d1.abs()
             } else {
@@ -1382,11 +1444,26 @@ fn parse_extrude(
         (_, Some(_)) if direction == "symmetric" => {
             return Err("symmetric extrude with a second side is contradictory".to_string())
         }
-        ("positive", Some(d2s)) | ("negative", Some(d2s)) => {
-            let d2 = eval_len(d2s, 2)?;
-            ExtrudeKind::TwoSided {
-                first_m: d1.abs(),
-                second_m: d2.abs(),
+        ("positive" | "negative", d2s) => {
+            // The first side's end is e1 = dir_sign * distance and the
+            // second side's end is e2 = -dir_sign * distance2 (#2700); a
+            // negative distance turns its own side over.
+            let dir_sign = if direction == "positive" { 1.0 } else { -1.0 };
+            let first_negative = dir_sign * d1 < 0.0;
+            match d2s {
+                None => ExtrudeKind::Blind {
+                    depth_m: d1.abs(),
+                    negative: first_negative,
+                },
+                Some(text2) => {
+                    let (d2, _) = eval_len(text2, 2)?;
+                    ExtrudeKind::TwoSided {
+                        first_m: d1.abs(),
+                        second_m: d2.abs(),
+                        first_negative,
+                        second_negative: -dir_sign * d2 < 0.0,
+                    }
+                }
             }
         }
         (other, _) => return Err(format!("extrude direction {other:?} is unknown")),
@@ -1669,8 +1746,8 @@ fn parse_revolve(
             total_rad: angle.abs(),
         },
         (false, Some(a2)) => RevolveKind::TwoSided {
-            first_rad: angle.abs(),
-            second_rad: a2.abs(),
+            first_rad: angle,
+            second_rad: a2,
         },
         (true, Some(_)) => {
             return Err("symmetric revolve with a second angle is contradictory".to_string())

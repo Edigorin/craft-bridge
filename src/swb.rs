@@ -229,6 +229,40 @@ pub fn emit(
         "Dim regSign(0 To {}) As Double\n",
         max_slot.unwrap_or(0)
     ));
+    // ---- extrude/revolve direction truth table (Phase 1 batch 2) ----
+    // Every constant is measured on the seat from a direction probe's
+    // runtime report; 0 means UNMEASURED and every decision that consults
+    // it refuses with a named reason - a step whose direction semantics
+    // cannot be established fails and never reports created
+    // (docs/mapping.md, "Direction truth table").
+    out.push_str("\n' ---- extrude/revolve direction truth table (measured on the seat) ----\n");
+    out.push_str("' Each constant comes from a direction probe's runtime report (corpus/\n");
+    out.push_str("' compat-probe); 0 = UNMEASURED and every decision that consults it\n");
+    out.push_str("' refuses with a named reason - never a silent guess, never 'created'.\n");
+    out.push_str(&format!(
+        "Const TT_EX_DIR_TRUE_SIDE As Long = {}      ' probe-extrudedir: Dir=True sends material toward TT * the sketch normal\n",
+        crate::truth::TT_EX_DIR_TRUE_SIDE
+    ));
+    out.push_str(&format!(
+        "Const TT_EX_FIRST_SIDE As Long = {}         ' probe-twosided: the first depth's end sits toward TT * the sketch normal (Dir=False call shape)\n",
+        crate::truth::TT_EX_FIRST_SIDE
+    ));
+    out.push_str(&format!(
+        "Const TT_EX_THROUGH_ALL_DIR As Long = {}    ' probe-throughall: the through-all Dir=True reading (its contract allows inconclusive)\n",
+        crate::truth::TT_EX_THROUGH_ALL_DIR
+    ));
+    out.push_str(&format!(
+        "Const TT_REV_SENSE As Long = {}             ' probe-revolvedir: ReverseDir=False sweeps the right-hand +angle sense about the drawn axis when +1\n",
+        crate::truth::TT_REV_SENSE
+    ));
+    out.push_str(&format!(
+        "Const TT_REV_TWO_FIRST_SIDE As Long = {}    ' probe-revolvedir: the two-sided first angle sweeps right-hand sense TT about the drawn axis\n",
+        crate::truth::TT_REV_TWO_FIRST_SIDE
+    ));
+    out.push_str(&format!(
+        "Const TT_REV_DIR_LAW As Long = {}           ' the structural law (1 = right-hand rule about the drawn axis): accepted from seat evidence, never from the probes alone\n",
+        crate::truth::TT_REV_DIR_LAW
+    ));
     for s in steps {
         if matches!(
             s.work,
@@ -456,7 +490,11 @@ pub fn emit(
         })
         .collect();
     for (index, rv) in &revolves {
-        out.push_str(&emit_revolve_subs(*index, rv));
+        let rv_sketch = steps.iter().find_map(|s| match &s.work {
+            Work::Sketch(sk) if s.index == rv.sketch_step => Some(sk),
+            _ => None,
+        });
+        out.push_str(&emit_revolve_subs(*index, rv, rv_sketch));
     }
     let prims: Vec<(usize, &crate::replay::PrimStep)> = steps
         .iter()
@@ -1014,10 +1052,11 @@ Function SketchToModelZ(ByVal idx As Long, ByVal s As Double, ByVal t As Double)
 SketchToModelZ = gFrame(idx, 11) + s * gFrame(idx, 2) + t * gFrame(idx, 5)
 End Function
 
-' Feature guards (batch boundary): extrude, revolve and primitive replay
-' still assume the identity map on the source normal side - batches 2 and 3
-' replace this with the direction truth table and primitive adaptation.
-' Anything else is refused with a named reason and never reports created.
+' Feature guards (batch boundary): primitive replay still assumes the
+' identity map - batch 3 replaces this with primitive adaptation. Extrude
+' and revolve replay runs through the direction truth table on any valid
+' map (batch 2). Anything else is refused with a named reason and never
+' reports created.
 Function MapIsIdentity(ByVal idx As Long) As Boolean
 MapIsIdentity = False
 If Not gMapValid(idx) Then Exit Function
@@ -1947,222 +1986,473 @@ fn emit_dimension(
     out
 }
 
+/// The sign contract on a feature dimension equation: the dimension carries
+/// |expect| and the equation right-hand side keeps source semantics; the
+/// sign travels through AddDimEquation's signVal and the registered regSign,
+/// so downstream SlotRef references normalize back to source semantics.
+fn sign_lit(expect_si: f64) -> &'static str {
+    if expect_si < 0.0 {
+        "-1#"
+    } else {
+        "1#"
+    }
+}
+
 fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
     use crate::replay::ExtrudeKind;
+    let sk = ex.sketch_step;
     let mut out = String::new();
     out.push_str(&format!("' Extrude step {index}: {}\n", vb_lit(&ex.name)));
-    out.push_str(&format!(
-        "Function BuildExtrude{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n"
-    ));
-    out.push_str(&format!(
-        "    If Not MapIsIdentity({}) Then gMsg = \"frame adaptation: extrude replay on a non-identity sketch map is not implemented (direction semantics are batch 2); refusing to report created\": GoTo ExFail\n",
-        ex.sketch_step
-    ));
-    out.push_str(&format!(
-        "    ok = swDoc.Extension.SelectByID2(skName{}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n",
-        ex.sketch_step
-    ));
-    out.push_str(
-        "    If Not ok Then gMsg = \"could not select the sketch for the extrude\": GoTo ExFail\n",
+    let mut locals = String::from(
+        "    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n",
     );
-    let (call, verify, message) = match &ex.kind {
-        ExtrudeKind::Blind { depth_m, negative } => (
-            format!(
-                "    Set feat = gFeatMgr.FeatureExtrusion2(True, False, {}, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
-                if *negative { "True" } else { "False" },
+    let mut body = String::new();
+    // The map guard precedes every direction decision: the side decisions
+    // run through the sketch's map side (any valid adaptation map - the
+    // side is the map's orientation, not a permutation property).
+    body.push_str(&format!(
+        "    If Not gMapValid({sk}) Then gMsg = \"frame adaptation: the profile sketch carries no valid adaptation map; refusing to report created\": GoTo ExFail\n"
+    ));
+    let select_sketch = format!(
+        "    ok = swDoc.Extension.SelectByID2(skName{sk}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n    If Not ok Then gMsg = \"could not select the sketch for the extrude\": GoTo ExFail\n"
+    );
+    let no_depth_note =
+        "    ' through-all: the end condition is the geometry; depth readback does not apply\n";
+    let message = match &ex.kind {
+        ExtrudeKind::Blind { depth_m, negative } => {
+            locals.push_str("    Dim wantSide As Long\n    Dim dirFlag As Boolean\n");
+            body.push_str("    If TT_EX_DIR_TRUE_SIDE = 0 Then gMsg = \"the extrude direction truth table is unmeasured: probe-extrudedir has not established which physical side the Dir flag sends material to; refusing to report created\": GoTo ExFail\n");
+            body.push_str(&format!(
+                "    wantSide = {} * gMapSide({sk})\n    dirFlag = (wantSide = TT_EX_DIR_TRUE_SIDE)\n",
+                if *negative { "-1" } else { "1" }
+            ));
+            body.push_str(&select_sketch);
+            body.push_str(&format!(
+                "    Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n    If feat Is Nothing Then gMsg = \"the extrude was not created\": GoTo ExFail\n",
                 vba_num(*depth_m)
-            ),
-            vec![(1usize, *depth_m)],
-            format!("depth {} m", vba_num(*depth_m)),
-        ),
-        ExtrudeKind::Symmetric { total_m } => (
-            format!(
-                "    Set feat = gFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondMidPlane, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
+            ));
+            body.push_str(&format!(
+                "    Set dm = swDoc.Parameter(\"D1@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D1 is missing\": GoTo ExFail\n    If Abs(dm.SystemValue - {}) > 0.000001 Then gMsg = \"the extrude dimension D1 does not match\": GoTo ExFail\n",
+                vba_num(*depth_m)
+            ));
+            for eq in &ex.equations {
+                body.push_str(&slot_guards(eq, "ExFail"));
+                body.push_str(&format!(
+                    "    Set dm = swDoc.Parameter(\"D1@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D1 is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
+                    rhs_vba(eq),
+                    vba_num(eq.expect_si.abs()),
+                    eq.slot,
+                    sign_lit(eq.expect_si)
+                ));
+            }
+            format!("depth {} m", vba_num(*depth_m))
+        }
+        ExtrudeKind::Symmetric { total_m } => {
+            // Direction-free: a mid-plane extrude spans both sides, so no
+            // truth-table cell is consulted and any valid map works. The
+            // depth is the TOTAL (the documented mid-plane call shape,
+            // checkpoint-pending) and is verified by the D1 readback.
+            body.push_str(&select_sketch);
+            body.push_str(&format!(
+                "    Set feat = gFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondMidPlane, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n    If feat Is Nothing Then gMsg = \"the extrude was not created\": GoTo ExFail\n",
                 vba_num(*total_m)
-            ),
-            vec![(1, *total_m)],
-            format!("symmetric, total {} m", vba_num(*total_m)),
-        ),
-        ExtrudeKind::TwoSided { first_m, second_m } => (
-            format!(
-                "    Set feat = gFeatMgr.FeatureExtrusion2(False, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, {}, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
-                vba_num(*first_m),
-                vba_num(*second_m)
-            ),
-            vec![(1, *first_m), (2, *second_m)],
-            format!("two-sided {} + {} m", vba_num(*first_m), vba_num(*second_m)),
-        ),
-        ExtrudeKind::ThroughAll { negative } => (
-            format!(
-                "    Set feat = gFeatMgr.FeatureExtrusion2(True, False, {}, swEndConditions_e.swEndCondThroughAll, swEndConditions_e.swEndCondBlind, 0#, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
-                if *negative { "True" } else { "False" }
-            ),
-            vec![],
-            "through all".to_string(),
-        ),
+            ));
+            body.push_str(&format!(
+                "    Set dm = swDoc.Parameter(\"D1@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D1 is missing\": GoTo ExFail\n    If Abs(dm.SystemValue - {}) > 0.000001 Then gMsg = \"the extrude dimension D1 does not match\": GoTo ExFail\n",
+                vba_num(*total_m)
+            ));
+            for eq in &ex.equations {
+                body.push_str(&slot_guards(eq, "ExFail"));
+                body.push_str(&format!(
+                    "    Set dm = swDoc.Parameter(\"D1@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D1 is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
+                    rhs_vba(eq),
+                    vba_num(eq.expect_si.abs()),
+                    eq.slot,
+                    sign_lit(eq.expect_si)
+                ));
+            }
+            format!("symmetric, total {} m", vba_num(*total_m))
+        }
+        ExtrudeKind::TwoSided {
+            first_m,
+            second_m,
+            first_negative,
+            second_negative,
+        } => {
+            let same_side = first_negative == second_negative && *first_m > 0.0 && *second_m > 0.0;
+            if same_side {
+                // The body spans between the two ends (#2700); ends on the
+                // same side of the sketch plane have no supported call
+                // shape - refused before anything is created.
+                body.push_str("    gMsg = \"a two-sided extrude whose ends lie on the same side of the sketch plane is not representable as a SolidWorks two-sided extrude in this phase; refusing to report created\": GoTo ExFail\n");
+            } else {
+                locals.push_str(
+                    "    Dim wantFirst As Long\n    Dim swap2 As Boolean\n    Dim dA As Double\n    Dim dB As Double\n    Dim wFirst As Long\n    Dim wSecond As Long\n",
+                );
+                body.push_str("    If TT_EX_FIRST_SIDE = 0 Then gMsg = \"the two-sided extrude direction truth table is unmeasured: probe-twosided has not established which physical side receives the first depth; refusing to report created\": GoTo ExFail\n");
+                body.push_str(&format!(
+                    "    wantFirst = {} * gMapSide({sk})\n    swap2 = (wantFirst <> TT_EX_FIRST_SIDE)\n    If swap2 Then\n    dA = {}\n    dB = {}\n    wFirst = 2\n    wSecond = 1\n    Else\n    dA = {}\n    dB = {}\n    wFirst = 1\n    wSecond = 2\n    End If\n",
+                    if *first_negative { "-1" } else { "1" },
+                    vba_num(*second_m),
+                    vba_num(*first_m),
+                    vba_num(*first_m),
+                    vba_num(*second_m),
+                ));
+                body.push_str(&select_sketch);
+                body.push_str("    Set feat = gFeatMgr.FeatureExtrusion2(False, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, dA, dB, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n    If feat Is Nothing Then gMsg = \"the extrude was not created\": GoTo ExFail\n");
+                body.push_str("    Set dm = swDoc.Parameter(\"D\" & Trim(Str(wFirst)) & \"@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension carrying the first depth is missing\": GoTo ExFail\n");
+                body.push_str(&format!(
+                    "    If Abs(dm.SystemValue - {}) > 0.000001 Then gMsg = \"the extrude first depth does not match\": GoTo ExFail\n",
+                    vba_num(*first_m)
+                ));
+                body.push_str("    Set dm = swDoc.Parameter(\"D\" & Trim(Str(wSecond)) & \"@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension carrying the second depth is missing\": GoTo ExFail\n");
+                body.push_str(&format!(
+                    "    If Abs(dm.SystemValue - {}) > 0.000001 Then gMsg = \"the extrude second depth does not match\": GoTo ExFail\n",
+                    vba_num(*second_m)
+                ));
+                for eq in &ex.equations {
+                    // The equation binds to the dimension carrying this
+                    // source side - after the swap, never by literal D number.
+                    let which = if eq.which == 1 { "wFirst" } else { "wSecond" };
+                    body.push_str(&slot_guards(eq, "ExFail"));
+                    body.push_str(&format!(
+                        "    Set dm = swDoc.Parameter(\"D\" & Trim(Str({which})) & \"@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude depth dimension is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
+                        rhs_vba(eq),
+                        vba_num(eq.expect_si.abs()),
+                        eq.slot,
+                        sign_lit(eq.expect_si)
+                    ));
+                }
+            }
+            format!("two-sided {} + {} m", vba_num(*first_m), vba_num(*second_m))
+        }
+        ExtrudeKind::ThroughAll { negative } => {
+            locals.push_str("    Dim wantSide As Long\n    Dim dirFlag As Boolean\n");
+            body.push_str("    If TT_EX_THROUGH_ALL_DIR = 0 Then gMsg = \"the through-all extrude direction semantics are not established: probe-throughall cannot pin a physical side without bounded material and its interpretation contract forbids inferring it from the blind cases; refusing to report created\": GoTo ExFail\n");
+            body.push_str(&format!(
+                "    wantSide = {} * gMapSide({sk})\n    dirFlag = (wantSide = TT_EX_THROUGH_ALL_DIR)\n",
+                if *negative { "-1" } else { "1" }
+            ));
+            body.push_str(&select_sketch);
+            body.push_str("    Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondThroughAll, swEndConditions_e.swEndCondBlind, 0#, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n    If feat Is Nothing Then gMsg = \"the extrude was not created\": GoTo ExFail\n");
+            body.push_str(no_depth_note);
+            "through all".to_string()
+        }
     };
-    out.push_str(&call);
-    out.push_str(
-        "    If feat Is Nothing Then gMsg = \"the extrude was not created\": GoTo ExFail\n",
-    );
-    // Each side's dimension is verified by validated lookup against the
-    // evaluated expectation; through-all has no depth readback and says so.
-    for (which, expected) in verify {
-        out.push_str(&format!(
-            "    Set dm = swDoc.Parameter(\"D{which}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D{which} is missing\": GoTo ExFail\n    If Abs(dm.SystemValue - {}) > 0.000001 Then gMsg = \"the extrude dimension D{which} does not match\": GoTo ExFail\n",
-            vba_num(expected)
-        ));
-    }
-    if ex.equations.is_empty() && matches!(ex.kind, ExtrudeKind::ThroughAll { .. }) {
-        out.push_str(
-            "    ' through-all: the end condition is the geometry; depth readback does not apply\n",
-        );
-    }
-    // Parametric depths become equations, verified by evaluation.
-    for eq in &ex.equations {
-        out.push_str(&slot_guards(eq, "ExFail"));
-        out.push_str(&format!(
-            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, 1#) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
-            eq.which,
-            eq.which,
-            rhs_vba(eq),
-            vba_num(eq.expect_si),
-            eq.slot
-        ));
-    }
-    out.push_str(&format!(
+    let mut tail = String::new();
+    tail.push_str(&format!(
         "    Set feat{index} = feat\n    gMsg = {}\n    BuildExtrude{index} = \"created\"\n    Exit Function\n\nExFail:\n    BuildExtrude{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description\n    On Error Resume Next\n    BuildExtrude{index} = \"failed\"\nEnd Function\n\n",
         vb_lit(&message)
+    ));
+    out.push_str(&format!(
+        "Function BuildExtrude{index}() As String\n    On Error GoTo HardFail\n{locals}"
+    ));
+    out.push_str(&body);
+    out.push_str(&tail);
+    out
+}
+
+/// The source-side sweep factor for a revolve: the SolidCraft kernel's own
+/// canonical factor (`canonical_revolve_axis` / `revolved`: partial turns go
+/// toward the side the sketch normal points to) from the sketch's
+/// NON-CONSTRUCTION profile geometry. Computed at emit time; a named Err
+/// means the side cannot be established and the builder fails closed.
+fn axis_sigma(sk: &SketchStep, axis: &AxisSel) -> Result<i32, String> {
+    let (o, d) = match axis {
+        AxisSel::Emitted { origin, dir } => (*origin, *dir),
+        AxisSel::Line(li) => {
+            let l = sk
+                .lines
+                .get(*li)
+                .ok_or_else(|| "the revolve axis line is not in the sketch".to_string())?;
+            let a = sk.points[l.a];
+            let b = sk.points[l.b];
+            (a, [b[0] - a[0], b[1] - a[1]])
+        }
+    };
+    let lines: Vec<(usize, usize, bool)> = sk
+        .lines
+        .iter()
+        .map(|l| (l.a, l.b, l.construction))
+        .collect();
+    let circles: Vec<(usize, f64, bool)> = sk
+        .circles
+        .iter()
+        .map(|c| (c.c, c.r, c.construction))
+        .collect();
+    crate::truth::profile_side(&sk.points, &lines, &circles, o, d)
+}
+
+/// Revolve builder: the axis is mapped through the sketch's adaptation map
+/// "like geometry" (both helper-axis endpoints go through MapU/MapV; a
+/// profile-line axis is already drawn mapped, so the drawn direction is the
+/// mapped source direction). The sweep direction runs through the direction
+/// truth table: the structural-law gate (TT_REV_DIR_LAW), the measured
+/// sense constants, and the source-side factor from the profile geometry.
+/// Full turns and mid-plane forms are direction-free and consult no
+/// constant. Everything unestablished fails with a named reason before the
+/// feature call - never "created". A refusal emits ONLY the refusal: every
+/// emitted identifier is declared on its own path (Option Explicit makes a
+/// stray reference a whole-module compile failure).
+fn emit_revolve_subs(index: usize, rv: &RevolveStep, sk: Option<&SketchStep>) -> String {
+    use crate::replay::{DimEquation as DE, RevolveKind as RK};
+    let sidx = rv.sketch_step;
+    let mut out = String::new();
+    out.push_str(&format!("' Revolve step {index}: {}\n", vb_lit(&rv.name)));
+    let full_turn = matches!(
+        &rv.kind,
+        RK::Blind { angle_rad, .. } if (*angle_rad - 2.0 * std::f64::consts::PI).abs() < 1e-9
+    );
+    // The source-side factor is needed by directional forms only; the
+    // direction-free paths (full turn, mid-plane) never consult it.
+    let need_sigma = match &rv.kind {
+        RK::TwoSided { .. } => true,
+        RK::Blind { .. } => !full_turn,
+        RK::Symmetric { .. } => false,
+    };
+    let sigma = if need_sigma {
+        match sk {
+            Some(sk) => axis_sigma(sk, &rv.axis),
+            None => Err("the profile sketch is not in the plan".to_string()),
+        }
+    } else {
+        Ok(0)
+    };
+    // Fail-closed preamble: signed two-sided intervals and unestablishable
+    // profile sides refuse here, before any selection or feature call.
+    let mut refusal: Option<String> = None;
+    match &rv.kind {
+        RK::TwoSided {
+            first_rad,
+            second_rad,
+        } => {
+            if *first_rad <= 0.0 || *second_rad <= 0.0 {
+                refusal = Some("a two-sided revolve needs both angles positive: the swept interval would not start at the sketch plane (signed angles are refused, never folded)".to_string());
+            } else if let Err(reason) = &sigma {
+                refusal = Some(format!(
+                    "the revolve direction semantics cannot be established: {reason}"
+                ));
+            }
+        }
+        RK::Blind { .. } if !full_turn => {
+            if let Err(reason) = &sigma {
+                refusal = Some(format!(
+                    "the revolve direction semantics cannot be established: {reason}"
+                ));
+            }
+        }
+        _ => {}
+    }
+    let mut locals = String::from(
+        "    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n    Dim ax As Object\n",
+    );
+    let mut body = String::new();
+    body.push_str(&format!(
+        "    If Not gMapValid({sidx}) Then gMsg = \"frame adaptation: the profile sketch carries no valid adaptation map; refusing to report created\": GoTo ExFail\n"
+    ));
+    // The structural-law gate: the sense constants alone never unlock a
+    // directional revolve (the probes measure one directed axis only).
+    let law_gate = "    If TT_REV_DIR_LAW <> 1 Then gMsg = \"the revolve sweep-direction law is not established: probe-revolvedir measures one frame and one directed axis, and the right-hand-rule law has not been accepted from seat evidence (TT_REV_DIR_LAW); refusing to report created\": GoTo ExFail\n";
+    let select_sketch = format!(
+        "    ok = swDoc.Extension.SelectByID2(skName{sidx}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n    If Not ok Then gMsg = \"could not select the profile sketch\": GoTo ExFail\n"
+    );
+    if let Some(reason) = refusal {
+        body.push_str(&format!(
+            "    gMsg = \"{reason}; refusing to report created\": GoTo ExFail\n"
+        ));
+    } else {
+        // The direction decision runs before any selection.
+        let flag = match &rv.kind {
+            RK::Blind { reverse, .. } if !full_turn => {
+                let Ok(sg) = &sigma else { unreachable!() };
+                let want = if *reverse { -sg } else { *sg };
+                locals.push_str("    Dim revFlag As Boolean\n");
+                body.push_str(law_gate);
+                body.push_str("    If TT_REV_SENSE = 0 Then gMsg = \"the revolve sweep-direction truth table is unmeasured: probe-revolvedir has not established which side ReverseDir=False sweeps toward; refusing to report created\": GoTo ExFail\n");
+                body.push_str(&format!("    revFlag = (TT_REV_SENSE <> {want})\n"));
+                "revFlag"
+            }
+            RK::Blind { .. } => "False",
+            _ => "False",
+        };
+        if let RK::TwoSided {
+            first_rad,
+            second_rad,
+        } = &rv.kind
+        {
+            let Ok(sg) = &sigma else { unreachable!() };
+            locals.push_str("    Dim swapR As Boolean\n    Dim aA As Double\n    Dim aB As Double\n    Dim wFirst As Long\n    Dim wSecond As Long\n");
+            body.push_str(law_gate);
+            body.push_str("    If TT_REV_TWO_FIRST_SIDE = 0 Then gMsg = \"the two-sided revolve angle truth table is unmeasured: probe-revolvedir has not established which side receives the first angle; refusing to report created\": GoTo ExFail\n");
+            body.push_str(&format!(
+                "    swapR = (TT_REV_TWO_FIRST_SIDE <> {sg})\n    If swapR Then\n    aA = {}\n    aB = {}\n    wFirst = 2\n    wSecond = 1\n    Else\n    aA = {}\n    aB = {}\n    wFirst = 1\n    wSecond = 2\n    End If\n",
+                vba_num(*second_rad),
+                vba_num(*first_rad),
+                vba_num(*first_rad),
+                vba_num(*second_rad),
+            ));
+        }
+        // Select the profile sketch, draw/anchor the helper axis when the
+        // axis is not already a line of the sketch, then select the axis.
+        body.push_str(&select_sketch);
+        if let AxisSel::Emitted { .. } = &rv.axis {
+            body.push_str(&emit_helper_axis(sidx, &rv.axis, &mut locals));
+        }
+        body.push_str("    swSketchMgr.InsertSketch True\n");
+        body.push_str(&select_sketch);
+        match &rv.axis {
+            AxisSel::Line(li) => body.push_str(&format!(
+                "    If Not sl{sidx}({li}).Select(True) Then gMsg = \"could not select the revolve axis\": GoTo ExFail\n"
+            )),
+            AxisSel::Emitted { .. } => body.push_str(
+                "    If Not ax.Select(True) Then gMsg = \"could not select the helper axis\": GoTo ExFail\n",
+            ),
+        }
+        match &rv.kind {
+            RK::Blind { angle_rad, .. } => {
+                body.push_str(&format!(
+                    "    Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, {flag}, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n    If feat Is Nothing Then gMsg = \"the revolve was not created\": GoTo ExFail\n",
+                    vba_num(*angle_rad)
+                ));
+                body.push_str(&dim_check(1, angle_rad.abs(), "revolve angle D1"));
+                for eq in rv.equations.iter().filter(|e| e.which == 1) {
+                    let eq: &DE = eq;
+                    body.push_str(&slot_guards(eq, "ExFail"));
+                    body.push_str(&dim_eq(
+                        1,
+                        eq,
+                        "revolve angle D1",
+                        "the revolve angle equation did not evaluate",
+                    ));
+                }
+            }
+            RK::Symmetric { total_rad } => {
+                // Direction-free: the mid-plane form sweeps both ways ("the
+                // angle is split either side of the profile, whichever way
+                // the axis points"); the angle is the TOTAL (the documented
+                // mid-plane semantics, probe-confirmable).
+                body.push_str(&format!(
+                    "    Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondMidPlane, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n    If feat Is Nothing Then gMsg = \"the revolve was not created\": GoTo ExFail\n",
+                    vba_num(*total_rad)
+                ));
+                body.push_str(&dim_check(1, total_rad.abs(), "revolve angle D1"));
+                for eq in rv.equations.iter().filter(|e| e.which == 1) {
+                    let eq: &DE = eq;
+                    body.push_str(&slot_guards(eq, "ExFail"));
+                    body.push_str(&dim_eq(
+                        1,
+                        eq,
+                        "revolve angle D1",
+                        "the revolve angle equation did not evaluate",
+                    ));
+                }
+            }
+            RK::TwoSided {
+                first_rad,
+                second_rad,
+            } => {
+                body.push_str("    Set feat = gFeatMgr.FeatureRevolve2(False, True, False, False, False, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, aA, aB, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n    If feat Is Nothing Then gMsg = \"the revolve was not created\": GoTo ExFail\n");
+                body.push_str(&dim_check_dyn(
+                    "wFirst",
+                    first_rad.abs(),
+                    "revolve first angle",
+                ));
+                body.push_str(&dim_check_dyn(
+                    "wSecond",
+                    second_rad.abs(),
+                    "revolve second angle",
+                ));
+                for eq in &rv.equations {
+                    // The equation binds to the dimension carrying this
+                    // source angle - after the swap, never by literal D number.
+                    let which = if eq.which == 1 { "wFirst" } else { "wSecond" };
+                    body.push_str(&slot_guards(eq, "ExFail"));
+                    body.push_str(&dim_eq_dyn(
+                        which,
+                        eq,
+                        "revolve angle",
+                        "the revolve angle equation did not evaluate",
+                    ));
+                }
+            }
+        }
+    }
+    let message = match &rv.kind {
+        RK::Blind { angle_rad, .. } => format!("revolve {} deg", angle_rad.to_degrees()),
+        RK::Symmetric { total_rad } => {
+            format!("symmetric revolve {} deg total", total_rad.to_degrees())
+        }
+        RK::TwoSided {
+            first_rad,
+            second_rad,
+        } => format!(
+            "two-sided revolve {} + {} deg",
+            first_rad.to_degrees(),
+            second_rad.to_degrees()
+        ),
+    };
+    out.push_str(&format!(
+        "Function BuildRevolve{index}() As String\n    On Error GoTo HardFail\n{locals}"
+    ));
+    out.push_str(&body);
+    out.push_str(&format!(
+        "    Set feat{index} = feat\n    gMsg = {}\n    BuildRevolve{index} = \"created\"\n    Exit Function\n\nExFail:\n    On Error Resume Next\n    CloseSketchIfOpen\n    BuildRevolve{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    ' Capture the error FIRST: executing an On Error statement resets Err.\n    Dim errNum As Long, errMsg As String\n    errNum = Err.Number\n    errMsg = Err.Description\n    On Error Resume Next\n    CloseSketchIfOpen\n    gMsg = \"err \" & Trim(Str(errNum)) & \": \" & errMsg\n    BuildRevolve{index} = \"failed\"\nEnd Function\n\n",
+        vb_lit(&format!("{message}; sweep direction and volume are acceptance checks"))
     ));
     out
 }
 
-/// Revolve builder: reopen the profile sketch only to draw and anchor a
-/// helper axis when the axis is not already a line of the sketch, then select
-/// the sketch plus the axis and call FeatureRevolve2. The revolve verifies
-/// its angle dimension (validated lookup, evaluated expectation); sweep
-/// direction and volume of partial revolves are acceptance checks (ticket #9).
-fn emit_revolve_subs(index: usize, rv: &RevolveStep) -> String {
-    use crate::replay::{DimEquation as DE, RevolveKind as RK};
-    let mut out = String::new();
-    out.push_str(&format!("' Revolve step {index}: {}\n", vb_lit(&rv.name)));
-    out.push_str(&format!(
-        "Function BuildRevolve{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n    Dim ax As Object\n"
-    ));
-    out.push_str(&format!(
-        "    If Not MapIsIdentity({}) Then gMsg = \"frame adaptation: revolve replay on a non-identity sketch map is not implemented (direction semantics are batch 2); refusing to report created\": GoTo ExFail\n",
-        rv.sketch_step
-    ));
-    out.push_str(&format!(
-        "    ok = swDoc.Extension.SelectByID2(skName{}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n",
-        rv.sketch_step
-    ));
-    out.push_str(
-        "    If Not ok Then gMsg = \"could not select the profile sketch\": GoTo ExFail\n",
-    );
-    match &rv.axis {
-        AxisSel::Emitted { origin, dir } => {
-            // Draw the helper axis inside the sketch, fix it so it cannot
-            // drift, and leave the sketch again.
-            let l = 0.05f64; // metres each way
-            let (x1, y1) = (
-                origin[0] / 1000.0 - dir[0] * l,
-                origin[1] / 1000.0 - dir[1] * l,
-            );
-            let (x2, y2) = (
-                origin[0] / 1000.0 + dir[0] * l,
-                origin[1] / 1000.0 + dir[1] * l,
-            );
-            out.push_str("    swSketchMgr.InsertSketch True\n");
-            out.push_str(&format!(
-                "    Set ax = swSketchMgr.CreateLine({}, {}, 0#, {}, {}, 0#)\n",
-                vba_num(x1),
-                vba_num(y1),
-                vba_num(x2),
-                vba_num(y2)
-            ));
-            out.push_str("    ax.Construction = True\n");
-            out.push_str("    ax.Select False\n");
-            out.push_str("    swDoc.SketchAddConstraints \"sgFix\"\n");
-            out.push_str("    swDoc.ClearSelection2 True\n");
-        }
-        AxisSel::Line(_) => {}
-    }
-    out.push_str("    swSketchMgr.InsertSketch True\n");
-    // Select the sketch and the axis, then revolve.
-    out.push_str(&format!(
-        "    ok = swDoc.Extension.SelectByID2(skName{}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n",
-        rv.sketch_step
-    ));
-    out.push_str(
-        "    If Not ok Then gMsg = \"could not select the profile sketch\": GoTo ExFail\n",
-    );
-    match &rv.axis {
-        AxisSel::Line(li) => out.push_str(&format!(
-            "    If Not sl{}({li}).Select(True) Then gMsg = \"could not select the revolve axis\": GoTo ExFail\n",
-            rv.sketch_step
-        )),
-        AxisSel::Emitted { .. } => out.push_str(
-            "    If Not ax.Select(True) Then gMsg = \"could not select the helper axis\": GoTo ExFail\n",
-        ),
-    }
-    let (call, verify, message) = match &rv.kind {
-        RK::Blind { angle_rad, reverse } => (
-            format!(
-                "    Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, {}, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n",
-                if *reverse { "True" } else { "False" },
-                vba_num(*angle_rad)
-            ),
-            vec![(1usize, *angle_rad)],
-            format!("revolve {} deg", angle_rad.to_degrees()),
-        ),
-        RK::Symmetric { total_rad } => (
-            format!(
-                "    Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondMidPlane, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n",
-                vba_num(*total_rad)
-            ),
-            vec![(1, *total_rad)],
-            format!("symmetric revolve {} deg total", total_rad.to_degrees()),
-        ),
-        RK::TwoSided { first_rad, second_rad } => (
-            format!(
-                "    Set feat = gFeatMgr.FeatureRevolve2(False, True, False, False, False, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, {}, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n",
-                vba_num(*first_rad),
-                vba_num(*second_rad)
-            ),
-            vec![(1, *first_rad), (2, *second_rad)],
-            format!(
-                "two-sided revolve {} + {} deg",
-                first_rad.to_degrees(),
-                second_rad.to_degrees()
-            ),
-        ),
+/// The helper construction axis for an AxisSel::Emitted revolve: drawn
+/// through the sketch's adaptation map LIKE GEOMETRY - both endpoints go
+/// through MapU/MapV, so the drawn direction is the mapped source direction
+/// (the sweep sense depends on it). The mapped placement is evidence, not
+/// assumption: after the fix and a solve, both endpoints are read back
+/// against the mapped coordinates and the z component must vanish.
+fn emit_helper_axis(sidx: usize, axis: &AxisSel, locals: &mut String) -> String {
+    let AxisSel::Emitted { origin, dir } = axis else {
+        return String::new();
     };
-    out.push_str(&call);
-    out.push_str(
-        "    If feat Is Nothing Then gMsg = \"the revolve was not created\": GoTo ExFail\n",
+    let l = 0.05f64; // metres each way
+    let (x1, y1) = (
+        origin[0] / 1000.0 - dir[0] * l,
+        origin[1] / 1000.0 - dir[1] * l,
     );
-    for (which, expected) in verify {
-        out.push_str(&format!(
-            "    Set dm = swDoc.Parameter(\"D{which}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the revolve angle dimension D{which} is missing\": GoTo ExFail\n    If Abs(dm.SystemValue - {}) > 0.000001 Then gMsg = \"the revolve angle D{which} does not match\": GoTo ExFail\n",
-            vba_num(expected)
-        ));
-    }
-    let equations: Vec<&DE> = rv.equations.iter().collect();
-    for eq in equations {
-        out.push_str(&slot_guards(eq, "ExFail"));
-        out.push_str(&format!(
-            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the revolve angle dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, 1#) Then gMsg = \"the revolve angle equation did not evaluate\": GoTo ExFail\n",
-            eq.which,
-            eq.which,
-            rhs_vba(eq),
-            vba_num(eq.expect_si),
-            eq.slot
-        ));
-    }
+    let (x2, y2) = (
+        origin[0] / 1000.0 + dir[0] * l,
+        origin[1] / 1000.0 + dir[1] * l,
+    );
+    locals.push_str("    Dim vA As Variant\n    Dim vB As Variant\n");
+    let mut out = String::new();
+    out.push_str("    swSketchMgr.InsertSketch True\n");
     out.push_str(&format!(
-        "    Set feat{index} = feat\n    gMsg = {}\n    BuildRevolve{index} = \"created\"\n    Exit Function\n\nExFail:\n    On Error Resume Next\n    CloseSketchIfOpen\n    BuildRevolve{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    ' Capture the error FIRST: executing an On Error statement resets Err.\n    Dim errNum As Long, errMsg As String\n    errNum = Err.Number\n    errMsg = Err.Description\n    On Error Resume Next\n    CloseSketchIfOpen\n    gMsg = \"err \" & Trim(Str(errNum)) & \": \" & errMsg\n    BuildRevolve{index} = \"failed\"\nEnd Function\n\n",
-        vb_lit(&format!("{message}; sweep direction and volume are acceptance checks"))
+        "    Set ax = swSketchMgr.CreateLine(MapU({sidx}, {}, {}), MapV({sidx}, {}, {}), 0#, MapU({sidx}, {}, {}), MapV({sidx}, {}, {}), 0#)\n",
+        vba_num(x1),
+        vba_num(y1),
+        vba_num(x1),
+        vba_num(y1),
+        vba_num(x2),
+        vba_num(y2),
+        vba_num(x2),
+        vba_num(y2),
+    ));
+    out.push_str(
+        "    If ax Is Nothing Then gMsg = \"the revolve helper axis did not appear\": GoTo ExFail\n",
+    );
+    out.push_str("    ax.Construction = True\n");
+    out.push_str(
+        "    If Not ax.Select(False) Then gMsg = \"the helper axis would not select for fixing\": GoTo ExFail\n",
+    );
+    out.push_str("    swDoc.SketchAddConstraints \"sgFix\"\n    swDoc.ClearSelection2 True\n");
+    out.push_str(&format!(
+        "    SolveSketch skName{sidx}\n    vA = ax.GetStartPoint\n    vB = ax.GetEndPoint\n    If Abs(vA(0) - MapU({sidx}, {}, {})) > 0.000001 Then gMsg = \"the revolve helper axis start does not sit where the map put it\": GoTo ExFail\n    If Abs(vA(1) - MapV({sidx}, {}, {})) > 0.000001 Then gMsg = \"the revolve helper axis start does not sit where the map put it\": GoTo ExFail\n    If Abs(vA(2)) > 0.000001 Then gMsg = \"the revolve helper axis start is off the sketch plane\": GoTo ExFail\n    If Abs(vB(0) - MapU({sidx}, {}, {})) > 0.000001 Then gMsg = \"the revolve helper axis end does not sit where the map put it\": GoTo ExFail\n    If Abs(vB(1) - MapV({sidx}, {}, {})) > 0.000001 Then gMsg = \"the revolve helper axis end does not sit where the map put it\": GoTo ExFail\n    If Abs(vB(2)) > 0.000001 Then gMsg = \"the revolve helper axis end is off the sketch plane\": GoTo ExFail\n",
+        vba_num(x1),
+        vba_num(y1),
+        vba_num(x1),
+        vba_num(y1),
+        vba_num(x2),
+        vba_num(y2),
+        vba_num(x2),
+        vba_num(y2),
     ));
     out
 }
@@ -2262,10 +2552,11 @@ fn emit_size_eq(size: &crate::replay::PrimSize, what: &str) -> String {
         Some(eq) => {
             let mut out = slot_guards(eq, "ExFail");
             out.push_str(&format!(
-            "    If Not AddDimEquation(dm, {}, {}, {}, 1#) Then gMsg = \"{} equation did not evaluate\": GoTo ExFail\n",
+            "    If Not AddDimEquation(dm, {}, {}, {}, {}) Then gMsg = \"{} equation did not evaluate\": GoTo ExFail\n",
             rhs_vba(eq),
-            vba_num(eq.expect_si),
+            vba_num(eq.expect_si.abs()),
             eq.slot,
+            sign_lit(eq.expect_si),
             what
         ));
             out
@@ -2399,12 +2690,13 @@ fn emit_mod_subs(index: usize, md: &crate::replay::ModStep) -> String {
     for eq in &md.equations {
         out.push_str(&slot_guards(eq, "ExFail"));
         out.push_str(&format!(
-            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, 1#) Then gMsg = \"the equation did not evaluate\": GoTo ExFail\n",
+            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}) Then gMsg = \"the equation did not evaluate\": GoTo ExFail\n",
             eq.which,
             eq.which,
             rhs_vba(eq),
-            vba_num(eq.expect_si),
-            eq.slot
+            vba_num(eq.expect_si.abs()),
+            eq.slot,
+            sign_lit(eq.expect_si)
         ));
     }
     let degrade_note = if md.degraded_variants.is_empty() {
@@ -2428,6 +2720,47 @@ fn dim_check(which: usize, expect: f64, what: &str) -> String {
     format!(
         "    If feat Is Nothing Then gMsg = \"the feature was not created\": GoTo ExFail\n    Set dm = swDoc.Parameter(\"D{which}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the {what} dimension is missing\": GoTo ExFail\n    If Abs(dm.SystemValue - {}) > 0.000001 Then gMsg = \"the {what} does not match\": GoTo ExFail\n",
         vba_num(expect)
+    )
+}
+
+/// A feature dimension equation bound to D{which} (a literal index), under
+/// the sign contract: the dimension carries |expect|, the equation right-hand
+/// side keeps source semantics, signVal folds the sign into the stored text
+/// and the registered regSign normalizes downstream SlotRef references.
+fn dim_eq(which: usize, eq: &crate::replay::DimEquation, what: &str, fail: &str) -> String {
+    format!(
+        "    Set dm = swDoc.Parameter(\"D{which}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the {what} dimension is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}) Then gMsg = \"{fail}\": GoTo ExFail\n",
+        rhs_vba(eq),
+        vba_num(eq.expect_si.abs()),
+        eq.slot,
+        sign_lit(eq.expect_si)
+    )
+}
+
+/// A dimension readback on a RUNTIME-chosen dimension index (a Long local,
+/// concatenated locale-independent through Trim(Str(...))): the swap-aware
+/// D1/D2 bindings of the direction truth table.
+fn dim_check_dyn(which_local: &str, expect: f64, what: &str) -> String {
+    format!(
+        "    Set dm = swDoc.Parameter(\"D\" & Trim(Str({which_local})) & \"@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the {what} dimension is missing\": GoTo ExFail\n    If Abs(dm.SystemValue - {}) > 0.000001 Then gMsg = \"the {what} does not match\": GoTo ExFail\n",
+        vba_num(expect)
+    )
+}
+
+/// A dimension equation bound to a runtime-chosen dimension index (the
+/// swap-aware binding), under the same sign contract as [`dim_eq`].
+fn dim_eq_dyn(
+    which_local: &str,
+    eq: &crate::replay::DimEquation,
+    what: &str,
+    fail: &str,
+) -> String {
+    format!(
+        "    Set dm = swDoc.Parameter(\"D\" & Trim(Str({which_local})) & \"@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the {what} dimension is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}) Then gMsg = \"{fail}\": GoTo ExFail\n",
+        rhs_vba(eq),
+        vba_num(eq.expect_si.abs()),
+        eq.slot,
+        sign_lit(eq.expect_si)
     )
 }
 

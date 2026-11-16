@@ -181,7 +181,7 @@ fn two_maps_keep_per_slot_state_and_restore_on_reference() {
     // different map - never its own step index.
     let extrude = proc_region(&text, "BuildExtrude3");
     assert!(
-        extrude.contains("MapIsIdentity(1)"),
+        extrude.contains("gMapValid(1)") && extrude.contains("gMapSide(1)"),
         "the extrude does not consult the referenced sketch's map slot"
     );
     assert!(
@@ -189,7 +189,9 @@ fn two_maps_keep_per_slot_state_and_restore_on_reference() {
         "the extrude does not select the referenced sketch's identity"
     );
     assert!(
-        !extrude.contains("skName3") && !extrude.contains("MapIsIdentity(3)"),
+        !extrude.contains("skName3")
+            && !extrude.contains("gMapSide(3)")
+            && !extrude.contains("gMapValid(3)"),
         "the extrude consults its own step index instead of the reference"
     );
     // Its depth equation reads the first sketch's registered dimension -

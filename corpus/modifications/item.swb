@@ -24,6 +24,17 @@ Dim gDoc As Object
 Dim gFeatMgr As Object
 Dim regName(0 To 0) As String
 Dim regSign(0 To 0) As Double
+
+' ---- extrude/revolve direction truth table (measured on the seat) ----
+' Each constant comes from a direction probe's runtime report (corpus/
+' compat-probe); 0 = UNMEASURED and every decision that consults it
+' refuses with a named reason - never a silent guess, never 'created'.
+Const TT_EX_DIR_TRUE_SIDE As Long = 0      ' probe-extrudedir: Dir=True sends material toward TT * the sketch normal
+Const TT_EX_FIRST_SIDE As Long = 0         ' probe-twosided: the first depth's end sits toward TT * the sketch normal (Dir=False call shape)
+Const TT_EX_THROUGH_ALL_DIR As Long = 0    ' probe-throughall: the through-all Dir=True reading (its contract allows inconclusive)
+Const TT_REV_SENSE As Long = 0             ' probe-revolvedir: ReverseDir=False sweeps the right-hand +angle sense about the drawn axis when +1
+Const TT_REV_TWO_FIRST_SIDE As Long = 0    ' probe-revolvedir: the two-sided first angle sweeps right-hand sense TT about the drawn axis
+Const TT_REV_DIR_LAW As Long = 0           ' the structural law (1 = right-hand rule about the drawn axis): accepted from seat evidence, never from the probes alone
 Dim feat0 As SldWorks.Feature
 Dim feat1 As SldWorks.Feature
 Dim feat2 As SldWorks.Feature
@@ -732,10 +743,11 @@ Function SketchToModelZ(ByVal idx As Long, ByVal s As Double, ByVal t As Double)
 SketchToModelZ = gFrame(idx, 11) + s * gFrame(idx, 2) + t * gFrame(idx, 5)
 End Function
 
-' Feature guards (batch boundary): extrude, revolve and primitive replay
-' still assume the identity map on the source normal side - batches 2 and 3
-' replace this with the direction truth table and primitive adaptation.
-' Anything else is refused with a named reason and never reports created.
+' Feature guards (batch boundary): primitive replay still assumes the
+' identity map - batch 3 replaces this with primitive adaptation. Extrude
+' and revolve replay runs through the direction truth table on any valid
+' map (batch 2). Anything else is refused with a named reason and never
+' reports created.
 Function MapIsIdentity(ByVal idx As Long) As Boolean
 MapIsIdentity = False
 If Not gMapValid(idx) Then Exit Function

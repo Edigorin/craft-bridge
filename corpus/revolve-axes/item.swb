@@ -24,6 +24,17 @@ Dim gDoc As Object
 Dim gFeatMgr As Object
 Dim regName(0 To 0) As String
 Dim regSign(0 To 0) As Double
+
+' ---- extrude/revolve direction truth table (measured on the seat) ----
+' Each constant comes from a direction probe's runtime report (corpus/
+' compat-probe); 0 = UNMEASURED and every decision that consults it
+' refuses with a named reason - never a silent guess, never 'created'.
+Const TT_EX_DIR_TRUE_SIDE As Long = 0      ' probe-extrudedir: Dir=True sends material toward TT * the sketch normal
+Const TT_EX_FIRST_SIDE As Long = 0         ' probe-twosided: the first depth's end sits toward TT * the sketch normal (Dir=False call shape)
+Const TT_EX_THROUGH_ALL_DIR As Long = 0    ' probe-throughall: the through-all Dir=True reading (its contract allows inconclusive)
+Const TT_REV_SENSE As Long = 0             ' probe-revolvedir: ReverseDir=False sweeps the right-hand +angle sense about the drawn axis when +1
+Const TT_REV_TWO_FIRST_SIDE As Long = 0    ' probe-revolvedir: the two-sided first angle sweeps right-hand sense TT about the drawn axis
+Const TT_REV_DIR_LAW As Long = 0           ' the structural law (1 = right-hand rule about the drawn axis): accepted from seat evidence, never from the probes alone
 Dim feat1 As SldWorks.Feature
 Dim feat2 As SldWorks.Feature
 Dim skName0 As String
@@ -557,17 +568,22 @@ Function BuildRevolve1() As String
     Dim feat As SldWorks.Feature
     Dim dm As SldWorks.Dimension
     Dim ax As Object
-    If Not MapIsIdentity(0) Then gMsg = "frame adaptation: revolve replay on a non-identity sketch map is not implemented (direction semantics are batch 2); refusing to report created": GoTo ExFail
+    Dim revFlag As Boolean
+    If Not gMapValid(0) Then gMsg = "frame adaptation: the profile sketch carries no valid adaptation map; refusing to report created": GoTo ExFail
+    If TT_REV_DIR_LAW <> 1 Then gMsg = "the revolve sweep-direction law is not established: probe-revolvedir measures one frame and one directed axis, and the right-hand-rule law has not been accepted from seat evidence (TT_REV_DIR_LAW); refusing to report created": GoTo ExFail
+    If TT_REV_SENSE = 0 Then gMsg = "the revolve sweep-direction truth table is unmeasured: probe-revolvedir has not established which side ReverseDir=False sweeps toward; refusing to report created": GoTo ExFail
+    revFlag = (TT_REV_SENSE <> -1)
     ok = swDoc.Extension.SelectByID2(skName0, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If Not ok Then gMsg = "could not select the profile sketch": GoTo ExFail
     swSketchMgr.InsertSketch True
     ok = swDoc.Extension.SelectByID2(skName0, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If Not ok Then gMsg = "could not select the profile sketch": GoTo ExFail
     If Not sl0(0).Select(True) Then gMsg = "could not select the revolve axis": GoTo ExFail
-    Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 4.71238898038469, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)
+    Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, revFlag, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 4.71238898038469, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)
     If feat Is Nothing Then gMsg = "the revolve was not created": GoTo ExFail
+    If feat Is Nothing Then gMsg = "the feature was not created": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
-    If dm Is Nothing Then gMsg = "the revolve angle dimension D1 is missing": GoTo ExFail
+    If dm Is Nothing Then gMsg = "the revolve angle D1 dimension is missing": GoTo ExFail
     If Abs(dm.SystemValue - 4.71238898038469) > 0.000001 Then gMsg = "the revolve angle D1 does not match": GoTo ExFail
     Set feat1 = feat
     gMsg = "revolve 270 deg; sweep direction and volume are acceptance checks"
@@ -598,23 +614,36 @@ Function BuildRevolve2() As String
     Dim feat As SldWorks.Feature
     Dim dm As SldWorks.Dimension
     Dim ax As Object
-    If Not MapIsIdentity(0) Then gMsg = "frame adaptation: revolve replay on a non-identity sketch map is not implemented (direction semantics are batch 2); refusing to report created": GoTo ExFail
+    Dim vA As Variant
+    Dim vB As Variant
+    If Not gMapValid(0) Then gMsg = "frame adaptation: the profile sketch carries no valid adaptation map; refusing to report created": GoTo ExFail
     ok = swDoc.Extension.SelectByID2(skName0, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If Not ok Then gMsg = "could not select the profile sketch": GoTo ExFail
     swSketchMgr.InsertSketch True
-    Set ax = swSketchMgr.CreateLine(-0.05, 0.0, 0#, 0.05, 0.0, 0#)
+    Set ax = swSketchMgr.CreateLine(MapU(0, -0.05, 0.0), MapV(0, -0.05, 0.0), 0#, MapU(0, 0.05, 0.0), MapV(0, 0.05, 0.0), 0#)
+    If ax Is Nothing Then gMsg = "the revolve helper axis did not appear": GoTo ExFail
     ax.Construction = True
-    ax.Select False
+    If Not ax.Select(False) Then gMsg = "the helper axis would not select for fixing": GoTo ExFail
     swDoc.SketchAddConstraints "sgFix"
     swDoc.ClearSelection2 True
+    SolveSketch skName0
+    vA = ax.GetStartPoint
+    vB = ax.GetEndPoint
+    If Abs(vA(0) - MapU(0, -0.05, 0.0)) > 0.000001 Then gMsg = "the revolve helper axis start does not sit where the map put it": GoTo ExFail
+    If Abs(vA(1) - MapV(0, -0.05, 0.0)) > 0.000001 Then gMsg = "the revolve helper axis start does not sit where the map put it": GoTo ExFail
+    If Abs(vA(2)) > 0.000001 Then gMsg = "the revolve helper axis start is off the sketch plane": GoTo ExFail
+    If Abs(vB(0) - MapU(0, 0.05, 0.0)) > 0.000001 Then gMsg = "the revolve helper axis end does not sit where the map put it": GoTo ExFail
+    If Abs(vB(1) - MapV(0, 0.05, 0.0)) > 0.000001 Then gMsg = "the revolve helper axis end does not sit where the map put it": GoTo ExFail
+    If Abs(vB(2)) > 0.000001 Then gMsg = "the revolve helper axis end is off the sketch plane": GoTo ExFail
     swSketchMgr.InsertSketch True
     ok = swDoc.Extension.SelectByID2(skName0, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If Not ok Then gMsg = "could not select the profile sketch": GoTo ExFail
     If Not ax.Select(True) Then gMsg = "could not select the helper axis": GoTo ExFail
     Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 6.283185307179586, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)
     If feat Is Nothing Then gMsg = "the revolve was not created": GoTo ExFail
+    If feat Is Nothing Then gMsg = "the feature was not created": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
-    If dm Is Nothing Then gMsg = "the revolve angle dimension D1 is missing": GoTo ExFail
+    If dm Is Nothing Then gMsg = "the revolve angle D1 dimension is missing": GoTo ExFail
     If Abs(dm.SystemValue - 6.283185307179586) > 0.000001 Then gMsg = "the revolve angle D1 does not match": GoTo ExFail
     Set feat2 = feat
     gMsg = "revolve 360 deg; sweep direction and volume are acceptance checks"
@@ -1137,10 +1166,11 @@ Function SketchToModelZ(ByVal idx As Long, ByVal s As Double, ByVal t As Double)
 SketchToModelZ = gFrame(idx, 11) + s * gFrame(idx, 2) + t * gFrame(idx, 5)
 End Function
 
-' Feature guards (batch boundary): extrude, revolve and primitive replay
-' still assume the identity map on the source normal side - batches 2 and 3
-' replace this with the direction truth table and primitive adaptation.
-' Anything else is refused with a named reason and never reports created.
+' Feature guards (batch boundary): primitive replay still assumes the
+' identity map - batch 3 replaces this with primitive adaptation. Extrude
+' and revolve replay runs through the direction truth table on any valid
+' map (batch 2). Anything else is refused with a named reason and never
+' reports created.
 Function MapIsIdentity(ByVal idx As Long) As Boolean
 MapIsIdentity = False
 If Not gMapValid(idx) Then Exit Function

@@ -191,11 +191,14 @@ dimension sign is resolved from what the dimension measures against the
 source value and written into the assigned value **and the equation RHS**,
 so later parameter edits keep tracking. A non-permutation map **omits** the
 affected relation or dimension with a named reason and a dead equation slot
-(terminating: never re-attempted as a failure) — bounded support, this seat
-only exhibits permutation frames. Extrude, revolve and primitive steps
-currently require the identity map on the source normal side and otherwise
-fail with a named reason (their direction semantics are batches 2 and 3);
-they never report `created` on an unadapted path.
+(terminating: never re-attempted as a failure) - bounded support, this seat
+only exhibits permutation frames. Extrude and revolve replay runs through
+the **direction truth table** on ANY valid adaptation map (the extrude side
+decisions use only the map's orientation `gMapSide`; the revolve axis is
+mapped like geometry and its sweep factor passes through the map unchanged
+- see "Direction truth table"). Primitive steps still require the identity
+map on the source normal side until batch 3 and otherwise fail with a named
+reason; nothing ever reports `created` on an unestablished path.
 
 **Evidence rules (batch 1):** every selection is checked (`Select` returns
 Boolean and its result is captured). `SketchAddConstraints` has **no return
@@ -212,7 +215,16 @@ magnitudes coincide**), and the value edit must carry exactly the measured
 quantity - a wrong-kind dimension provably moves the wrong axis. Registered
 dimension slots carry their sign (`regSign`) and downstream equation
 references normalize back to source semantics through `SlotRef`, so
-parameter edits keep meaning what the source meant. The
+parameter edits keep meaning what the source meant. Feature dimension
+equations (extrude depths, revolve angles) follow the same contract: the
+dimension carries the absolute value, the sign travels through
+`AddDimEquation`'s `signVal` into the stored equation text, and `regSign`
+normalizes downstream references; after a two-sided argument swap each
+equation binds to the dimension that carries ITS source side, never a
+literal D number. A parameter edit that flips a source sign still cannot
+follow a flipped geometry side within one replay (the baked side flags) -
+a recorded limitation of the same class as the baked sketch-dimension
+signs. The
 input-dimension-value preference is disabled with a verified readback and
 restored with one at every exit. No VBA identifier may shadow an intrinsic
 (`sgn`, `val`, `mid`, ...): `Dim sgn As Double` is a **compile error** that
@@ -244,15 +256,95 @@ pin its text, not its behaviour.
 
 | SolidCraft | SolidWorks API | Checkpoint-verified |
 |---|---|---|
-| `type: "extrude"`, `profiles: {"type":"all"}` | select the sketch, `FeatureManager.FeatureExtrusion2` blind single-side | pending |
-| `extent.distance` literal (`"12 mm"`, `"0.5 in"`, bare = mm) | depth in metres; non-literal expressions are **unsupported until expressions land** (stop rule) | pending |
-| `direction: "positive"|"negative"` | extrude direction flag | pending |
+| `type: "extrude"`, `profiles: {"type":"all"}` | select the sketch, `FeatureManager.FeatureExtrusion2` (the call shapes below) | pending |
+| `extent.distance` literal or expression (`"12 mm"`, `"0.5 in"`, bare = mm) | depth in metres; non-literal expressions become dimension equations under the sign contract (Equations) | pending |
+| `direction: "positive"|"negative"` | blind extrude: the material's end is `e1 = direction-sign * distance` (source-pinned #2700: a negative distance turns its own side over). The `Dir` flag is resolved through the direction truth table and the sketch's map side | pending |
+| `distance2` | two-sided: the body spans between its two ends `e1 = direction-sign * distance` and `e2 = -direction-sign * distance2`; the two depth arguments (and their D1/D2 dimension identities) swap per the truth table so each end lands on its source side. Ends on the SAME side of the sketch plane are refused before the call: no supported call shape spans them | pending |
+| `through_all` | one-sided through-all on `e1`'s side; the saved distance only names the side (#10415) and carries no depth dimension, no equation and no slot. `distance2` with `through_all` is a named stop (its call shape is unprobed) | pending |
+| `direction: "symmetric"` | mid-plane extrude; `distance` is the total thickness (`convention: total_distance`; `legacy_per_side` doubles it and keeps literal distances only - a parametric one would drive the doubled dimension from the unscaled expression and is refused). Direction-free: no truth-table cell is consulted | pending |
 | `operation: "new_body"` | plain extrude in a fresh part | pending |
-| `convention`, `distance2`, `start_offset`, `taper`, `to`/`from`, `through_all`, `thin`, `cut`/`join`/`intersect`, `profiles` other than `all` | **stop rule** (unsupported in the tracer phase) | n/a |
+| `start_offset`, `taper`, `to`/`from`, `to_offset`, `corner`, `to_body_apart`, `thin`, `cut`/`intersect`, `profiles` other than `all` | **stop rule** (unsupported in the tracer phase) | n/a |
 
 Extrude verification: the feature must exist and its depth dimension must
-read back within tolerance. There is no degrade path for a failed extrude in
-this phase: it is `failed`.
+read back within tolerance (each two-sided depth against the side that
+actually carries it after the swap). There is no degrade path for a failed
+extrude in this phase: it is `failed`.
+
+## Direction truth table (extrude and revolve, batch 2)
+
+The physical side a call flag selects is **measured on the seat**, never
+assumed. Every constant below lives in `src/truth.rs` and is emitted into
+the macro as a `TT_*` VBA constant; `0` is the UNMEASURED sentinel and
+every runtime decision that consults an unmeasured cell refuses with a
+named reason naming its probe - a step whose direction semantics cannot be
+established fails and never reports `created`. Filling a constant is a
+one-line change followed by golden and corpus regeneration.
+
+| Constant | Meaning | Evidence |
+|---|---|---|
+| `TT_EX_DIR_TRUE_SIDE` | `FeatureExtrusion2`'s `Dir=True` sends material toward `TT * n_sk` (the profile sketch normal) | probe-extrudedir (`dir-true`/`dir-false`; bounding box + D1 identity) |
+| `TT_EX_FIRST_SIDE` | with the two-sided call shape (`Dir=False`), the first depth argument's end sits toward `TT * n_sk` | probe-twosided (unequal box extents + D1/D2 identities) |
+| `TT_EX_THROUGH_ALL_DIR` | the through-all call shape's `Dir=True` reading | probe-throughall; its own interpretation contract allows an INCONCLUSIVE result (no bounded material in a fresh part; the side is never inferred from the blind cases), in which case through-all extrudes refuse with a named reason |
+| `TT_REV_SENSE` | with the blind revolve call shape (`ReverseDir=False`), the sweep is the right-hand rotation by `+angle` about the drawn axis direction (start to end) when `+1`, about the opposite direction when `-1` | probe-revolvedir (`blind-270-normal`/`blind-270-reverse`; mass-property centroid + volume; the axis endpoint order is pinned as evidence) |
+| `TT_REV_TWO_FIRST_SIDE` | with the two-sided revolve call shape (`ReverseDir=False`), the first angle sweeps with right-hand sense `TT` about the drawn axis direction | probe-revolvedir (`twosided-100-150`; centroid + D1/D2 identities) |
+| `TT_REV_DIR_LAW` | the structural law the two rows above are read under (`1` = the right-hand rule about the drawn axis direction) | **not** filled from the four probes alone (they run one frame and one directed axis): set from the sweep-direction seat-acceptance check or a discriminating probe. Directional revolves refuse with a named reason while it is `0`, even when the sense constants are filled |
+
+Source-side rules the adaptation applies on top of the constants
+(source-pinned from SolidCraft's own sources):
+
+- **Extrude sides** (#2700 `extrude_convention_tests`): the first end is
+  `e1 = direction-sign * distance`, the second `e2 = -direction-sign *
+  distance2`; a negative distance turns its own side over and the body
+  spans between the two ends. In units of `n_sk` an end at `e` sits toward
+  `sign(e) * gMapSide` - the map side (the map's orientation) is the only
+  map entry the extrude needs, so any valid adaptation map works, not only
+  signed permutations.
+- **Revolve sweep** (`kernel/src/build.rs` `canonical_revolve_axis` /
+  `revolved`): partial turns go toward the side the sketch normal points
+  to, independent of the axis direction sign and of which side the profile
+  lies on. The emitter classifies the profile's side of the axis
+  (`truth::profile_side`, from the NON-CONSTRUCTION profile geometry only -
+  line endpoints and circle centres with their radii; construction axes,
+  unused points and a circle's extent beyond its centre are accounted for)
+  and refuses with the reason named when the profile straddles the axis or
+  no side exists. The axis is mapped through the sketch's map **like
+  geometry** (both helper-axis endpoints go through `MapU`/`MapV`, so the
+  drawn direction is the mapped source direction) which makes the sweep
+  factor pass through the map unchanged - again any valid map works. The
+  helper axis's mapped placement is read back after a solve: evidence, not
+  assumption.
+- **Revolve angles** (`doc/src/eval.rs` `revolve_extent_for_handle`): a
+  blind partial sweeps `[0, angle]` from the sketch plane toward the
+  source normal (a negative angle turns its own sweep over); two-sided is
+  the interval `[-angle2, +angle]` - `angle` on the normal side, `angle2`
+  "turned back from the profile" - so BOTH angles must be positive and a
+  signed combination is refused before feature creation, never folded into
+  an opposite-sided pair; symmetric splits the (total) angle either side
+  "whichever way the axis points"; a full turn (360 deg) is
+  convention-free and consults no cell.
+- **Direction-free forms**: symmetric (mid-plane) extrude and revolve and
+  full-turn revolves span both sides, so no direction decision exists -
+  their builders never consult the truth table (and their single argument
+  is the total depth/angle: the documented mid-plane call shape,
+  checkpoint-pending and probe-confirmable).
+
+## Revolve (tracer phase)
+
+| SolidCraft | SolidWorks API | Checkpoint-verified |
+|---|---|---|
+| `type: "revolve"`, `profiles: {"type":"all"}` | select the profile sketch plus the axis, `FeatureManager.FeatureRevolve2` | pending |
+| `axis: {"sketch_line"}` | the profile's own line as the axis (already drawn mapped; its endpoints went through `MapU`/`MapV` at draw time) | pending |
+| `axis`: `sketch_axis` x/y, world axes in-plane, `{origin, dir}` | an anchored helper construction line drawn through the sketch's map like geometry, with its placement read back | pending |
+| `angle` blind partial (`convention: "sketch_normal"`) | sweep `[0, angle]` from the sketch plane toward the source normal; `ReverseDir` from the truth table | pending |
+| `angle` = 360 deg | full turn; convention-free, no truth-table cell consulted | pending |
+| `angle` + `angle2` | two-sided, interval `[-angle2, +angle]`; the angle arguments (and their D1/D2 dimension identities) swap per the truth table; non-positive angles refused | pending |
+| `direction: "symmetric"` | mid-plane revolve; `angle` is the whole turn split either side | pending |
+| `to`, `convention: "legacy_axis_start"` on a partial turn, model/construction axes, edge/face axes, `profiles` other than `all` | **stop rule** (unsupported in the tracer phase) | n/a |
+
+Revolve verification: the feature must exist and its angle dimension(s) must
+read back within tolerance (each angle against the side that carries it
+after the swap). The sweep direction and the volume of partial revolves are
+owner-seat acceptance checks.
 
 ## Document handling
 

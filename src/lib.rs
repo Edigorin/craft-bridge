@@ -12,6 +12,7 @@ pub mod recipe;
 pub mod replay;
 pub mod report;
 pub mod swb;
+pub mod truth;
 pub mod zipio;
 
 pub use error::{Error, Result};

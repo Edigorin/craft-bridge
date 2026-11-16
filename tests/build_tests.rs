@@ -1449,13 +1449,24 @@ fn adaptation_machinery_is_wired_fail_closed() {
         text.contains("Dim gMap00(0 To ") && text.contains("gMap00(idx)"),
         "map state is not indexed per sketch slot"
     );
-    // Deferred consumers are guarded against non-identity maps: each family
-    // refuses in its own builder, before any feature is created.
-    for (fam, recipe) in [
-        ("BuildExtrude", TRACER),
-        ("BuildRevolve", TRACER_REVOLVE),
-        ("BuildPrim", TRACER_PRIM),
-    ] {
+    // Deferred consumers keep their batch boundaries in their own builders,
+    // before any feature is created: primitives still refuse non-identity
+    // maps (batch 3), while extrude and revolve run through the direction
+    // truth table on any valid map and guard on map VALIDITY instead.
+    {
+        let case = Case::new(TRACER_PRIM);
+        case.build_to("guard.swb", false).unwrap();
+        let gtext = fs::read_to_string(case.dir.path().join("guard.swb")).unwrap();
+        let i = gtext
+            .find("Function BuildPrim")
+            .expect("no BuildPrim builder");
+        let region = &gtext[i..i + 1200.min(gtext.len() - i)];
+        assert!(
+            region.contains("MapIsIdentity("),
+            "BuildPrim: no identity-map guard"
+        );
+    }
+    for (fam, recipe) in [("BuildExtrude", TRACER), ("BuildRevolve", TRACER_REVOLVE)] {
         let case = Case::new(recipe);
         case.build_to("guard.swb", false).unwrap();
         let gtext = fs::read_to_string(case.dir.path().join("guard.swb")).unwrap();
@@ -1464,8 +1475,12 @@ fn adaptation_machinery_is_wired_fail_closed() {
             .unwrap_or_else(|| panic!("no {fam} builder"));
         let region = &gtext[i..i + 1200.min(gtext.len() - i)];
         assert!(
-            region.contains("MapIsIdentity("),
-            "{fam}: no non-identity map guard"
+            region.contains("gMapValid("),
+            "{fam}: no map-validity guard"
+        );
+        assert!(
+            !region.contains("MapIsIdentity("),
+            "{fam}: the retired identity guard survived"
         );
     }
     // The toggle dialog that blocks AddDimension2 is disabled and restored.
@@ -1999,4 +2014,534 @@ fn close_mode_parsing_is_tri_state_and_fail_closed() {
             "{name}: a failed header read can still authorize a close"
         );
     }
+}
+
+// ---- Phase 1 batch 2: extrude/revolve direction truth table ----
+
+use craft_bridge::replay::{ExtrudeKind, RevolveKind};
+use craft_bridge::truth;
+
+/// The builder region of an emitted macro function (up to its End Function).
+fn builder_region<'a>(text: &'a str, fname: &str) -> &'a str {
+    let i = text
+        .find(&format!("Function {fname}("))
+        .unwrap_or_else(|| panic!("no {fname} builder"));
+    let j = text[i..].find("End Function").expect("the builder ends") + i;
+    &text[i..j]
+}
+
+#[test]
+fn truth_table_decisions_refuse_unmeasured_cells() {
+    // 0 is the UNMEASURED sentinel: no decision may be taken from it.
+    for want in [-1, 1] {
+        assert_eq!(truth::extrude_dir_flag(want, 0), None);
+        assert_eq!(truth::extrude_two_sided_swap(want, 0), None);
+        assert_eq!(truth::revolve_reverse_flag(want, 0), None);
+        assert_eq!(truth::revolve_two_sided_swap(want, 0), None);
+    }
+}
+
+#[test]
+fn truth_table_decisions_map_sides_and_senses() {
+    // Blind: the Dir flag is the equality of the wanted side and the
+    // measured side - over both map-side flips and both directions.
+    for (want, measured, flag) in [
+        (1, 1, Some(true)),
+        (1, -1, Some(false)),
+        (-1, 1, Some(false)),
+        (-1, -1, Some(true)),
+    ] {
+        assert_eq!(
+            truth::extrude_dir_flag(want, measured),
+            flag,
+            "want {want} measured {measured}"
+        );
+    }
+    // Two-sided: swap exactly when the wanted first side differs.
+    for (want, measured, swap) in [
+        (1, 1, Some(false)),
+        (1, -1, Some(true)),
+        (-1, 1, Some(true)),
+        (-1, -1, Some(false)),
+    ] {
+        assert_eq!(truth::extrude_two_sided_swap(want, measured), swap);
+    }
+    // Revolve: the flag flips exactly when the wanted sense differs.
+    for (want, measured, flag) in [
+        (1, 1, Some(false)),
+        (1, -1, Some(true)),
+        (-1, 1, Some(true)),
+        (-1, -1, Some(false)),
+    ] {
+        assert_eq!(truth::revolve_reverse_flag(want, measured), flag);
+    }
+    for (want, measured, swap) in [
+        (1, 1, Some(false)),
+        (1, -1, Some(true)),
+        (-1, 1, Some(true)),
+        (-1, -1, Some(false)),
+    ] {
+        assert_eq!(truth::revolve_two_sided_swap(want, measured), swap);
+    }
+}
+
+#[test]
+fn profile_side_classifies_real_geometry_only() {
+    // Points 0 and 1 are UNUSED (no non-construction curve reaches them)
+    // and 2/3 belong to the construction axis; none of them may decide the
+    // profile's side. The circle's radius reaches beyond its centre.
+    let points = [
+        [0.0, 0.0],   // 0: unused
+        [-1.0, 0.0],  // 1: unused, on the far side of the axis
+        [0.0, -20.0], // 2/3: the construction axis
+        [0.0, 20.0],
+        [5.0, -10.0], // 4..7: the profile rectangle at u = 5..10
+        [10.0, -10.0],
+        [10.0, 10.0],
+        [5.0, 10.0],
+        [3.0, 0.0], // 8: circle centre u = 3, r = 1
+    ];
+    let lines = [
+        (2, 3, true),
+        (4, 5, false),
+        (5, 6, false),
+        (6, 7, false),
+        (7, 4, false),
+    ];
+    let circles = [(8usize, 1.0f64, false)];
+    // Axis along +v at u = 0 (normalized internally).
+    let side = truth::profile_side(&points, &lines, &circles, [0.0, -20.0], [0.0, 40.0])
+        .expect("the profile lies on one side");
+    assert_eq!(side, -1, "the perpendicular distance is -u here");
+    // A straddling profile refuses with its reason named.
+    let mut straddle = points;
+    straddle[4] = [-5.0, -10.0];
+    let err = truth::profile_side(&straddle, &lines, &circles, [0.0, -20.0], [0.0, 1.0])
+        .expect_err("a crossing profile must refuse");
+    assert!(err.contains("crosses"), "unexpected reason: {err}");
+    // The circle's RADIUS decides, not its centre: at u = 0.5 with r = 1 it
+    // crosses the axis although its centre is off it.
+    let circles_near = [(8usize, 1.0f64, false)];
+    let mut near = points;
+    near[8] = [0.5, 0.0];
+    let err = truth::profile_side(&near, &lines, &circles_near, [0.0, -20.0], [0.0, 1.0])
+        .expect_err("a circle reaching across the axis must refuse");
+    assert!(err.contains("crosses"), "unexpected reason: {err}");
+    // Everything on the axis: no side exists.
+    let on_axis = [(2usize, 3usize, false), (2, 3, false), (3, 2, false)];
+    let err = truth::profile_side(&points, &on_axis, &[], [0.0, 0.0], [0.0, 1.0])
+        .expect_err("geometry on the axis has no side");
+    assert!(
+        err.contains("lies on the revolve axis"),
+        "unexpected: {err}"
+    );
+    // No profile geometry at all is a named refusal, not a silent +1.
+    let err = truth::profile_side(&points, &[(2, 3, true)], &[], [0.0, -20.0], [0.0, 1.0])
+        .expect_err("construction-only geometry has no profile side");
+    assert!(err.contains("no profile geometry"), "unexpected: {err}");
+}
+
+#[test]
+fn mapped_axis_keeps_the_sweep_sense_for_any_valid_map() {
+    // The drawn axis direction is the MAPPED source direction ("like
+    // geometry"), so the right-hand sense sigma survives every valid map -
+    // signed permutations and non-permutation isometries alike: the 2D cross
+    // product scales by the map's determinant (its orientation, the runtime
+    // gMapSide). This is the "any valid map" algebra behind the emitted
+    // decision.
+    let maps: [([f64; 4], &str); 7] = [
+        ([1.0, 0.0, 0.0, 1.0], "identity"),
+        ([0.0, 1.0, -1.0, 0.0], "quarter turn"),
+        ([-1.0, 0.0, 0.0, 1.0], "u reflected"),
+        ([1.0, 0.0, 0.0, -1.0], "v reflected"),
+        ([0.0, -1.0, 1.0, 0.0], "opposite quarter turn"),
+        ([-1.0, 0.0, 0.0, -1.0], "half turn"),
+        (
+            [
+                std::f64::consts::FRAC_1_SQRT_2,
+                std::f64::consts::FRAC_1_SQRT_2,
+                -std::f64::consts::FRAC_1_SQRT_2,
+                std::f64::consts::FRAC_1_SQRT_2,
+            ],
+            "45 degrees (non-permutation)",
+        ),
+    ];
+    let cross = |a: (f64, f64), b: (f64, f64)| a.0 * b.1 - a.1 * b.0;
+    for (d, rho) in [((0.0, 1.0), (5.0, -2.0)), ((1.0, 0.0), (-3.0, 7.0))] {
+        let src = cross(d, rho);
+        for (m, name) in maps {
+            let det = m[0] * m[3] - m[2] * m[1];
+            // Vectors map through the linear part of MapU/MapV (no offset).
+            let map_vec = |v: (f64, f64)| (v.0 * m[0] + v.1 * m[2], v.0 * m[1] + v.1 * m[3]);
+            let mapped = cross(map_vec(d), map_vec(rho));
+            assert!(
+                (mapped - det * src).abs() < 1e-12,
+                "{name}: the mapped cross does not carry the orientation"
+            );
+            // The wanted sense computed in source space equals the one
+            // computed in sketch space (through the mapped axis).
+            let sigma_src = if src > 0.0 { 1 } else { -1 };
+            let sigma_sketch = if mapped > 0.0 { 1 } else { -1 };
+            let w = if det > 0.0 { 1 } else { -1 };
+            assert_eq!(sigma_src, w * sigma_sketch, "{name}: senses disagree");
+        }
+    }
+}
+
+#[test]
+fn extrude_builders_carry_the_direction_truth_table() {
+    // The constants block is emitted with slot markers and probe names.
+    let case = Case::new(TRACER);
+    case.build_to("tt.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("tt.swb")).unwrap();
+    for (name, probe) in [
+        ("TT_EX_DIR_TRUE_SIDE", "probe-extrudedir"),
+        ("TT_EX_FIRST_SIDE", "probe-twosided"),
+        ("TT_EX_THROUGH_ALL_DIR", "probe-throughall"),
+        ("TT_REV_SENSE", "probe-revolvedir"),
+        ("TT_REV_TWO_FIRST_SIDE", "probe-revolvedir"),
+        ("TT_REV_DIR_LAW", "TT_REV_DIR_LAW"),
+    ] {
+        assert!(
+            text.contains(&format!("Const {name} As Long = 0")),
+            "{name}: the unmeasured slot is missing"
+        );
+        let at = text.find(&format!("Const {name}")).expect("the constant");
+        let line = &text[at..text[at..].find('\n').unwrap() + at];
+        assert!(
+            line.contains(probe),
+            "{name}: no evidence source named: {line}"
+        );
+    }
+    // Blind: the flag decision runs through the map side and the measured
+    // side, with the probe named in the refusal.
+    let blind = builder_region(&text, "BuildExtrude3");
+    assert!(
+        blind.contains("probe-extrudedir has not established"),
+        "the blind refusal does not name its probe"
+    );
+    assert!(
+        blind.contains("wantSide = 1 * gMapSide(2)")
+            && blind.contains("dirFlag = (wantSide = TT_EX_DIR_TRUE_SIDE)"),
+        "the blind side decision is missing"
+    );
+}
+
+#[test]
+fn extrude_directions_fold_signs_and_refuse_unrepresentable_shapes() {
+    // A negative distance turns its own side over (#2700).
+    let recipe = TRACER.replace("\"distance\": \"12 mm\"", "\"distance\": \"-12 mm\"");
+    let steps = plan_of(&recipe);
+    match &steps[3].work {
+        Work::Extrude(ex) => assert_eq!(
+            ex.kind,
+            ExtrudeKind::Blind {
+                depth_m: 0.012,
+                negative: true
+            }
+        ),
+        other => panic!("not an extrude: {other:?}"),
+    }
+    let case = Case::new(&recipe);
+    case.build_to("neg.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("neg.swb")).unwrap();
+    let blind = builder_region(&text, "BuildExtrude3");
+    assert!(
+        blind.contains("wantSide = -1 * gMapSide(2)"),
+        "the negative distance did not flip the wanted side"
+    );
+    // The sign contract on the depth equation: the dimension carries the
+    // absolute value, signVal folds the sign into the stored equation text.
+    let recipe = TRACER.replace("\"distance\": \"12 mm\"", "\"distance\": \"-width\"");
+    let case = Case::new(&recipe);
+    case.build_to("neg2.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("neg2.swb")).unwrap();
+    let blind = builder_region(&text, "BuildExtrude3");
+    assert!(
+        blind.contains("-1#) Then gMsg = \"the extrude depth equation did not evaluate\""),
+        "the negative source sign did not travel through signVal"
+    );
+    assert!(
+        blind.contains(", 0.04, "),
+        "the driven dimension does not carry the absolute value"
+    );
+    // Two-sided ends keep their sides; the arguments and the D1/D2
+    // dimension indices follow the runtime swap.
+    let recipe = TRACER.replace(
+        "\"distance\": \"12 mm\"",
+        "\"distance\": \"10 mm\", \"distance2\": \"4 mm\"",
+    );
+    let steps = plan_of(&recipe);
+    match &steps[3].work {
+        Work::Extrude(ex) => assert_eq!(
+            ex.kind,
+            ExtrudeKind::TwoSided {
+                first_m: 0.01,
+                second_m: 0.004,
+                first_negative: false,
+                second_negative: true,
+            }
+        ),
+        other => panic!("not an extrude: {other:?}"),
+    }
+    let case = Case::new(&recipe);
+    case.build_to("two.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("two.swb")).unwrap();
+    let two = builder_region(&text, "BuildExtrude3");
+    assert!(
+        two.contains("probe-twosided has not established"),
+        "the two-sided refusal does not name its probe"
+    );
+    assert!(
+        two.contains("swap2 = (wantFirst <> TT_EX_FIRST_SIDE)")
+            && two.contains("wFirst = 2")
+            && two.contains("Trim(Str(wFirst))"),
+        "the swap-aware dimension binding is missing"
+    );
+    // Ends on the same side of the sketch plane: refused before the call.
+    let recipe = TRACER.replace(
+        "\"distance\": \"12 mm\"",
+        "\"distance\": \"-10 mm\", \"distance2\": \"4 mm\"",
+    );
+    let steps = plan_of(&recipe);
+    match &steps[3].work {
+        Work::Extrude(ex) => assert_eq!(
+            ex.kind,
+            ExtrudeKind::TwoSided {
+                first_m: 0.01,
+                second_m: 0.004,
+                first_negative: true,
+                second_negative: true,
+            }
+        ),
+        other => panic!("not an extrude: {other:?}"),
+    }
+    let case = Case::new(&recipe);
+    case.build_to("same.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("same.swb")).unwrap();
+    assert!(
+        text.contains("same side of the sketch plane is not representable"),
+        "a same-side span is not refused"
+    );
+    // Through-all: the direction cell is the probe's; while unmeasured the
+    // step refuses and names the probe and its inconclusive contract.
+    let recipe = TRACER.replace(
+        "\"distance\": \"12 mm\"",
+        "\"distance\": \"12 mm\", \"through_all\": true",
+    );
+    let case = Case::new(&recipe);
+    case.build_to("thru.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("thru.swb")).unwrap();
+    let thru = builder_region(&text, "BuildExtrude3");
+    assert!(
+        thru.contains("probe-throughall") && thru.contains("TT_EX_THROUGH_ALL_DIR = 0"),
+        "the through-all refusal does not name its probe"
+    );
+    // Symmetric is direction-free: no truth-table cell is consulted.
+    let recipe = TRACER.replace(
+        "\"direction\": \"positive\"",
+        "\"direction\": \"symmetric\"",
+    );
+    let case = Case::new(&recipe);
+    case.build_to("sym.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("sym.swb")).unwrap();
+    let sym = builder_region(&text, "BuildExtrude3");
+    assert!(
+        sym.contains("swEndCondMidPlane"),
+        "the symmetric extrude is not mid-plane"
+    );
+    assert!(
+        !sym.contains("TT_EX") && !sym.contains("TT_REV"),
+        "a direction-free form consulted the truth table"
+    );
+}
+
+#[test]
+fn through_all_never_allocates_depth_equations() {
+    // The saved distance only names the side: a parametric one must not
+    // create a depth equation or a live dimension slot (through-all has no
+    // depth dimension to bind to).
+    let recipe = TRACER.replace(
+        "\"distance\": \"12 mm\"",
+        "\"distance\": \"width\", \"through_all\": true",
+    );
+    let steps = plan_of(&recipe);
+    match &steps[3].work {
+        Work::Extrude(ex) => {
+            assert_eq!(ex.kind, ExtrudeKind::ThroughAll { negative: false });
+            assert!(ex.equations.is_empty(), "a phantom depth equation appeared");
+        }
+        other => panic!("not an extrude: {other:?}"),
+    }
+    let case = Case::new(&recipe);
+    case.build_to("thru2.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("thru2.swb")).unwrap();
+    let thru = builder_region(&text, "BuildExtrude3");
+    assert!(
+        !thru.contains("AddDimEquation"),
+        "a through-all builder binds a depth equation"
+    );
+    // two-sided through-all used to drop the second distance silently: it is
+    // a named stop now.
+    let recipe = TRACER.replace(
+        "\"distance\": \"12 mm\"",
+        "\"distance\": \"12 mm\", \"distance2\": \"4 mm\", \"through_all\": true",
+    );
+    let steps = plan_of(&recipe);
+    assert_eq!(steps[3].status, PlanStatus::FallbackPlanned);
+    assert!(
+        steps[3].detail.contains("two-sided through-all"),
+        "unexpected detail: {}",
+        steps[3].detail
+    );
+}
+
+#[test]
+fn legacy_symmetric_parametric_extrudes_stop_honestly() {
+    // legacy_per_side doubles the thickness; a non-literal distance would
+    // drive the doubled dimension from the unscaled expression. Literal
+    // distances stay supported (folded at parse time).
+    let recipe = TRACER.replace(
+        "\"convention\": \"total_distance\", \"direction\": \"positive\", \"distance\": \"12 mm\"",
+        "\"convention\": \"legacy_per_side\", \"direction\": \"symmetric\", \"distance\": \"12 mm\"",
+    );
+    let steps = plan_of(&recipe);
+    match &steps[3].work {
+        Work::Extrude(ex) => {
+            assert_eq!(ex.kind, ExtrudeKind::Symmetric { total_m: 0.024 })
+        }
+        other => panic!("not an extrude: {other:?}"),
+    }
+    let recipe = TRACER.replace(
+        "\"convention\": \"total_distance\", \"direction\": \"positive\", \"distance\": \"12 mm\"",
+        "\"convention\": \"legacy_per_side\", \"direction\": \"symmetric\", \"distance\": \"width\"",
+    );
+    let steps = plan_of(&recipe);
+    assert_eq!(steps[3].status, PlanStatus::FallbackPlanned);
+    assert!(
+        steps[3].detail.contains("legacy_per_side symmetric"),
+        "unexpected detail: {}",
+        steps[3].detail
+    );
+}
+
+#[test]
+fn revolve_builders_map_the_axis_and_gate_the_sweep_law() {
+    let case = Case::new(TRACER_REVOLVE);
+    case.build_to("ttrev.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("ttrev.swb")).unwrap();
+    // Partial (BuildRevolve1, axis = its sketch line, sigma = -1): the law
+    // gate precedes the measured sense, and both refusals name their probe.
+    let partial = builder_region(&text, "BuildRevolve1");
+    assert!(
+        partial.contains("TT_REV_DIR_LAW <> 1") && partial.contains("seat evidence"),
+        "the structural-law gate is missing"
+    );
+    assert!(
+        partial.contains("TT_REV_SENSE = 0") && partial.contains("probe-revolvedir"),
+        "the sense refusal does not name its probe"
+    );
+    assert!(
+        partial.contains("revFlag = (TT_REV_SENSE <> -1)"),
+        "the profile-side factor did not reach the flag: {}",
+        partial
+    );
+    // Full turn (BuildRevolve2, a helper axis): direction-free - no law
+    // gate, no sense cell - and the helper axis is drawn THROUGH THE MAP
+    // like geometry, with its placement read back.
+    let full = builder_region(&text, "BuildRevolve2");
+    assert!(
+        !full.contains("TT_REV_") && !full.contains("revFlag"),
+        "a full turn consulted the direction truth table"
+    );
+    assert!(
+        full.contains("CreateLine(MapU(0, -0.05, 0.0), MapV(0, -0.05, 0.0), 0#, MapU(0, 0.05, 0.0), MapV(0, 0.05, 0.0), 0#)"),
+        "the helper axis is not drawn through the map like geometry"
+    );
+    assert!(
+        full.contains("does not sit where the map put it"),
+        "the helper axis placement is not read back"
+    );
+    assert!(
+        full.contains("If Not ax.Select(False)"),
+        "the helper axis selection is not checked"
+    );
+}
+
+#[test]
+fn revolve_angle_semantics_preserve_signs_and_swap_sides() {
+    // A negative angle2 is an interval offset from the sketch plane
+    // ([-angle2, +angle]): the signs survive planning and the builder
+    // refuses before feature creation - never folded away.
+    let recipe = TRACER_REVOLVE.replace(
+        "\"angle\": \"270 deg\"",
+        "\"angle\": \"270 deg\", \"angle2\": \"-30 deg\"",
+    );
+    let steps = plan_of(&recipe);
+    match &steps[1].work {
+        Work::Revolve(rv) => match &rv.kind {
+            RevolveKind::TwoSided {
+                first_rad,
+                second_rad,
+            } => {
+                assert!(*first_rad > 0.0, "the first angle lost its sign");
+                assert!(*second_rad < 0.0, "the second angle lost its sign");
+            }
+            other => panic!("not two-sided: {other:?}"),
+        },
+        other => panic!("not a revolve: {other:?}"),
+    }
+    let case = Case::new(&recipe);
+    case.build_to("signedrev.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("signedrev.swb")).unwrap();
+    assert!(
+        text.contains("signed angles are refused, never folded"),
+        "a signed two-sided interval is not refused"
+    );
+    // A representable two-sided revolve swaps the angle arguments and their
+    // dimension indices per the measured first-side cell and the profile
+    // side (sigma = -1 for this fixture).
+    let recipe = TRACER_REVOLVE.replace(
+        "\"angle\": \"270 deg\"",
+        "\"angle\": \"100 deg\", \"angle2\": \"50 deg\"",
+    );
+    let case = Case::new(&recipe);
+    case.build_to("tworev.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("tworev.swb")).unwrap();
+    let two = builder_region(&text, "BuildRevolve1");
+    assert!(
+        two.contains("swapR = (TT_REV_TWO_FIRST_SIDE <> -1)")
+            && two.contains("wFirst = 2")
+            && two.contains("probe-revolvedir"),
+        "the two-sided revolve swap is missing: {}",
+        two
+    );
+    assert!(
+        two.contains("Trim(Str(wFirst))"),
+        "the swap-aware angle binding is missing"
+    );
+}
+
+#[test]
+#[ignore = "regenerates the pinned goldens after intentional emitter changes"]
+fn regenerate_goldens() {
+    let case = Case::new(TRACER);
+    let out = case.dir.path().join("tracer.swb");
+    let plan_path = case.dir.path().join("tracer-plan.json");
+    let text_path = case.dir.path().join("tracer-plan.txt");
+    build::build(
+        &BuildOptions {
+            artifact: &case.artifact,
+            out: &out,
+            plan: Some(&plan_path),
+            plan_text: Some(&text_path),
+            overwrite: true,
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    let gold = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
+    fs::copy(&out, gold.join("tracer.swb")).unwrap();
+    fs::copy(&plan_path, gold.join("tracer-plan.json")).unwrap();
+    fs::copy(&text_path, gold.join("tracer-plan.txt")).unwrap();
 }

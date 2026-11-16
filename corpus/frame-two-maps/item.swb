@@ -24,6 +24,17 @@ Dim gDoc As Object
 Dim gFeatMgr As Object
 Dim regName(0 To 4) As String
 Dim regSign(0 To 4) As Double
+
+' ---- extrude/revolve direction truth table (measured on the seat) ----
+' Each constant comes from a direction probe's runtime report (corpus/
+' compat-probe); 0 = UNMEASURED and every decision that consults it
+' refuses with a named reason - never a silent guess, never 'created'.
+Const TT_EX_DIR_TRUE_SIDE As Long = 0      ' probe-extrudedir: Dir=True sends material toward TT * the sketch normal
+Const TT_EX_FIRST_SIDE As Long = 0         ' probe-twosided: the first depth's end sits toward TT * the sketch normal (Dir=False call shape)
+Const TT_EX_THROUGH_ALL_DIR As Long = 0    ' probe-throughall: the through-all Dir=True reading (its contract allows inconclusive)
+Const TT_REV_SENSE As Long = 0             ' probe-revolvedir: ReverseDir=False sweeps the right-hand +angle sense about the drawn axis when +1
+Const TT_REV_TWO_FIRST_SIDE As Long = 0    ' probe-revolvedir: the two-sided first angle sweeps right-hand sense TT about the drawn axis
+Const TT_REV_DIR_LAW As Long = 0           ' the structural law (1 = right-hand rule about the drawn axis): accepted from seat evidence, never from the probes alone
 Dim feat3 As SldWorks.Feature
 Dim skName1 As String
 Dim pt1(0 To 7) As Object
@@ -1164,10 +1175,15 @@ Function BuildExtrude3() As String
     Dim ok As Boolean
     Dim feat As SldWorks.Feature
     Dim dm As SldWorks.Dimension
-    If Not MapIsIdentity(1) Then gMsg = "frame adaptation: extrude replay on a non-identity sketch map is not implemented (direction semantics are batch 2); refusing to report created": GoTo ExFail
+    Dim wantSide As Long
+    Dim dirFlag As Boolean
+    If Not gMapValid(1) Then gMsg = "frame adaptation: the profile sketch carries no valid adaptation map; refusing to report created": GoTo ExFail
+    If TT_EX_DIR_TRUE_SIDE = 0 Then gMsg = "the extrude direction truth table is unmeasured: probe-extrudedir has not established which physical side the Dir flag sends material to; refusing to report created": GoTo ExFail
+    wantSide = 1 * gMapSide(1)
+    dirFlag = (wantSide = TT_EX_DIR_TRUE_SIDE)
     ok = swDoc.Extension.SelectByID2(skName1, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If Not ok Then gMsg = "could not select the sketch for the extrude": GoTo ExFail
-    Set feat = gFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.03, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)
+    Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.03, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)
     If feat Is Nothing Then gMsg = "the extrude was not created": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
     If dm Is Nothing Then gMsg = "the extrude dimension D1 is missing": GoTo ExFail
@@ -1690,10 +1706,11 @@ Function SketchToModelZ(ByVal idx As Long, ByVal s As Double, ByVal t As Double)
 SketchToModelZ = gFrame(idx, 11) + s * gFrame(idx, 2) + t * gFrame(idx, 5)
 End Function
 
-' Feature guards (batch boundary): extrude, revolve and primitive replay
-' still assume the identity map on the source normal side - batches 2 and 3
-' replace this with the direction truth table and primitive adaptation.
-' Anything else is refused with a named reason and never reports created.
+' Feature guards (batch boundary): primitive replay still assumes the
+' identity map - batch 3 replaces this with primitive adaptation. Extrude
+' and revolve replay runs through the direction truth table on any valid
+' map (batch 2). Anything else is refused with a named reason and never
+' reports created.
 Function MapIsIdentity(ByVal idx As Long) As Boolean
 MapIsIdentity = False
 If Not gMapValid(idx) Then Exit Function
