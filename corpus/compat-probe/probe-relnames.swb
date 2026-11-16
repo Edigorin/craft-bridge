@@ -39,16 +39,14 @@ Sub main()
         GoTo WrapUp
     End If
     WriteStep 0, "sketch.open", "created", gProbeLog
-    WriteLine TryLevel("sgVertical", True)
     WriteLine TryLevel("sgVERTICAL2D", True)
-    WriteLine TryLevel("sgHorizontal", False)
     WriteLine TryLevel("sgHORIZONTAL2D", False)
-    WriteLine TryEqual("sgEqual")
     WriteLine TryEqual("sgSAMELENGTH")
-    WriteLine TryParallel("sgParallel")
-    WriteLine TryPerp("sgPerpendicular")
+    WriteLine TryParallel("sgPARALLEL")
+    WriteLine TryPerp("sgPERPENDICULAR")
     WriteLine TryTangent("sgTANGENT")
-    WriteLine TryCoincident("sgCoincident")
+    WriteLine TryCoincident("sgCOINCIDENT")
+    WriteLine TryCoincident("sgMERGEPOINTS")
 WrapUp:
     cleanupMode = CloseMode()
     If cleanupMode = "close" Then
@@ -84,6 +82,7 @@ End Sub
 ' One diagonal line, one constraint name: the predicate is the endpoint
 ' delta on the levelled axis (s for vertical, t for horizontal).
 Function TryLevel(ByVal cname As String, ByVal isVertical As Boolean) As String
+    Static seq As Long
     Dim ln As Object
     Dim v As Variant
     Dim v2 As Variant
@@ -93,7 +92,8 @@ Function TryLevel(ByVal cname As String, ByVal isVertical As Boolean) As String
     Dim delta As Double
     On Error Resume Next
     Err.Clear
-    Set ln = swSketchMgr.CreateLine(0.01, 0.02, 0#, 0.04, 0.05, 0#)
+    seq = seq + 1
+    Set ln = swSketchMgr.CreateLine(0.01 + 0.05 * seq, 0.02, 0#, 0.04 + 0.05 * seq, 0.05, 0#)
     If ln Is Nothing Then
         TryLevel = LineFor(cname, -1, "no line", "")
         Exit Function
@@ -274,6 +274,7 @@ End Function
 
 ' Two line endpoints: coincidence is the endpoint distance.
 Function TryCoincident(ByVal cname As String) As String
+    Static seq As Long
     Dim la As Object
     Dim lb As Object
     Dim sa As Object
@@ -283,8 +284,9 @@ Function TryCoincident(ByVal cname As String) As String
     Dim d As String
     Dim dist As Double
     On Error Resume Next
-    Set la = swSketchMgr.CreateLine(0.5, 0#, 0#, 0.53, 0.04, 0#)
-    Set lb = swSketchMgr.CreateLine(0.535, 0.045, 0#, 0.57, 0#, 0#)
+    seq = seq + 1
+    Set la = swSketchMgr.CreateLine(0.5 + 0.1 * seq, 0#, 0#, 0.53 + 0.1 * seq, 0.04, 0#)
+    Set lb = swSketchMgr.CreateLine(0.535 + 0.1 * seq, 0.045, 0#, 0.57 + 0.1 * seq, 0#, 0#)
     swDoc.ClearSelection2 True
     Err.Clear
     Set sa = la.GetEndPoint2
