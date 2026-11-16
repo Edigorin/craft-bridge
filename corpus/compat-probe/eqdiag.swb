@@ -30,6 +30,10 @@ Sub main()
     WriteLine ProbeLine("Value")
     WriteLine ProbeLine("EditRebuild3")
     WriteLine ProbeLine("Add2-3arg")
+    WriteLine ProbeLine("Add40mm")
+    On Error Resume Next
+    swApp.CloseDoc swDoc.GetTitle
+    On Error GoTo Fail
     WriteLine "{""type"":""summary"",""status"":""ok""}"
     Exit Sub
 Fail:
@@ -103,6 +107,19 @@ Function ProbeLine(ByVal which As String) As String
             n = Err.Number
             d = Err.Description
             If n = 0 Then detail = "returned index=" & Trim(Str(idx)) & " (call did not raise; insertion is unverified)"
+        Case "Add40mm"
+            idx = eqMgr.Add(-1, """W1""=40mm")
+            n = Err.Number
+            d = Err.Description
+            If n = 0 Then
+                detail = "idx=" & Trim(Str(idx))
+                Err.Clear
+                v = eqMgr.Equation(idx)
+                If Err.Number = 0 Then detail = detail & " text=" & CStr(v) Else detail = detail & " texterr=" & Err.Description
+                Err.Clear
+                v = eqMgr.Value(idx)
+                If Err.Number = 0 Then detail = detail & " value=" & Trim(Str(v)) Else detail = detail & " valerr=" & Err.Description
+            End If
     End Select
     ProbeLine = LineFor(which, n, d, detail)
 End Function
