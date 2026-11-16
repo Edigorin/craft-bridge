@@ -1178,7 +1178,11 @@ fn runs_close_their_own_document_by_coordinated_sequencing() {
     );
     assert!(
         smoke.contains("Set-Content -Path $pathFile -Value @($reportPath, $macroDir)"),
-        "the close authorization is not consumed after the run"
+        "the close authorization is not consumed"
+    );
+    assert!(
+        smoke.contains("} finally {"),
+        "the consumption is not on every exit path"
     );
     let checker = include_str!("../tools/check-part.vbs");
     assert!(
@@ -1209,6 +1213,26 @@ fn assert_vba_structure(text: &str, what: &str) {
     let mut procs = 0i32;
     let mut end_procs = 0i32;
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let proc_names: Vec<String> = text
+        .lines()
+        .filter_map(|l| {
+            let u = l.trim().to_uppercase();
+            if u.starts_with("FUNCTION ") || u.starts_with("SUB ") {
+                Some(
+                    l.trim()
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or("")
+                        .split('(')
+                        .next()
+                        .unwrap_or("")
+                        .to_string(),
+                )
+            } else {
+                None
+            }
+        })
+        .collect();
     for line in text.lines() {
         let mut code = String::new();
         let mut in_string = false;
@@ -1248,6 +1272,13 @@ fn assert_vba_structure(text: &str, what: &str) {
                         panic!("{what}: duplicate declaration of {name}");
                     }
                 }
+            }
+        }
+        // Case-insensitive shadowing: VBA identifiers fold case, so a local
+        // named like a module procedure makes calls to it unresolvable.
+        for proc in &proc_names {
+            if seen.contains(&proc.to_lowercase()) {
+                panic!("{what}: a local name shadows the procedure {proc}");
             }
         }
         if up.starts_with("IF ") && up.ends_with("THEN") {

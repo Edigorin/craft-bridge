@@ -286,8 +286,9 @@ runs leave no documents open - by coordinated sequencing, never a
 close-all, and the authorization to close is bound to the current
 invocation. Smoke runs write `close-after-run` on the third line of the
 host path file and the macro closes its own document at the end; the
-authorization is consumed when the run rewrites the path file back to its
-two stable lines, so a later manual replay can never inherit it. Harness
+authorization is consumed on every path out of the run - success, failure
+and timeout alike - when the run rewrites the path file back to its two
+stable lines, so a later manual replay can never inherit it. Harness
 runs leave the flag absent: acceptance checking needs the part open. The
 macro always reports its owned title, and the harness hands exactly that
 run-bound title to `tools/check-part.vbs`, which closes it after the last

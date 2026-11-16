@@ -27,7 +27,7 @@ Dim gProbeLog As String
 Sub main()
     Dim template As String
     Dim closedOk As Boolean
-    Dim closeMode As String
+    Dim cleanupMode As String
     Dim ok As Boolean
     Dim ln As SketchSegment
     Dim dp As SldWorks.Dimension
@@ -83,8 +83,8 @@ Sub main()
 
     ' ---- done ----
     swSketchMgr.InsertSketch True
-    closeMode = CloseMode()
-    If closeMode = "close" Then
+    cleanupMode = CloseMode()
+    If cleanupMode = "close" Then
         CloseOwnedDoc closedOk
         If closedOk Then
             WriteLine "{""type"":""summary"",""status"":""ok""}"
@@ -92,7 +92,7 @@ Sub main()
             WriteStep stepIdx, "close", "failed", "the owned document could not be confirmed closed"
             WriteLine "{""type"":""summary"",""status"":""failed""}"
         End If
-    ElseIf closeMode = "keep" Then
+    ElseIf cleanupMode = "keep" Then
         WriteStep stepIdx, "owned-document", "kept-open", OwnedDocTitle()
         WriteLine "{""type"":""summary"",""status"":""ok""}"
     Else
@@ -111,8 +111,8 @@ Fail:
     If reportPath <> "" Then
         WriteStep stepIdx, "macro", "failed", "err " & Trim(Str(errNum)) & ": " & errMsg
     End If
-    closeMode = CloseMode()
-    If closeMode = "close" Then
+    cleanupMode = CloseMode()
+    If cleanupMode = "close" Then
         CloseOwnedDoc closedOk
     End If
     If reportPath <> "" Then
@@ -202,6 +202,7 @@ End Sub
 Function CloseMode() As String
     Dim p As String, f As Integer, oneLine As String
     Dim ok As Boolean
+    Dim e3 As Long
     CloseMode = "unknown"
     On Error Resume Next
     p = Environ$("TEMP")
@@ -219,9 +220,13 @@ Function CloseMode() As String
     ok = ok And (Err.Number = 0)
     Err.Clear
     If ok Then Line Input #f, oneLine
+    e3 = Err.Number
     Close #f
-    If Not ok Then Exit Function
-    If Trim(oneLine) = "close-after-run" Then CloseMode = "close" Else CloseMode = "keep"
+    If e3 = 0 Then
+    If Trim(oneLine) = "close-after-run" Then CloseMode = "close" Else CloseMode = "unknown"
+    ElseIf e3 = 62 And ok Then
+    CloseMode = "keep"
+    End If
 End Function
 
 Function OwnedDocTitle() As String

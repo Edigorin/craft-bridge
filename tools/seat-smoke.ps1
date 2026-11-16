@@ -55,6 +55,7 @@ $pathFile = Join-Path $env:TEMP "craft-bridge-report-path.txt"
 # build publishes the fallback snapshot sidecars.
 $macroDir = Split-Path -Parent $macroFull
 Set-Content -Path $pathFile -Value @($reportPath, $macroDir, "close-after-run")
+try {
 
 # ---- run: all SolidWorks COM goes through tools/run-macro.vbs (VBScript is
 # IDispatch-native; PowerShell's late binder has failed on this seat) ----
@@ -104,10 +105,7 @@ if (-not $complete) {
     Get-ChildItem $reportDirFull | Out-String | Add-Content (Join-Path $reportDirFull "smoke-log.txt")
     throw "the runtime report is truncated: no summary line (macro crashed or is still running)"
 }
-# The close-after-run authorization is consumed here: the path file is
-# rewritten with only its two stable lines, so a later manual replay can
-# never inherit this run's close instruction. No deletion, only rewrite.
-Set-Content -Path $pathFile -Value @($reportPath, $macroDir)
+# (consumption moved to the finally below: every path out of the run)
 
 # ---- check the report ----
 $created = 0; $degraded = 0; $failed = 0; $notExecuted = 0; $steps = 0; $summaryStatus = "?"
@@ -130,3 +128,11 @@ if ($failed -gt 0 -or $summaryStatus -ne "ok") { exit 2 }
 if ($degraded -gt 0 -and -not $AllowDegraded) { exit 3 }
 Write-Host "PASS"
 exit 0
+
+} finally {
+    # The close-after-run authorization is consumed on EVERY path out of
+    # the run - success, failure and timeout alike - so a later manual
+    # replay can never inherit this run's close instruction. No deletion,
+    # only a rewrite to the two stable lines.
+    Set-Content -Path $pathFile -Value @($reportPath, $macroDir)
+}
