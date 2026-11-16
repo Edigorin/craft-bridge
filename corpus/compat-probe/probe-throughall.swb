@@ -1,0 +1,1266 @@
+' craft-bridge probe-throughall - Phase 0 DIRECTION PROBE 3: what does
+' a through-all extrusion of an off-centre profile actually produce on
+' this seat? Its own measured case, never inferred from blind. Two fresh
+' parts in turn (Dir=True, Dir=False): the asymmetric off-centre closed
+' line profile (u 0.010..0.050, v 0.020..0.035) on the verified Front
+' frame (u=(0,1,0) v=(0,0,1) n=(1,0,0)) is extruded with the emitter's
+' exact through-all call shape (swEndCondThroughAll, zero depth -
+' src/swb.rs, with the emitter's explicit profile-sketch selection
+' before the call).
+'
+' Interpretation contract (explicit, per plan verdict): a fresh empty
+' part offers no bounded material extent for "through all", so feature
+' creation may succeed with some measurable body or may be rejected.
+' Only a created body's bounding box carries physical-side evidence; a
+' rejected feature is recorded as INCONCLUSIVE for direction - the run
+' fails, and the side is never inferred from the blind cases. Pinning
+' the side of a rejected case would need an explicitly approved
+' supporting-material setup, which this probe deliberately does not
+' invent. The through-all D1 dimension look is informative only
+' (absence is the emitter's documented expectation).
+'
+' Reading a created case: with the verified frame, sketch (s,t) maps to
+' model (0,s,t) and the sketch plane is model X=0, so the box's X extent
+' names the physical side directly. The extents are NOMINAL: GetPartBox
+' is approximate per its documentation, so the side is read with
+' tolerance, never by exact endpoint equality. The probe reports the
+' numbers; it draws no conclusion the box does not carry.
+'
+' Evidence discipline: every SolidWorks API call captures its numeric
+' error and description at its own named stage (the host-file report
+' plumbing - path discovery, open/append - is the proven helper set and
+' suppresses its own I/O errors by design); entering records precede the
+' risky calls (feature creation, GetPartBox); contexts are verified
+' before the named measurements and re-verified after the mutating
+' feature call (with selections cleared and checked); missing setup
+' geometry fails the run with a failed step while cleanup still runs.
+' The frame check is fully fail-closed: the 16-entry zero-based
+' one-dimensional numeric form, zero translation and unit scale at index
+' 12 are decoded with their own captured errors and nothing is accepted
+' after a decoding error. Required observations (only when the feature
+' is created): the box form and all six components; the D1 dimension
+' look is informative only. Cleanup is tri-state and ownership-checked
+' on every path
+' (close/keep/unknown); authorization is established before any model
+' creation; a keep-mode handoff must verify as a live, nonempty, uniquely
+' owned document or the run fails and the document is closed instead.
+' Setup failure aborts the remaining cases; a measurement failure fails
+' the run but lets the independent remaining cases record their own
+' evidence (fresh parts, no shared state).
+' Diagnostic instrument, not a fidelity golden.
+Option Explicit
+
+Dim swApp As SldWorks.SldWorks
+Dim swDoc As SldWorks.ModelDoc2
+Dim swSketchMgr As SketchManager
+Dim reportPath As String
+Dim gProbeLog As String
+Dim gTemplate As String
+Dim gFeatMgr As Object
+Dim gRunFailed As Boolean
+
+Sub main()
+    Dim mode As String
+    Dim r As Long
+    Dim closedOk As Boolean
+    Dim errNum As Long
+    Dim errMsg As String
+    Dim n As Long
+    Dim d As String
+    On Error GoTo Fail
+    gRunFailed = False
+    reportPath = ReportPathFromHost()
+    If reportPath = "" Then Err.Raise vbObjectError + 513, "probe-throughall", "no report path"
+    StartReport
+    WriteLine "{""type"":""header"",""macro"":""probe-throughall"",""bridge_version"":""0.1.0""}"
+    mode = CloseMode()
+    If mode = "unknown" Then
+        WriteStep -1, "close-mode", "failed", "cleanup authorization is not established; no model is created"
+        gRunFailed = True
+        GoTo WrapUp
+    End If
+    Err.Clear
+    Set swApp = Application.SldWorks
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("application", n, d, "stage=acquire")
+    If n <> 0 Or swApp Is Nothing Then Err.Raise vbObjectError + 516, "probe-throughall", "the SolidWorks application could not be acquired"
+    Err.Clear
+    gTemplate = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("template", n, d, "stage=default-part-template value=" & gTemplate)
+    If n <> 0 Then Err.Raise vbObjectError + 514, "probe-throughall", "the default part template could not be read"
+    If gTemplate = "" Then Err.Raise vbObjectError + 514, "probe-throughall", "no default part template is configured"
+    r = RunThroughCase("dir-true", True, False, mode)
+    If r <> 0 Then gRunFailed = True
+    If r >= 2 Then GoTo WrapUp
+    Err.Clear
+    mode = CloseMode()
+    If mode = "unknown" Then
+        WriteStep -1, "close-mode", "failed", "cleanup authorization lost; no further case is started"
+        gRunFailed = True
+        GoTo WrapUp
+    End If
+    r = RunThroughCase("dir-false", False, True, mode)
+    If r <> 0 Then gRunFailed = True
+    If r >= 2 Then GoTo WrapUp
+WrapUp:
+    If gRunFailed Then
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
+    Else
+        WriteLine "{""type"":""summary"",""status"":""ok""}"
+    End If
+    Exit Sub
+Fail:
+    errNum = Err.Number
+    errMsg = Err.Description
+    On Error Resume Next
+    WriteLine "{""type"":""step"",""index"":-1,""command"":""probe"",""status"":""failed"",""message"":""" & JsonStr("err " & Trim(Str(errNum)) & ": " & errMsg) & """}"
+    If Not swDoc Is Nothing Then
+        CloseOwnedDoc closedOk
+        If Not closedOk Then WriteStep -1, "close", "failed", "the owned document could not be confirmed closed"
+    End If
+    WriteLine "{""type"":""summary"",""status"":""failed""}"
+End Sub
+
+' One direction case: fresh part, verified-frame sketch, the asymmetric
+' off-centre profile, the emitter's through-all call shape (with the
+' emitter's explicit profile-sketch selection), then the measured
+' outcome - created (box required, D1 informative) or rejected
+' (explicitly INCONCLUSIVE for direction, never inferred from blind).
+' Returns 0 = complete, 1 = measurement failure (the run is failed;
+' later independent cases still record), 2 = setup failure (the run is
+' failed and the remaining cases are aborted), 3 = the case's document
+' could not be confirmed closed or handed off (the run is failed and the
+' remaining cases are aborted). Cleanup runs on every path; only the
+' final case may be kept open, then only in keep mode and only after its
+' handoff verifies live.
+Function RunThroughCase(ByVal tag As String, ByVal dirFlag As Boolean, ByVal isFinal As Boolean, ByVal mode As String) As Long
+    Dim result As Long
+    Dim ok As Boolean
+    Dim verified As Boolean
+    Dim measOk As Boolean
+    Dim feat As Object
+    Dim featName As String
+    Dim skName As String
+    Dim handoffTitle As String
+    Dim closedOk As Boolean
+    Dim errNum As Long
+    Dim errMsg As String
+    Dim n As Long
+    Dim d As String
+    On Error GoTo CaseHardFail
+    result = 2
+    WriteLine LineFor("case-" & tag, 0, "", "entering: through-all, Dir=" & CStr(dirFlag) & ", profile u 0.010..0.050 v 0.020..0.035")
+    Err.Clear
+    Set swDoc = swApp.NewDocument(gTemplate, 0, 0, 0)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("document.new-" & tag, n, d, "")
+    If n <> 0 Or swDoc Is Nothing Then
+        WriteStep -1, "document.new", "failed", "the fresh part for " & tag & " could not be created"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    Set swSketchMgr = swDoc.SketchManager
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("sketchmgr-" & tag, n, d, "")
+    If n <> 0 Or swSketchMgr Is Nothing Then
+        WriteStep -1, "sketchmgr", "failed", "no sketch manager for " & tag
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    Set gFeatMgr = swDoc.FeatureManager
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("featuremgr-" & tag, n, d, "")
+    If n <> 0 Or gFeatMgr Is Nothing Then
+        WriteStep -1, "featuremgr", "failed", "no feature manager for " & tag
+        GoTo CaseCleanup
+    End If
+    If Not OpenSketchOnPlane("YZ", skName) Then
+        WriteStep 0, "sketch.open", "failed", "no plane carries the verified Front frame u=(0,1,0) v=(0,0,1) n=(1,0,0); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary()
+        GoTo CaseCleanup
+    End If
+    WriteStep 0, "sketch.open", "created", gProbeLog & "sketch feature " & skName
+    ReportContext "active", verified
+    If Not verified Then
+        WriteStep 1, "context", "failed", "the active-sketch context is not verified"
+        GoTo CaseCleanup
+    End If
+    ' Asymmetric off-centre closed rectangle: four lines, each verified.
+    ok = ProfileLine(tag, 1, 0.01, 0.02, 0.05, 0.02)
+    If ok Then ok = ProfileLine(tag, 2, 0.05, 0.02, 0.05, 0.035)
+    If ok Then ok = ProfileLine(tag, 3, 0.05, 0.035, 0.01, 0.035)
+    If ok Then ok = ProfileLine(tag, 4, 0.01, 0.035, 0.01, 0.02)
+    If Not ok Then
+        WriteStep 2, "profile", "failed", "the setup profile is missing; the through-all case is refused"
+        GoTo CaseCleanup
+    End If
+    WriteStep 2, "profile", "created", "closed rectangle u 0.010..0.050, v 0.020..0.035 (metres), 4 lines verified"
+    Err.Clear
+    swSketchMgr.InsertSketch True
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("sketch.close-" & tag, n, d, "")
+    If n <> 0 Then
+        WriteStep 1, "context", "failed", "the sketch could not be closed"
+        GoTo CaseCleanup
+    End If
+    ReportContext "closed", verified
+    If Not verified Then
+        WriteStep 1, "context", "failed", "the closed-sketch context is not verified; the feature call is refused"
+        GoTo CaseCleanup
+    End If
+    ' The stage under test: the emitter's explicit profile-sketch
+    ' selection, then its exact through-all call shape.
+    result = 1
+    Err.Clear
+    swDoc.ClearSelection2 True
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("clearselection-" & tag, n, d, "stage=preselect")
+    If n <> 0 Then
+        WriteStep 1, "selection", "failed", "selections could not be cleared before selecting the profile"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    ok = swDoc.Extension.SelectByID2(skName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("selectsketch-" & tag, n, d, "stage=selectbyname name=" & skName & " result=" & CStr(ok))
+    If n <> 0 Or Not ok Then
+        WriteStep 3, "extrude", "failed", "the profile sketch " & skName & " could not be selected; the extrusion is not attempted"
+        GoTo CaseCleanup
+    End If
+    WriteLine LineFor("featureextrusion2-" & tag, 0, "", "entering: FeatureExtrusion2(True, False, " & CStr(dirFlag) & ", swEndCondThroughAll, swEndCondBlind, 0#, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)")
+    Err.Clear
+    Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondThroughAll, swEndConditions_e.swEndCondBlind, 0#, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("featureextrusion2-" & tag, n, d, "outcome")
+    If n <> 0 Or feat Is Nothing Then
+        WriteStep 3, "extrude", "failed", "the through-all feature was not created (Dir=" & CStr(dirFlag) & "): this case is INCONCLUSIVE for physical-side evidence - through-all is its own measured case and is never inferred from blind; pinning the side of a rejected case needs an explicitly approved supporting-material setup"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    featName = feat.Name
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("feature-name-" & tag, n, d, "name=" & featName)
+    If n <> 0 Or Trim(featName) = "" Then
+        WriteStep 3, "extrude", "failed", "the created feature has no name; the dimension identity cannot be read"
+        GoTo CaseCleanup
+    End If
+    WriteStep 3, "extrude", "created", "through-all, Dir=" & CStr(dirFlag) & ", feature " & featName
+    ' The measurement context is re-established AFTER the mutating
+    ' feature call: no active sketch, clean selection.
+    ReportContext "closed", verified
+    If Not verified Then
+        WriteStep 4, "measure-" & tag, "failed", "the post-feature context is not verified; measurements are refused"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    swDoc.ClearSelection2 True
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("clearselection-" & tag, n, d, "stage=premeasure")
+    If n <> 0 Then
+        WriteStep 4, "measure-" & tag, "failed", "selections could not be cleared before the measurements"
+        GoTo CaseCleanup
+    End If
+    measOk = True
+    BoxEvidence tag, ok
+    If Not ok Then measOk = False
+    ' Informative only: through-all carries no depth dimension by design.
+    DimEvidence "dim-d1-" & tag, "D1@" & featName, False, ok
+    If measOk Then
+        WriteStep 4, "measure-" & tag, "created", "box form and all 6 components captured; the D1 look was informative"
+        result = 0
+    Else
+        WriteStep 4, "measure-" & tag, "failed", "a required observation is missing"
+    End If
+CaseCleanup:
+    On Error Resume Next
+    If isFinal And mode = "keep" Then
+        ok = OwnedHandoffVerified(tag, handoffTitle)
+        If ok Then
+            WriteStep 5, "owned-document", "kept-open", OwnedDocTitle()
+        Else
+            WriteStep 5, "owned-document", "failed", "the keep-mode handoff is unverified; the document is not reported as retained"
+            result = 3
+            CloseOwnedDoc closedOk
+            If Not closedOk Then WriteStep 5, "close", "failed", "the unverified handoff could not be confirmed closed"
+        End If
+    Else
+        CloseOwnedDoc closedOk
+        If Not closedOk Then
+            WriteStep 5, "close", "failed", "the owned document could not be confirmed closed"
+            result = 3
+        End If
+    End If
+    Set swDoc = Nothing
+    Set swSketchMgr = Nothing
+    Set gFeatMgr = Nothing
+    RunThroughCase = result
+    Exit Function
+CaseHardFail:
+    errNum = Err.Number
+    errMsg = Err.Description
+    On Error Resume Next
+    WriteLine LineFor("case-" & tag, errNum, errMsg, "hard failure; result so far=" & Trim(Str(result)))
+    WriteStep -1, "case-" & tag, "failed", "hard failure err " & Trim(Str(errNum)) & ": " & errMsg
+    If result < 1 Then result = 1
+    GoTo CaseCleanup
+End Function
+
+' The body's bounding box: the exact returned form (zero-based
+' one-dimensional, 6 components) and every component decoded as a
+' Double, each at its own captured stage. Required evidence: the call
+' must succeed and all six components must decode; a different form is
+' reported verbatim and refused - components are never interpreted
+' against a wrong form and never substituted with defaults.
+Sub BoxEvidence(ByVal tag As String, ByRef ok As Boolean)
+    Dim pb As SldWorks.PartDoc
+    Dim v As Variant
+    Dim n As Long
+    Dim d As String
+    Dim tmp As String
+    Dim lb As Long
+    Dim ub As Long
+    Dim i As Long
+    Dim comps As String
+    Dim bad As Boolean
+    Dim x As Double
+    On Error Resume Next
+    ok = False
+    bad = False
+    WriteLine LineFor("getpartbox-" & tag, 0, "", "entering: IPartDoc.GetPartBox(True) keeps system units (SI metres)")
+    Err.Clear
+    Set pb = swDoc
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("getpartbox-" & tag, n, d, "stage=partdoc-acquire")
+    If n <> 0 Or pb Is Nothing Then Exit Sub
+    Err.Clear
+    v = pb.GetPartBox(True)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("getpartbox-" & tag, n, d, "stage=call outcome")
+        Exit Sub
+    End If
+    WriteLine LineFor("getpartbox-" & tag, 0, "", "stage=call outcome: a value came back")
+    Err.Clear
+    tmp = TypeName(v)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("getpartbox-" & tag, n, d, "stage=form typename")
+        Exit Sub
+    End If
+    Err.Clear
+    lb = LBound(v)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("getpartbox-" & tag, n, d, "stage=form lbound (type=" & tmp & ")")
+        Exit Sub
+    End If
+    Err.Clear
+    ub = UBound(v)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("getpartbox-" & tag, n, d, "stage=form ubound (type=" & tmp & ")")
+        Exit Sub
+    End If
+    WriteLine LineFor("getpartbox-" & tag, 0, "", "stage=form type=" & tmp & " lbound=" & Trim(Str(lb)) & " ubound=" & Trim(Str(ub)))
+    If lb <> 0 Or ub <> 5 Then
+        WriteLine LineFor("getpartbox-" & tag, -1, "unexpected form", "stage=form check: zero-based 6 components (0..5) expected; the values are not interpreted")
+        Exit Sub
+    End If
+    comps = ""
+    For i = 0 To 5
+        Err.Clear
+        x = CDbl(v(i))
+        n = Err.Number
+        d = Err.Description
+        If n <> 0 Then
+            WriteLine LineFor("getpartbox-" & tag, n, d, "stage=component" & Trim(Str(i)) & " decode")
+            bad = True
+        Else
+            tmp = Trim(Str(x))
+            WriteLine LineFor("getpartbox-" & tag, 0, "", "stage=component" & Trim(Str(i)) & " value=" & tmp)
+            comps = comps & " c" & Trim(Str(i)) & "=" & tmp
+        End If
+    Next i
+    If bad Then Exit Sub
+    WriteLine LineFor("getpartbox-" & tag, 0, "", "box components:" & comps & " (documented form: c0..c2 one diagonal corner, c3..c5 the other; approximate)")
+    ok = True
+End Sub
+
+' One dimension identity: the lookup key, the returned Name and the
+' SystemValue in SI metres, each at its own captured stage. Required
+' evidence: a nonblank returned Name and a decoded numeric SystemValue -
+' neither is ever substituted with a default. required = True makes a
+' missing identity a measurement failure; required = False is an
+' informative look (absence is not fatal) and is labeled so in every
+' record.
+Sub DimEvidence(ByVal tag As String, ByVal key As String, ByVal required As Boolean, ByRef ok As Boolean)
+    Dim dm As Object
+    Dim n As Long
+    Dim d As String
+    Dim tmp As String
+    Dim v As Variant
+    Dim sv As Double
+    On Error Resume Next
+    ok = False
+    WriteLine LineFor(tag, 0, "", "entering: Parameter(" & key & ") required=" & CStr(required))
+    Err.Clear
+    Set dm = swDoc.Parameter(key)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor(tag, n, d, "stage=lookup " & key & " required=" & CStr(required))
+        Exit Sub
+    End If
+    If dm Is Nothing Then
+        WriteLine LineFor(tag, -1, "returned Nothing", "stage=lookup " & key & " required=" & CStr(required))
+        Exit Sub
+    End If
+    Err.Clear
+    v = dm.Name
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor(tag, n, d, "stage=name " & key)
+        Exit Sub
+    End If
+    Err.Clear
+    tmp = CStr(v)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor(tag, n, d, "stage=name-convert " & key)
+        Exit Sub
+    End If
+    If Trim(tmp) = "" Then
+        WriteLine LineFor(tag, -1, "blank name", "stage=name " & key & " returned a blank identity")
+        Exit Sub
+    End If
+    WriteLine LineFor(tag, 0, "", "stage=name " & key & " -> " & tmp)
+    Err.Clear
+    sv = CDbl(dm.SystemValue)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor(tag, n, d, "stage=systemvalue " & key)
+        Exit Sub
+    End If
+    WriteLine LineFor(tag, 0, "", "stage=systemvalue " & key & " = " & Trim(Str(sv)) & " (SI)")
+    ok = True
+End Sub
+
+' One profile line with its own captured record; False = the setup
+' geometry is missing and the run fails.
+Function ProfileLine(ByVal tag As String, ByVal idx As Long, ByVal x1 As Double, ByVal y1 As Double, ByVal x2 As Double, ByVal y2 As Double) As Boolean
+    Dim ln As Object
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    ProfileLine = False
+    Err.Clear
+    Set ln = swSketchMgr.CreateLine(x1, y1, 0#, x2, y2, 0#)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("profile-line" & Trim(Str(idx)) & "-" & tag, n, d, "stage=createline")
+        Exit Function
+    End If
+    If ln Is Nothing Then
+        WriteLine LineFor("profile-line" & Trim(Str(idx)) & "-" & tag, -1, "returned Nothing", "stage=createline")
+        Exit Function
+    End If
+    WriteLine LineFor("profile-line" & Trim(Str(idx)) & "-" & tag, 0, "", "created type=" & TypeName(ln) & " from " & Vec3Text(x1, y1, 0#) & " to " & Vec3Text(x2, y2, 0#))
+    ProfileLine = True
+End Function
+
+Function LineFor(ByVal which As String, ByVal n As Long, ByVal d As String, ByVal detail As String) As String
+    LineFor = "{""type"":""probe"",""member"":""" & JsonStr(which) & """,""err"":" & Trim(Str(n)) & ",""errdesc"":""" & JsonStr(d) & """,""detail"":""" & JsonStr(detail) & """}"
+End Function
+
+' Open a sketch on the first plane-like feature whose sketch frame is
+' exactly the requested one; fail-closed on every uncertain state. The
+' frame test demands the full form (16-entry transform), zero
+' translation, unit scale at index 12 and sign-exact directions - a
+' normalized-direction match alone is not accepted. The sketch's feature
+' identity is acquired at its own captured, Nothing-checked stage (the
+' documented Sketch->Feature assignment; ISketch exposes no GetFeature)
+' and its name is returned for the later explicit selection. Every probe
+' attempt is recorded in gProbeLog with its captured error. A
+' mismatched frame's probe sketch is deleted by the verified
+' DiscardProbeSketch algorithm; if that deletion cannot be confirmed,
+' the run is failed (recorded here, escalated by the caller's
+' setup-failure path, which closes the whole owned part - the probe
+' sketch dies with it).
+Function OpenSketchOnPlane(ByVal which As String, ByRef skNameOut As String) As Boolean
+    Dim feat As Object
+    Dim skObj As Object
+    Dim skFeat As SldWorks.Feature
+    Dim nm As String
+    Dim fn As String
+    Dim ok As Boolean
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    OpenSketchOnPlane = False
+    skNameOut = ""
+    gProbeLog = ""
+    Err.Clear
+    Set feat = swDoc.FirstFeature
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        gProbeLog = gProbeLog & "stage=firstfeature err=" & Trim(Str(n)) & " " & d & "; "
+        Exit Function
+    End If
+    Do While Not feat Is Nothing
+        Err.Clear
+        nm = feat.GetTypeName2()
+        n = Err.Number
+        d = Err.Description
+        If n <> 0 Then
+            gProbeLog = gProbeLog & "stage=typename err=" & Trim(Str(n)) & " " & d & "; "
+            Exit Function
+        End If
+        If InStr(1, nm, "lane", vbTextCompare) > 0 Then
+            Err.Clear
+            fn = feat.Name
+            n = Err.Number
+            d = Err.Description
+            If n <> 0 Then
+                gProbeLog = gProbeLog & "stage=name err=" & Trim(Str(n)) & " " & d & "; "
+                Exit Function
+            End If
+            Err.Clear
+            ok = feat.Select(False)
+            n = Err.Number
+            d = Err.Description
+            If n <> 0 Then
+                gProbeLog = gProbeLog & fn & ": select err=" & Trim(Str(n)) & " " & d & "; "
+            ElseIf Not ok Then
+                gProbeLog = gProbeLog & fn & ": select returned false; "
+            Else
+                Err.Clear
+                swSketchMgr.InsertSketch True
+                n = Err.Number
+                d = Err.Description
+                If n <> 0 Then
+                    gProbeLog = gProbeLog & fn & ": insertsketch err=" & Trim(Str(n)) & " " & d & "; "
+                    Exit Function
+                End If
+                Err.Clear
+                Set skObj = swSketchMgr.ActiveSketch
+                n = Err.Number
+                d = Err.Description
+                If n <> 0 Then
+                    gProbeLog = gProbeLog & fn & ": activesketch err=" & Trim(Str(n)) & " " & d & "; "
+                    Exit Function
+                End If
+                If skObj Is Nothing Then
+                    gProbeLog = gProbeLog & fn & ": opened but no active sketch object; "
+                Else
+                    ' The documented Sketch->Feature assignment (the
+                    ' Rename-Active-Sketch VBA example), at its own
+                    ' captured stage: ISketch has no GetFeature member.
+                    Err.Clear
+                    Set skFeat = skObj
+                    n = Err.Number
+                    d = Err.Description
+                    If n <> 0 Then
+                        gProbeLog = gProbeLog & fn & ": sketch-feature acquire err=" & Trim(Str(n)) & " " & d & "; "
+                        Exit Function
+                    End If
+                    If skFeat Is Nothing Then
+                        gProbeLog = gProbeLog & fn & ": sketch-feature acquire returned Nothing; "
+                        Exit Function
+                    End If
+                    If SketchFrameIs(which) Then
+                        Err.Clear
+                        skNameOut = skFeat.Name
+                        n = Err.Number
+                        d = Err.Description
+                        If n <> 0 Or Trim(skNameOut) = "" Then
+                            gProbeLog = gProbeLog & fn & ": sketch-feature name err=" & Trim(Str(n)) & " " & d & "; "
+                            Exit Function
+                        End If
+                        gProbeLog = gProbeLog & fn & ": opened; frame " & FrameTextEx() & "; "
+                        OpenSketchOnPlane = True
+                        Exit Function
+                    Else
+                        gProbeLog = gProbeLog & fn & ": " & FrameTextEx() & "; "
+                        If Not DiscardProbeSketch(skFeat) Then
+                            gProbeLog = gProbeLog & "PROBE SKETCH NOT CONFIRMED DELETED; "
+                            Exit Function
+                        End If
+                    End If
+                End If
+            End If
+        End If
+        Err.Clear
+        Set feat = feat.GetNextFeature
+        n = Err.Number
+        d = Err.Description
+        If n <> 0 Then
+            gProbeLog = gProbeLog & "stage=nextfeature err=" & Trim(Str(n)) & " " & d & "; "
+            Exit Function
+        End If
+    Loop
+End Function
+
+' The full frame check: transform form (zero-based, one-dimensional,
+' 16 entries), zero translation and unit scale at ArrayData index 12,
+' decoded with their own captured errors, then sign-exact axis
+' directions. Nothing is accepted after a decoding error; every failure
+' is recorded in gProbeLog with the exact reason; nothing is silently
+' reinterpreted.
+Function SketchFrameIs(ByVal which As String) As Boolean
+    Dim skObj As Object
+    Dim tr As Object
+    Dim a As Variant
+    Dim n As Long
+    Dim d As String
+    Dim ok As Boolean
+    Dim lb As Long
+    Dim ub As Long
+    Dim x9 As Double
+    Dim x10 As Double
+    Dim x11 As Double
+    Dim sc As Double
+    On Error Resume Next
+    SketchFrameIs = False
+    Err.Clear
+    Set skObj = swSketchMgr.ActiveSketch
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        gProbeLog = gProbeLog & "frame: activesketch err=" & Trim(Str(n)) & " " & d & "; "
+        Exit Function
+    End If
+    If skObj Is Nothing Then
+        gProbeLog = gProbeLog & "frame: activesketch returned Nothing; "
+        Exit Function
+    End If
+    Err.Clear
+    Set tr = skObj.ModelToSketchTransform
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        gProbeLog = gProbeLog & "frame: transform err=" & Trim(Str(n)) & " " & d & "; "
+        Exit Function
+    End If
+    If tr Is Nothing Then
+        gProbeLog = gProbeLog & "frame: transform returned Nothing; "
+        Exit Function
+    End If
+    Err.Clear
+    a = tr.ArrayData
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        gProbeLog = gProbeLog & "frame: arraydata err=" & Trim(Str(n)) & " " & d & "; "
+        Exit Function
+    End If
+    Err.Clear
+    lb = LBound(a)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        gProbeLog = gProbeLog & "frame: lbound err=" & Trim(Str(n)) & " " & d & "; "
+        Exit Function
+    End If
+    Err.Clear
+    ub = UBound(a)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        gProbeLog = gProbeLog & "frame: ubound err=" & Trim(Str(n)) & " " & d & "; "
+        Exit Function
+    End If
+    If lb <> 0 Or ub <> 15 Then
+        gProbeLog = gProbeLog & "frame: form lbound=" & Trim(Str(lb)) & " ubound=" & Trim(Str(ub)) & " (expected zero-based 0..15); "
+        Exit Function
+    End If
+    Err.Clear
+    ub = UBound(a, 2)
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        gProbeLog = gProbeLog & "frame: form has a second dimension; "
+        Exit Function
+    End If
+    If n <> 9 Then
+        gProbeLog = gProbeLog & "frame: rank probe err=" & Trim(Str(n)) & " " & d & "; "
+        Exit Function
+    End If
+    Err.Clear
+    x9 = CDbl(a(9))
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        gProbeLog = gProbeLog & "frame: translation decode err=" & Trim(Str(n)) & " " & d & "; "
+        Exit Function
+    End If
+    Err.Clear
+    x10 = CDbl(a(10))
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        gProbeLog = gProbeLog & "frame: translation decode err=" & Trim(Str(n)) & " " & d & "; "
+        Exit Function
+    End If
+    Err.Clear
+    x11 = CDbl(a(11))
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        gProbeLog = gProbeLog & "frame: translation decode err=" & Trim(Str(n)) & " " & d & "; "
+        Exit Function
+    End If
+    Err.Clear
+    sc = CDbl(a(12))
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        gProbeLog = gProbeLog & "frame: scale decode err=" & Trim(Str(n)) & " " & d & "; "
+        Exit Function
+    End If
+    If Abs(x9) > 0.000001 Or Abs(x10) > 0.000001 Or Abs(x11) > 0.000001 Then
+        gProbeLog = gProbeLog & "frame: translation not at origin (" & Vec3Text(x9, x10, x11) & "); "
+        Exit Function
+    End If
+    If Abs(sc - 1#) > 0.000001 Then
+        gProbeLog = gProbeLog & "frame: scale " & Trim(Str(sc)) & " (expected 1); "
+        Exit Function
+    End If
+    Select Case which
+        Case "YZ"
+            ok = VecIs(a(0), a(3), a(6), 0#, 1#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, 1#) And VecIs(a(2), a(5), a(8), 1#, 0#, 0#)
+    End Select
+    If Not ok Then
+        gProbeLog = gProbeLog & "frame: directions " & FrameTextEx() & " (expected u=(0,1,0) v=(0,0,1) n=(1,0,0)); "
+        Exit Function
+    End If
+    SketchFrameIs = True
+End Function
+
+' Direction equality with sign, on normalized vectors.
+Function VecIs(ByVal ax As Double, ByVal ay As Double, ByVal az As Double, ByVal bx As Double, ByVal by As Double, ByVal bz As Double) As Boolean
+    Dim L As Double
+    L = Sqr(ax * ax + ay * ay + az * az)
+    If Abs(L) < 0.000001 Then Exit Function
+    VecIs = Abs(ax / L - bx) < 0.000001 And Abs(ay / L - by) < 0.000001 And Abs(az / L - bz) < 0.000001
+End Function
+
+' The active sketch's frame as report text. The active-sketch
+' acquisition and the transform acquisition are separate captured
+' stages; every decode is captured too.
+Function FrameTextEx() As String
+    Dim skObj As Object
+    Dim tr As Object
+    Dim a As Variant
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    Err.Clear
+    Set skObj = swSketchMgr.ActiveSketch
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        FrameTextEx = "(frame unavailable: activesketch err " & Trim(Str(n)) & " " & d & ")"
+        Exit Function
+    End If
+    If skObj Is Nothing Then
+        FrameTextEx = "(frame unavailable: activesketch returned Nothing)"
+        Exit Function
+    End If
+    Err.Clear
+    Set tr = skObj.ModelToSketchTransform
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        FrameTextEx = "(frame unavailable: transform err " & Trim(Str(n)) & " " & d & ")"
+        Exit Function
+    End If
+    If tr Is Nothing Then
+        FrameTextEx = "(frame unavailable: transform returned Nothing)"
+        Exit Function
+    End If
+    Err.Clear
+    a = tr.ArrayData
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        FrameTextEx = "(frame unavailable: arraydata err " & Trim(Str(n)) & " " & d & ")"
+        Exit Function
+    End If
+    Err.Clear
+    FrameTextEx = "u=(" & Vec3Text(a(0), a(3), a(6)) & ") v=(" & Vec3Text(a(1), a(4), a(7)) & ") n=(" & Vec3Text(a(2), a(5), a(8)) & ") o=(" & Vec3Text(a(9), a(10), a(11)) & ")"
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then FrameTextEx = "(frame unavailable: index err " & Trim(Str(n)) & " " & d & ")"
+End Function
+
+' Verify the named context against the live sketch state; False = the
+' context is NOT verified and no named measurement may proceed.
+Sub ReportContext(ByVal ctx As String, ByRef verified As Boolean)
+    Dim sk As Object
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    verified = False
+    Err.Clear
+    Set sk = swSketchMgr.ActiveSketch
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("context-" & ctx, n, d, "active-sketch query failed; context NOT verified")
+        Exit Sub
+    End If
+    If ctx = "active" Then
+        If sk Is Nothing Then
+            WriteLine LineFor("context-active", -1, "no active sketch", "context NOT verified")
+        Else
+            verified = True
+            WriteLine LineFor("context-active", 0, "", "verified: a sketch is active")
+        End If
+    Else
+        If sk Is Nothing Then
+            verified = True
+            WriteLine LineFor("context-closed", 0, "", "verified: no sketch is active")
+        Else
+            WriteLine LineFor("context-closed", -1, "a sketch is still active", "context NOT verified")
+        End If
+    End If
+End Sub
+
+Function Vec3Text(ByVal x As Double, ByVal y As Double, ByVal z As Double) As String
+    Vec3Text = Trim(Str(x)) & "," & Trim(Str(y)) & "," & Trim(Str(z))
+End Function
+
+' A live feature-tree lookup by name. Returns the feature when a complete
+' walk found it; returns Nothing with uncertain = False only when a
+' complete walk proves it absent; uncertain = True whenever the walk or
+' the name failed. Absence is never inferred from a failed query, and an
+' empty name is never sent to any API. Every call is captured at its own
+' named stage and recorded.
+Function FindFeatureByName(ByVal nm As String, ByRef uncertain As Boolean) As SldWorks.Feature
+    Dim feat As SldWorks.Feature
+    Dim fn As String
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    Set FindFeatureByName = Nothing
+    uncertain = True
+    If nm = "" Then Exit Function
+    Err.Clear
+    Set feat = swDoc.FirstFeature
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("find-feature", n, d, "stage=firstfeature")
+    If n <> 0 Then Exit Function
+    Do While Not feat Is Nothing
+        Err.Clear
+        fn = feat.Name
+        n = Err.Number
+        d = Err.Description
+        WriteLine LineFor("find-feature", n, d, "stage=name")
+        If n <> 0 Then Exit Function
+        If fn = nm Then
+            Set FindFeatureByName = feat
+            uncertain = False
+            WriteLine LineFor("find-feature", 0, "", "found " & nm)
+            Exit Function
+        End If
+        Err.Clear
+        Set feat = feat.GetNextFeature
+        n = Err.Number
+        d = Err.Description
+        WriteLine LineFor("find-feature", n, d, "stage=nextfeature")
+        If n <> 0 Then Exit Function
+    Loop
+    uncertain = False
+    WriteLine LineFor("find-feature", 0, "", "complete walk: " & nm & " is absent")
+End Function
+
+' Close the probe sketch and delete exactly the feature that was created
+' for it - never a blind EditDelete, never a stale-object test. The name
+' is captured while the object is alive and validated; the close is
+' confirmed; the delete runs only from a captured, error-checked
+' selection of the one feature the live tree returns (a raised selection
+' never falls through to EditDelete); and the deletion is verified the
+' same way. Closing an empty sketch may already have removed it - that
+' is a clean result. True = the probe sketch is proven gone; every
+' uncertain state fails closed. Every call is captured at its own named
+' stage and recorded.
+Function DiscardProbeSketch(ByVal skFeat As SldWorks.Feature) As Boolean
+    Dim nm As String
+    Dim cur As Object
+    Dim live As SldWorks.Feature
+    Dim uncertain As Boolean
+    Dim selOk As Boolean
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    DiscardProbeSketch = False
+    Err.Clear
+    nm = skFeat.Name
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("discard-probe-sketch", n, d, "stage=name")
+    If n <> 0 Then Exit Function
+    If nm = "" Then Exit Function
+    Err.Clear
+    Set cur = swSketchMgr.ActiveSketch
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("discard-probe-sketch", n, d, "stage=activesketch")
+    If n <> 0 Then Exit Function
+    If Not cur Is Nothing Then
+        Err.Clear
+        swSketchMgr.InsertSketch True
+        n = Err.Number
+        d = Err.Description
+        WriteLine LineFor("discard-probe-sketch", n, d, "stage=insertsketch-close")
+        If n <> 0 Then Exit Function
+        Err.Clear
+        Set cur = swSketchMgr.ActiveSketch
+        n = Err.Number
+        d = Err.Description
+        WriteLine LineFor("discard-probe-sketch", n, d, "stage=activesketch-reget")
+        If n <> 0 Then Exit Function
+        If Not cur Is Nothing Then Exit Function
+    End If
+    Set live = FindFeatureByName(nm, uncertain)
+    If live Is Nothing Then
+        DiscardProbeSketch = Not uncertain
+        WriteLine LineFor("discard-probe-sketch", 0, "", "stage=find outcome: absent=" & CStr(Not uncertain))
+        Exit Function
+    End If
+    Err.Clear
+    swDoc.ClearSelection2 True
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("discard-probe-sketch", n, d, "stage=clearselection")
+    If n <> 0 Then Exit Function
+    Err.Clear
+    selOk = live.Select(False)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("discard-probe-sketch", n, d, "stage=select result=" & CStr(selOk))
+    If n <> 0 Or Not selOk Then Exit Function
+    Err.Clear
+    swDoc.EditDelete
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("discard-probe-sketch", n, d, "stage=editdelete")
+    If n <> 0 Then Exit Function
+    Set live = FindFeatureByName(nm, uncertain)
+    DiscardProbeSketch = (live Is Nothing) And (Not uncertain)
+    WriteLine LineFor("discard-probe-sketch", 0, "", "stage=verify deleted=" & CStr(DiscardProbeSketch))
+End Function
+
+' Live enumeration of the open documents answering to the title: how
+' many match, and is the single match the object this macro owns? Every
+' call is captured at its own named stage and recorded. False = a query
+' failed, which proves nothing and leaves every caller's outcome
+' unverified.
+Function DocEnumeration(ByVal t As String, ByRef cnt As Long, ByRef isOurs As Boolean) As Boolean
+    Dim dd As Object
+    Dim t2 As String
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    DocEnumeration = False
+    cnt = 0
+    isOurs = False
+    Err.Clear
+    Set dd = swApp.GetFirstDocument
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("doc-enum", n, d, "stage=getfirstdocument")
+    If n <> 0 Then Exit Function
+    Do While Not dd Is Nothing
+        Err.Clear
+        t2 = dd.GetTitle
+        n = Err.Number
+        d = Err.Description
+        WriteLine LineFor("doc-enum", n, d, "stage=gettitle t=" & t2)
+        If n <> 0 Then Exit Function
+        If t2 = t Then
+            cnt = cnt + 1
+            If dd Is swDoc Then isOurs = True
+        End If
+        Err.Clear
+        Set dd = dd.GetNext
+        n = Err.Number
+        d = Err.Description
+        WriteLine LineFor("doc-enum", n, d, "stage=getnext")
+        If n <> 0 Then Exit Function
+    Loop
+    WriteLine LineFor("doc-enum", 0, "", "complete: matches=" & Trim(Str(cnt)) & " ours=" & CStr(isOurs))
+    DocEnumeration = True
+End Function
+
+' Close exactly the document this macro created - never any other - and
+' verify it by a live enumeration of open documents: before the close, the
+' title must identify exactly our object among open documents (an empty
+' title is refused); after it, no open document may answer to the title.
+' A failed query proves nothing and leaves the run failed. Every call is
+' captured at its own named stage and recorded. The owner rule: runs
+' leave no documents open.
+Sub CloseOwnedDoc(ByRef closedOk As Boolean)
+    Dim exact As String
+    Dim cnt As Long
+    Dim isOurs As Boolean
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    closedOk = False
+    If swDoc Is Nothing Then
+        closedOk = True
+        WriteLine LineFor("close-owned-document", 0, "", "no owned document to close")
+        Exit Sub
+    End If
+    Err.Clear
+    exact = swDoc.GetTitle
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("close-owned-document", n, d, "stage=title")
+    If n <> 0 Then Exit Sub
+    If Trim(exact) = "" Then
+        WriteLine LineFor("close-owned-document", -1, "empty title", "refusing to close: an empty title would target the active document")
+        Exit Sub
+    End If
+    If Not DocEnumeration(exact, cnt, isOurs) Then
+        WriteLine LineFor("close-owned-document", -1, "enumeration failed", "refusing to close: the open-document query failed")
+        Exit Sub
+    End If
+    If cnt <> 1 Or Not isOurs Then
+        WriteLine LineFor("close-owned-document", -1, "matches=" & Trim(Str(cnt)) & " ours=" & CStr(isOurs), "refusing to close: the title does not identify exactly our document")
+        Exit Sub
+    End If
+    Err.Clear
+    swApp.CloseDoc exact
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("close-owned-document", n, d, "stage=closedoc " & exact)
+    If n <> 0 Then Exit Sub
+    If Not DocEnumeration(exact, cnt, isOurs) Then
+        WriteLine LineFor("close-owned-document", -1, "enumeration failed", "closure NOT verified: the open-document query failed")
+        Exit Sub
+    End If
+    If cnt = 0 Then
+        closedOk = True
+        WriteLine LineFor("close-owned-document", 0, "", "verified closed: no open document answers to " & exact)
+    Else
+        WriteLine LineFor("close-owned-document", -1, "matches=" & Trim(Str(cnt)), "closure NOT verified: an open document still answers to the title")
+    End If
+End Sub
+
+' The keep-mode handoff must be a live, nonempty, uniquely owned
+' document: the title must be nonempty and a complete enumeration must
+' find exactly one match, ours. False = the handoff is unverified and
+' the document is never reported as retained.
+Function OwnedHandoffVerified(ByVal tag As String, ByRef titleOut As String) As Boolean
+    Dim cnt As Long
+    Dim isOurs As Boolean
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    OwnedHandoffVerified = False
+    titleOut = ""
+    Err.Clear
+    titleOut = swDoc.GetTitle
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("handoff-" & tag, n, d, "stage=title")
+    If n <> 0 Then Exit Function
+    If Trim(titleOut) = "" Then
+        WriteLine LineFor("handoff-" & tag, -1, "empty title", "handoff NOT verified")
+        Exit Function
+    End If
+    If Not DocEnumeration(titleOut, cnt, isOurs) Then
+        WriteLine LineFor("handoff-" & tag, -1, "enumeration failed", "handoff NOT verified")
+        Exit Function
+    End If
+    If cnt = 1 And isOurs Then
+        WriteLine LineFor("handoff-" & tag, 0, "", "verified live and owned: " & titleOut)
+        OwnedHandoffVerified = True
+    Else
+        WriteLine LineFor("handoff-" & tag, -1, "matches=" & Trim(Str(cnt)) & " ours=" & CStr(isOurs), "handoff NOT verified")
+    End If
+End Function
+
+Function OwnedDocTitle() As String
+    On Error Resume Next
+    OwnedDocTitle = ""
+    If swDoc Is Nothing Then Exit Function
+    OwnedDocTitle = "" & swDoc.GetTitle
+End Function
+
+' The first feature type names in the tree, with any captured walk error
+' embedded in the text: the report names what the scan actually saw when
+' plane selection fails.
+Function TreeSummary() As String
+    Dim feat As SldWorks.Feature
+    Dim s As String
+    Dim planes As String
+    Dim errs As String
+    Dim nm As String
+    Dim i As Long
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    Err.Clear
+    Set feat = swDoc.FirstFeature
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then errs = errs & "firstfeature err=" & Trim(Str(n)) & " " & d & "; "
+    Do While Not feat Is Nothing And i < 300
+        Err.Clear
+        nm = feat.GetTypeName2()
+        n = Err.Number
+        d = Err.Description
+        If n <> 0 Then errs = errs & "typename err=" & Trim(Str(n)) & " " & d & "; "
+        If n = 0 Then
+            If InStr(1, nm, "lane", vbTextCompare) > 0 Then
+                planes = planes & nm & "/" & feat.Name & " "
+            End If
+            If i < 10 Then s = s & nm & " "
+        End If
+        i = i + 1
+        Err.Clear
+        Set feat = feat.GetNextFeature
+        n = Err.Number
+        d = Err.Description
+        If n <> 0 Then errs = errs & "nextfeature err=" & Trim(Str(n)) & " " & d & "; "
+    Loop
+    TreeSummary = Trim(Str(i)) & " features; plane-like: [" & Trim(planes) & "]; first: " & s & "; walk-errs: " & errs
+End Function
+
+' The report path travels in a one-line file under the TEMP directory that
+' the host rewrites before every run: preferred over CRAFT_BRIDGE_REPORT,
+' because the macro runs inside the SolidWorks process, which may be an
+' instance that started long ago with a stale environment. The environment
+' variable is only the fallback for when the path file is missing or blank.
+' Host-file plumbing: it suppresses its own I/O errors by design and is
+' outside the per-call SolidWorks API evidence contract.
+Function ReportPathFromHost() As String
+    Dim p As String
+    Dim f As Integer
+    Dim oneLine As String
+    Dim got As Boolean
+    ReportPathFromHost = ""
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p <> "" Then
+        p = p & "\craft-bridge-report-path.txt"
+        Err.Clear
+        f = FreeFile
+        Open p For Input As #f
+        If Err.Number = 0 Then
+            Err.Clear
+            Line Input #f, oneLine
+            got = (Err.Number = 0)
+            Err.Clear
+            Close #f
+            If got Then
+                oneLine = Trim(oneLine)
+                If oneLine <> "" Then
+                    ReportPathFromHost = oneLine
+                    Exit Function
+                End If
+            End If
+        End If
+        Err.Clear
+    End If
+    ReportPathFromHost = Trim(Environ$("CRAFT_BRIDGE_REPORT"))
+End Function
+
+' Truncate the report so this run never inherits a previous run's lines.
+' Host-file plumbing, as above.
+Sub StartReport()
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Output As #f
+    Close #f
+End Sub
+
+' One line, one fresh handle: open, print, close. Nothing to leak, nothing
+' to collide with. Host-file plumbing, as above.
+Sub WriteLine(ByVal text As String)
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Append As #f
+    Print #f, text
+    Close #f
+End Sub
+
+Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)
+    WriteLine "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
+End Sub
+
+' JSON string escaping. This is not VBA-literal escaping: it is only for the
+' report file. Generated code strings are escaped separately by the generator.
+Function JsonStr(ByVal s As String) As String
+    Dim t As String
+    t = Replace(s, "\", "\\")
+    t = Replace(t, """", "\""")
+    t = Replace(t, vbCrLf, "\n")
+    t = Replace(t, vbCr, "\n")
+    t = Replace(t, vbLf, "\n")
+    t = Replace(t, vbTab, "\t")
+    JsonStr = t
+End Function
+
+' Cleanup authorization from the host's path file: "close" (third line
+' reads close-after-run), "keep" (a two-line file) or "unknown". Host-
+' file plumbing, as above.
+Function CloseMode() As String
+    Dim p As String
+    Dim f As Integer
+    Dim oneLine As String
+    Dim ok As Boolean
+    Dim e3 As Long
+    CloseMode = "unknown"
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p = "" Then Exit Function
+    p = p & "\craft-bridge-report-path.txt"
+    Err.Clear
+    f = FreeFile
+    Open p For Input As #f
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    Line Input #f, oneLine
+    ok = (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    ok = ok And (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    e3 = Err.Number
+    Close #f
+    If Not ok Then Exit Function
+    If e3 = 0 Then
+        If Trim(oneLine) = "close-after-run" Then CloseMode = "close" Else CloseMode = "unknown"
+    ElseIf e3 = 62 And ok Then
+        CloseMode = "keep"
+    End If
+End Function
