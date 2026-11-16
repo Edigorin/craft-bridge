@@ -12,6 +12,7 @@ Dim reportPath As String
 
 Sub main()
     Dim template As String
+    Dim closed As Boolean
     On Error GoTo Fail
     reportPath = ReportPathFromHost()
     If reportPath = "" Then Err.Raise vbObjectError + 513, "eqdiag", "no report path"
@@ -31,7 +32,6 @@ Sub main()
     WriteLine ProbeLine("EditRebuild3")
     WriteLine ProbeLine("Add2-3arg")
     WriteLine ProbeAdd40mm()
-    Dim closed As Boolean
     WriteLine CloseLine(closed)
     If Not closed Then
         WriteLine "{""type"":""step"",""index"":-1,""command"":""close"",""status"":""failed"",""message"":""the owned document could not be confirmed closed""}"
@@ -46,7 +46,6 @@ Fail:
     errMsg = Err.Description
     On Error Resume Next
     WriteLine "{""type"":""step"",""index"":-1,""command"":""eqdiag"",""status"":""failed"",""message"":""" & JsonStr("err " & Trim(Str(errNum)) & ": " & errMsg) & """}"
-    Dim closed As Boolean
     WriteLine CloseLine(closed)
     WriteLine "{""type"":""summary"",""status"":""failed""}"
 End Sub
@@ -176,17 +175,20 @@ Function ProbeAdd40mm() As String
     ProbeAdd40mm = LineFor("Add40mm", 0, "", detail)
 End Function
 
-' Close exactly the document this probe created - never any other - and
-' verify it by a live enumeration of open documents: the owned title must
-' be absent. An empty title is refused (a name-based close would hit the
-' active document, which may not be ours), and a failed query proves
-' nothing: it stays an unverified failure. Reports its own outcome as one
-' probe line on both paths.
+' Close exactly the document this probe created - never any other. Before
+' any name-based close, a live enumeration must find exactly one open
+' document answering to the title and it must be the object this probe
+' created; an empty title is refused (a name-based close would hit the
+' active document). The exact title is used as returned - Trim only tests
+' blankness. Closure is then verified by the same live enumeration: the
+' title must be absent. A failed query proves nothing and stays an
+' unverified failure. Reports its own outcome on both paths.
 Function CloseLine(ByRef ok As Boolean) As String
-    Dim t As String
+    Dim exact As String
     Dim n As Long
     Dim d As String
     Dim cnt As Long
+    Dim isOurs As Boolean
     On Error Resume Next
     ok = False
     If swDoc Is Nothing Then
@@ -195,28 +197,39 @@ Function CloseLine(ByRef ok As Boolean) As String
         Exit Function
     End If
     Err.Clear
-    t = swDoc.GetTitle
+    exact = swDoc.GetTitle
     n = Err.Number
     d = Err.Description
     If n <> 0 Then
         CloseLine = LineFor("close-owned-document", n, d, "title lookup failed; nothing closed")
         Exit Function
     End If
-    t = Trim(t)
-    If t = "" Then
+    If Trim(exact) = "" Then
         CloseLine = LineFor("close-owned-document", -1, "the owned document has no title", "refusing to close: an empty title would target the active document")
         Exit Function
     End If
     Err.Clear
-    swApp.CloseDoc t
+    OwnershipCheck exact, cnt, isOurs
     n = Err.Number
     d = Err.Description
     If n <> 0 Then
-        CloseLine = LineFor("close-owned-document", n, d, "CloseDoc failed for " & t)
+        CloseLine = LineFor("close-owned-document", n, d, "refusing to close: the open-document query failed")
+        Exit Function
+    End If
+    If cnt <> 1 Or Not isOurs Then
+        CloseLine = LineFor("close-owned-document", -1, "matches=" & Trim(Str(cnt)) & " ours=" & CStr(isOurs), "refusing to close: the title does not identify exactly our document")
         Exit Function
     End If
     Err.Clear
-    cnt = CountOpenWithTitle(t)
+    swApp.CloseDoc exact
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        CloseLine = LineFor("close-owned-document", n, d, "CloseDoc failed for " & exact)
+        Exit Function
+    End If
+    Err.Clear
+    OwnershipCheck exact, cnt, isOurs
     n = Err.Number
     d = Err.Description
     If n <> 0 Then
@@ -225,29 +238,32 @@ Function CloseLine(ByRef ok As Boolean) As String
     End If
     If cnt = 0 Then
         ok = True
-        CloseLine = LineFor("close-owned-document", 0, "", "verified closed: no open document answers to " & t)
+        CloseLine = LineFor("close-owned-document", 0, "", "verified closed: no open document answers to " & exact)
     Else
-        CloseLine = LineFor("close-owned-document", -1, "an open document still answers to " & t, "closure NOT verified")
+        CloseLine = LineFor("close-owned-document", -1, "matches=" & Trim(Str(cnt)), "closure NOT verified: an open document still answers to the title")
     End If
 End Function
 
-' Count the open documents answering to a title through a live enumeration.
-' Any raise propagates so the caller records an unverified failure.
-Function CountOpenWithTitle(ByVal t As String) As Long
+' Live enumeration: how many open documents answer to the title, and is the
+' single match the object this probe created? Any raise propagates so the
+' caller records an unverified failure.
+Sub OwnershipCheck(ByVal t As String, ByRef cnt As Long, ByRef isOurs As Boolean)
     Dim d As Object
-    Dim cnt As Long
     On Error GoTo EnumFail
     cnt = 0
+    isOurs = False
     Set d = swApp.GetFirstDocument
     Do While Not d Is Nothing
-        If d.GetTitle = t Then cnt = cnt + 1
+        If d.GetTitle = t Then
+            cnt = cnt + 1
+            If d Is swDoc Then isOurs = True
+        End If
         Set d = d.GetNext
     Loop
-    CountOpenWithTitle = cnt
-    Exit Function
+    Exit Sub
 EnumFail:
     Err.Raise Err.Number, , Err.Description
-End Function
+End Sub
 
 Function LineFor(ByVal which As String, ByVal n As Long, ByVal d As String, ByVal detail As String) As String
     LineFor = "{""type"":""probe"",""member"":""" & JsonStr(which) & """,""err"":" & Trim(Str(n)) & ",""errdesc"":""" & JsonStr(d) & """,""detail"":""" & JsonStr(detail) & """}"
