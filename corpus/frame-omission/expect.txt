@@ -1,0 +1,23 @@
+sha256=9d671d93fa4b20f1c46d223f33d10ad2ff5ba975d92e22d9f2f499d583760309
+min_features=5
+volume_compare=skip
+# reference.step is a placeholder body: mass comparison activates when
+# real SolidCraft exports replace it (see docs/seat-acceptance.md).
+# BOUNDED-SUPPORT CAVEAT (non-permutation omission path): all three origin
+# planes publish permutation maps on this seat, so the omission path is
+# UNREACHABLE in practice here and this item verifies only the classified
+# permutation path at runtime. The omission machinery is pinned offline
+# (tests/frame_corpus.rs): on a non-permutation map each axis-dependent
+# relation and dimension is omitted once PER PASS with a named reason
+# "...(non-permutation map); " - a successful skip, terminating, never
+# re-attempted as a failure within a pass. The relation pass runs once; the
+# dimension pass is re-run by the restore path, which appends the two
+# dimension-omission reasons again there. This recipe's downstream
+# dimension equations reference the omitted dimensions' slots: those reach
+# the dead-slot guards ("the parameter slot N is not bound (its dimension
+# was omitted or failed)") and fail closed; the restore path rebuilds and
+# re-runs the dimensions, the same deterministic omission leaves the same
+# dead slots, and the sketch step reports FAILED - never a silent success
+# and never a successful degrade on this fixture. An omission-only sketch
+# (nothing downstream references the omitted slots) reports degraded with
+# the omitted items named.

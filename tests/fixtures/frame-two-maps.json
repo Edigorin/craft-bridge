@@ -1,0 +1,105 @@
+{
+  "about": {
+    "design": "Frame Two Maps",
+    "format": "solidcraft/53",
+    "replay": "craft-bridge build",
+    "version": "0.40.0-rc.4"
+  },
+  "commands": [
+    { "command": "document.units", "params": { "units": "mm" } },
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "id": 1,
+          "name": "Plate",
+          "plane": { "name": "YZ", "type": "origin" },
+          "sketch": {
+            "constraints": [
+              { "id": "k1", "l": 0, "type": "horizontal" },
+              { "id": "k2", "l": 1, "type": "vertical" },
+              { "id": "k3", "l": 2, "type": "horizontal" },
+              { "id": "k4", "l": 3, "type": "vertical" },
+              { "id": "k5", "p": 0, "q": 1, "param": "a1", "type": "distance_x", "value": 30.0 },
+              { "id": "k6", "p": 0, "q": 3, "param": "a2", "type": "distance_y", "value": 50.0 }
+            ],
+            "counters": { "k": 6, "l": 4, "p": 4 },
+            "curves": [
+              { "a": 0, "b": 1, "construction": false, "id": "l0", "type": "line" },
+              { "a": 1, "b": 2, "construction": false, "id": "l1", "type": "line" },
+              { "a": 2, "b": 3, "construction": false, "id": "l2", "type": "line" },
+              { "a": 3, "b": 0, "construction": false, "id": "l3", "type": "line" }
+            ],
+            "points": [
+              { "fixed": true, "id": "origin", "pos": [0.0, 0.0] },
+              { "id": "p1", "pos": [30.0, 0.0] },
+              { "id": "p2", "pos": [30.0, 50.0] },
+              { "id": "p3", "pos": [0.0, 50.0] }
+            ]
+          },
+          "suppressed": false,
+          "type": "sketch"
+        },
+        "params": [
+          { "expression": "30 mm", "name": "a1", "unit": "mm" },
+          { "expression": "50 mm", "name": "a2", "unit": "mm" }
+        ]
+      }
+    },
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "id": 2,
+          "name": "Boss",
+          "plane": { "name": "XZ", "type": "origin" },
+          "sketch": {
+            "constraints": [
+              { "id": "k1", "l": 0, "type": "horizontal" },
+              { "id": "k2", "l": 1, "type": "vertical" },
+              { "id": "k3", "l": 2, "type": "horizontal" },
+              { "id": "k4", "l": 3, "type": "vertical" },
+              { "id": "k5", "p": 0, "q": 1, "param": "b1", "type": "distance_x", "value": 20.0 },
+              { "id": "k6", "p": 0, "q": 3, "param": "b2", "type": "distance_y", "value": 60.0 }
+            ],
+            "counters": { "k": 6, "l": 4, "p": 4 },
+            "curves": [
+              { "a": 0, "b": 1, "construction": false, "id": "l0", "type": "line" },
+              { "a": 1, "b": 2, "construction": false, "id": "l1", "type": "line" },
+              { "a": 2, "b": 3, "construction": false, "id": "l2", "type": "line" },
+              { "a": 3, "b": 0, "construction": false, "id": "l3", "type": "line" }
+            ],
+            "points": [
+              { "fixed": true, "id": "origin", "pos": [0.0, 0.0] },
+              { "id": "p1", "pos": [20.0, 0.0] },
+              { "id": "p2", "pos": [20.0, 60.0] },
+              { "id": "p3", "pos": [0.0, 60.0] }
+            ]
+          },
+          "suppressed": false,
+          "type": "sketch"
+        },
+        "params": [
+          { "expression": "20 mm", "name": "b1", "unit": "mm" },
+          { "expression": "60 mm", "name": "b2", "unit": "mm" }
+        ]
+      }
+    },
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "extent": { "convention": "total_distance", "direction": "positive", "distance": "a1" },
+          "id": 3,
+          "name": "Base",
+          "operation": "new_body",
+          "profiles": { "type": "all" },
+          "sketch": 1,
+          "suppressed": false,
+          "type": "extrude"
+        },
+        "params": []
+      }
+    }
+  ]
+}

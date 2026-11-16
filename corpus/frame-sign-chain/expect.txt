@@ -1,0 +1,27 @@
+sha256=882364237f7af47d4f058d8f706b675975186b97186505b4eb9d67f0950d8097
+min_features=5
+volume_compare=skip
+# reference.step is a placeholder body: mass comparison activates when
+# real SolidCraft exports replace it (see docs/seat-acceptance.md).
+# Frame adaptation: this sketch lives on the XZ source frame (u=+X, v=-Z,
+# n=+Y). On the measured seat frames (Front s=+Y t=+Z n=+X; Top s=+Y t=-X
+# n=+Z; Right s=-X t=+Z n=+Y) the XZ probe lands on Right and publishes the
+# half-turn map (-1,0,0,-1): every source axis is sign-flipped, so the
+# driving dimensions resolve their sign at runtime and the values flow
+# through the reflected map. Generated coverage (PENDING SEAT
+# VERIFICATION): the upstream distance_x dimension registers slot 0 with
+# its runtime sign, and the downstream equations render through SlotRef,
+# so the chain (distance_y "twice_span = span * 2", then radius
+# "quarter_span = twice_span / 8") keeps source semantics whatever sign
+# the created dimensions read.
+# SEAT CHECK (manual keep-open replay: the seat-smoke flow runs with
+# close-after-run and its evidence is the runtime report only). While the
+# part is still open, the Equations dialog must show each dimension
+# equation referencing its upstream dimension by the captured runtime name,
+# with a "-1 * (...)" wrapper exactly where the created dimension read
+# negative - that stored equation TEXT is the sign evidence (regSign is
+# macro module state and never appears in the dialog). Then edit the
+# upstream dimension's DEFINING EQUATION (its right-hand side) and verify
+# both downstream dimensions follow. Capture a screenshot as evidence
+# (docs/seat-acceptance.md) and close the document afterwards (the
+# leave-no-documents-open rule).

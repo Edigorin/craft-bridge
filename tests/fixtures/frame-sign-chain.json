@@ -1,0 +1,54 @@
+{
+  "about": {
+    "design": "Frame Sign Chain",
+    "format": "solidcraft/53",
+    "replay": "craft-bridge build",
+    "version": "0.40.0-rc.4"
+  },
+  "commands": [
+    { "command": "document.units", "params": { "units": "mm" } },
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "id": 1,
+          "name": "SignChain",
+          "plane": { "name": "XZ", "type": "origin" },
+          "sketch": {
+            "constraints": [
+              { "id": "k1", "l": 0, "type": "horizontal" },
+              { "id": "k2", "l": 1, "type": "vertical" },
+              { "id": "k3", "l": 2, "type": "horizontal" },
+              { "id": "k4", "l": 3, "type": "vertical" },
+              { "id": "k5", "p": 0, "q": 1, "param": "span", "type": "distance_x", "value": 40.0 },
+              { "id": "k6", "p": 0, "q": 3, "param": "twice_span", "type": "distance_y", "value": 80.0 },
+              { "id": "k7", "c": 4, "param": "quarter_span", "type": "radius", "value": 10.0 }
+            ],
+            "counters": { "k": 7, "l": 4, "p": 5 },
+            "curves": [
+              { "a": 0, "b": 1, "construction": false, "id": "l0", "type": "line" },
+              { "a": 1, "b": 2, "construction": false, "id": "l1", "type": "line" },
+              { "a": 2, "b": 3, "construction": false, "id": "l2", "type": "line" },
+              { "a": 3, "b": 0, "construction": false, "id": "l3", "type": "line" },
+              { "c": 4, "construction": true, "id": "c0", "r": 10.0, "type": "circle" }
+            ],
+            "points": [
+              { "fixed": true, "id": "origin", "pos": [0.0, 0.0] },
+              { "id": "p1", "pos": [40.0, 0.0] },
+              { "id": "p2", "pos": [40.0, 80.0] },
+              { "id": "p3", "pos": [0.0, 80.0] },
+              { "id": "p4", "pos": [20.0, 40.0] }
+            ]
+          },
+          "suppressed": false,
+          "type": "sketch"
+        },
+        "params": [
+          { "expression": "40 mm", "name": "span", "unit": "mm" },
+          { "expression": "span * 2", "name": "twice_span", "unit": "mm" },
+          { "expression": "twice_span / 8", "name": "quarter_span", "unit": "mm" }
+        ]
+      }
+    }
+  ]
+}

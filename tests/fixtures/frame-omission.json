@@ -1,0 +1,57 @@
+{
+  "about": {
+    "design": "Frame Omission Shapes",
+    "format": "solidcraft/53",
+    "replay": "craft-bridge build",
+    "version": "0.40.0-rc.4"
+  },
+  "commands": [
+    { "command": "document.units", "params": { "units": "mm" } },
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "id": 1,
+          "name": "OmissionShapes",
+          "plane": { "name": "XY", "type": "origin" },
+          "sketch": {
+            "constraints": [
+              { "id": "k1", "l": 0, "type": "horizontal" },
+              { "id": "k2", "l": 1, "type": "vertical" },
+              { "id": "k3", "p": 4, "q": 5, "type": "horizontal_points" },
+              { "id": "k4", "p": 0, "q": 3, "type": "vertical_points" },
+              { "id": "k5", "p": 0, "q": 1, "param": "sx", "type": "distance_x", "value": 40.0 },
+              { "id": "k6", "p": 0, "q": 3, "param": "sy", "type": "distance_y", "value": 80.0 },
+              { "id": "k7", "p": 4, "q": 5, "param": "s2", "type": "distance", "value": 80.0 },
+              { "id": "k8", "p": 2, "q": 3, "param": "s3", "type": "distance", "value": 40.0 }
+            ],
+            "counters": { "k": 8, "l": 5, "p": 6 },
+            "curves": [
+              { "a": 0, "b": 1, "construction": false, "id": "l0", "type": "line" },
+              { "a": 1, "b": 2, "construction": false, "id": "l1", "type": "line" },
+              { "a": 2, "b": 3, "construction": false, "id": "l2", "type": "line" },
+              { "a": 3, "b": 0, "construction": false, "id": "l3", "type": "line" },
+              { "a": 4, "b": 5, "construction": false, "id": "l4", "type": "line" }
+            ],
+            "points": [
+              { "fixed": true, "id": "origin", "pos": [0.0, 0.0] },
+              { "id": "p1", "pos": [40.0, 0.0] },
+              { "id": "p2", "pos": [40.0, 80.0] },
+              { "id": "p3", "pos": [0.0, 80.0] },
+              { "id": "p4", "pos": [60.0, 20.0] },
+              { "id": "p5", "pos": [140.0, 20.0] }
+            ]
+          },
+          "suppressed": false,
+          "type": "sketch"
+        },
+        "params": [
+          { "expression": "40 mm", "name": "sx", "unit": "mm" },
+          { "expression": "80 mm", "name": "sy", "unit": "mm" },
+          { "expression": "sx * 2", "name": "s2", "unit": "mm" },
+          { "expression": "sy - sx", "name": "s3", "unit": "mm" }
+        ]
+      }
+    }
+  ]
+}

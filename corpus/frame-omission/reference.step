@@ -1,0 +1,9 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('craft-bridge synthetic fixture'),'2;1');
+FILE_NAME('part.step','2026-01-01T00:00:00',('craft-bridge'),(''),'','','');
+FILE_SCHEMA(('AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF { 1 0 10303 442 1 1 4 }'));
+ENDSEC;
+DATA;
+ENDSEC;
+END-ISO-10303-21;

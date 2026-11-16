@@ -1,0 +1,24 @@
+sha256=3437827425ef940998b766b51636983a8ff2860fd5e630c63f72f12ab4e0e25b
+min_features=7
+volume_compare=skip
+# reference.step is a placeholder body: mass comparison activates when
+# real SolidCraft exports replace it (see docs/seat-acceptance.md).
+# Two sketches on different source frames (YZ then XZ) with different
+# adaptation maps. On the measured seat frames (Front s=+Y t=+Z n=+X; Top
+# s=+Y t=-X n=+Z; Right s=-X t=+Z n=+Y) YZ probes Front and publishes
+# identity, XZ probes Right and publishes the half turn (-1,0,0,-1).
+# Per-slot map state: each probe publishes its own slot and CleanSketchN
+# invalidates and re-probes only its own. Restore-on-reference: the extrude
+# (step 3) references the FIRST sketch - it consults slot 1's map
+# (MapIsIdentity) and sketch name while slot 2 holds a different map, and
+# its depth equation reads the first sketch's registered dimension (slot 0)
+# through the sign-normalizing SlotRef. The extrude family still requires
+# the identity map (batch 2 replaces this with the direction truth table):
+# on a seat whose YZ map is not exactly identity the extrude step reports
+# the named refusal and never reports created - bounded support, not a
+# defect. SEAT CHECK: the runtime report must show both sketches created;
+# the Boss sketch must land on the XZ plane at its mirrored source position
+# (u->-s, v->-t). During a manual keep-open replay (seat-smoke runs with
+# close-after-run) the Equations dialog must show the Base depth driven by
+# the Plate dimension; capture evidence and close the document afterwards
+# (the leave-no-documents-open rule).
