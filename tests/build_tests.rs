@@ -1283,15 +1283,7 @@ fn assert_vba_structure(text: &str, what: &str) {
         // A bare "Name()" statement is not a valid VBA procedure call:
         // parens require Call or an assignment context. The grammar error
         // is invisible to every balance scan - it failed a seat probe.
-        if !up.starts_with("IF ")
-            && !up.starts_with("FOR ")
-            && !up.contains('=')
-            && !up.starts_with("SUB ")
-            && !up.starts_with("FUNCTION ")
-            && !up.starts_with("DIM ")
-            && !up.starts_with("SET ")
-            && t.ends_with("()")
-        {
+        if t.ends_with("()") && !t.contains(' ') && !t.contains('=') {
             panic!("{what}: bare parenthesized Sub call is invalid VBA: {t}");
         }
         if up.starts_with("IF ") && up.ends_with("THEN") {
