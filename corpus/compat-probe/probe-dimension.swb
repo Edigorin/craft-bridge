@@ -65,7 +65,7 @@ Sub main()
     ' The stage under test. If it stalls, this probe - and only this probe -
     ' loses its remaining records and its cleanup; the timeout path is the
     ' documented stop-and-reconcile.
-    WriteLine DimAttempt()
+    DimStage()
 WrapUp:
     cleanupMode = CloseMode()
     If cleanupMode = "close" Then
@@ -98,75 +98,92 @@ Fail:
     WriteLine "{""type"":""summary"",""status"":""failed""}"
 End Sub
 
-Function DimAttempt() As String
+' The risky stage, one durable record per boundary: an entering record
+' BEFORE each COM call - it survives even a stall - and the captured
+' outcome immediately after. Nothing returns are recorded explicitly
+' before anything is dereferenced.
+Sub DimStage()
     Dim dd As Object
     Dim dm As Object
     Dim n As Long
     Dim d As String
-    Dim detail As String
     Dim v As Variant
     Dim na As Long
     Dim da As String
     On Error Resume Next
+    WriteLine LineFor("dimension", 0, "", "stage=adddimension2 entering")
     Err.Clear
     Set dd = swDoc.AddDimension2(0.055, -0.035, 0#)
     n = Err.Number
     d = Err.Description
     If n <> 0 Then
-        DimAttempt = LineFor("dimension", n, d, "stage=adddimension2")
-        Exit Function
+        WriteLine LineFor("dimension", n, d, "stage=adddimension2 outcome")
+        Exit Sub
     End If
+    If dd Is Nothing Then
+        WriteLine LineFor("dimension", -1, "returned Nothing", "stage=adddimension2 outcome")
+        Exit Sub
+    End If
+    WriteLine LineFor("dimension", 0, "", "stage=adddimension2 outcome: an object came back")
+    WriteLine LineFor("dimension", 0, "", "stage=getdimension2 entering")
     Err.Clear
     Set dm = dd.GetDimension2(0)
     n = Err.Number
     d = Err.Description
     If n <> 0 Then
-        DimAttempt = LineFor("dimension", n, d, "stage=getdimension2")
-        Exit Function
+        WriteLine LineFor("dimension", n, d, "stage=getdimension2 outcome")
+        Exit Sub
     End If
-    detail = ""
+    If dm Is Nothing Then
+        WriteLine LineFor("dimension", -1, "returned Nothing", "stage=getdimension2 outcome")
+        Exit Sub
+    End If
+    WriteLine LineFor("dimension", 0, "", "stage=getdimension2 outcome: an object came back")
+    WriteLine LineFor("dimension", 0, "", "stage=systemvalue entering")
     Err.Clear
     v = dm.SystemValue
     n = Err.Number
     d = Err.Description
     If n <> 0 Then
-        DimAttempt = LineFor("dimension", n, d, "stage=systemvalue")
-        Exit Function
+        WriteLine LineFor("dimension", n, d, "stage=systemvalue outcome")
+        Exit Sub
     End If
-    detail = "value=" & Trim(Str(v))
+    WriteLine LineFor("dimension", 0, "", "stage=systemvalue outcome: value=" & Trim(Str(v)))
+    WriteLine LineFor("dimension", 0, "", "stage=name entering")
     Err.Clear
     v = dm.Name
     na = Err.Number
     da = Err.Description
     If na = 0 Then
-        detail = detail & " | name=" & CStr(v)
+        WriteLine LineFor("dimension", 0, "", "stage=name outcome: " & CStr(v))
     Else
-        detail = detail & " | name-read err=" & Trim(Str(na)) & " " & da
+        WriteLine LineFor("dimension", na, da, "stage=name outcome")
     End If
+    WriteLine LineFor("dimension", 0, "", "stage=textpos-get entering")
     Err.Clear
     v = dd.GetTextPosition
     na = Err.Number
     da = Err.Description
     If na <> 0 Then
-        detail = detail & " | textpos-get member err=" & Trim(Str(na)) & " " & da
+        WriteLine LineFor("dimension", na, da, "stage=textpos-get outcome: member")
     Else
+        WriteLine LineFor("dimension", 0, "", "stage=textpos-get outcome: member returned type=" & TypeName(v))
         Err.Clear
-        detail = detail & " | textpos-get=" & Trim(Str(v(0))) & "," & Trim(Str(v(1))) & "," & Trim(Str(v(2)))
-        If Err.Number <> 0 Then detail = detail & " decode err=" & Trim(Str(Err.Number)) & " " & Err.Description
+        WriteLine LineFor("dimension", Err.Number, Err.Description, "stage=textpos-get outcome: decoded=" & Trim(Str(v(0))) & "," & Trim(Str(v(1))) & "," & Trim(Str(v(2))))
     End If
+    WriteLine LineFor("dimension", 0, "", "stage=textpos-prop entering")
     Err.Clear
     v = dd.TextPosition
     na = Err.Number
     da = Err.Description
     If na <> 0 Then
-        detail = detail & " | textpos-prop member err=" & Trim(Str(na)) & " " & da
+        WriteLine LineFor("dimension", na, da, "stage=textpos-prop outcome: member")
     Else
+        WriteLine LineFor("dimension", 0, "", "stage=textpos-prop outcome: member returned type=" & TypeName(v))
         Err.Clear
-        detail = detail & " | textpos-prop=" & Trim(Str(v(0))) & "," & Trim(Str(v(1))) & "," & Trim(Str(v(2)))
-        If Err.Number <> 0 Then detail = detail & " decode err=" & Trim(Str(Err.Number)) & " " & Err.Description
+        WriteLine LineFor("dimension", Err.Number, Err.Description, "stage=textpos-prop outcome: decoded=" & Trim(Str(v(0))) & "," & Trim(Str(v(1))) & "," & Trim(Str(v(2))))
     End If
-    DimAttempt = LineFor("dimension", 0, "", detail)
-End Function
+End Sub
 
 Function LineFor(ByVal which As String, ByVal n As Long, ByVal d As String, ByVal detail As String) As String
     LineFor = "{""type"":""probe"",""member"":""" & JsonStr(which) & """,""err"":" & Trim(Str(n)) & ",""errdesc"":""" & JsonStr(d) & """,""detail"":""" & JsonStr(detail) & """}"

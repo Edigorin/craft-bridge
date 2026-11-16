@@ -1,5 +1,7 @@
 ' craft-bridge probe-sketchspace - Phase 0 diagnostic: in which space do
-' SolidWorks sketch-point readbacks and dimension text placements live?
+' SolidWorks sketch-point readbacks live? (The dimension-placement
+' question is owned by probe-dimension, where a stall cannot eat this
+' evidence.)
 ' An asymmetric off-origin line at known sketch coordinates, read back in
 ' BOTH contexts, each context verified before any measurement borrows its
 ' name, with the full model-to-sketch transform (through scale) reported
@@ -62,7 +64,7 @@ Sub main()
         runFailed = True
         GoTo WrapUp
     End If
-    WriteLine PointLine("active-predim", ln)
+    WriteLine PointLine("active-initial", ln)
     WriteLine TransformLine()
     ' The dimension stage is deliberately NOT here: on this seat AddDimension2
     ' stalls the macro (v8 run: the report stops dead at this point), and a
@@ -75,7 +77,7 @@ Sub main()
         runFailed = True
         GoTo WrapUp
     End If
-    WriteLine PointLine("active-postdim", ln)
+    WriteLine PointLine("active-preclose", ln)
     swSketchMgr.InsertSketch True
     ReportContext "closed", verified
     If Not verified Then
