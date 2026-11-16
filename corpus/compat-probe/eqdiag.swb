@@ -1,7 +1,9 @@
 ' craft-bridge eqdiag - diagnostic probe: which EquationMgr and ModelDoc
 ' members does this seat's SolidWorks actually support at runtime? One
-' report line per member attempt. It creates nothing beyond a fresh part
-' and the runtime report. Diagnostic instrument, not a fidelity golden.
+' report line per member attempt, with the numeric error captured
+' immediately after the call. It creates nothing beyond a fresh part
+' (plus diagnostic equations in it) and the runtime report. Diagnostic
+' instrument, not a fidelity golden.
 Option Explicit
 
 Dim swApp As SldWorks.SldWorks
@@ -20,6 +22,7 @@ Sub main()
     If template = "" Then Err.Raise vbObjectError + 514, "eqdiag", "no default part template"
     Set swDoc = swApp.NewDocument(template, 0, 0, 0)
     If swDoc Is Nothing Then Err.Raise vbObjectError + 515, "eqdiag", "no document"
+    WriteLine "{""type"":""step"",""index"":-1,""command"":""document.new"",""status"":""created"",""message"":""fresh part from the default template""}"
     WriteLine ProbeLine("GetEquationMgr")
     WriteLine ProbeLine("Add")
     WriteLine ProbeLine("Count")
@@ -38,47 +41,74 @@ Fail:
     WriteLine "{""type"":""summary"",""status"":""failed""}"
 End Sub
 
-' Try exactly one member and return a report line naming the outcome.
+' Try exactly one member and return one report line. The numeric error and
+' its description are captured immediately after the call; a call that does
+' not raise is reported as such - that is not proof of successful insertion.
 Function ProbeLine(ByVal which As String) As String
     Dim eqMgr As Object
     Dim v As Variant
     Dim idx As Long
-    Dim msg As String
+    Dim n As Long
+    Dim d As String
+    Dim detail As String
     On Error Resume Next
+    detail = ""
+    If which = "EditRebuild3" Then
+        Err.Clear
+        v = swDoc.EditRebuild3
+        n = Err.Number
+        d = Err.Description
+        If n = 0 Then detail = "returned=" & Trim(Str(v))
+        ProbeLine = LineFor(which, n, d, detail)
+        Exit Function
+    End If
     Err.Clear
     Set eqMgr = swDoc.GetEquationMgr
-    If Err.Number <> 0 Then
-        ProbeLine = LineFor(which, "GetEquationMgr raised: " & Err.Description)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        ProbeLine = LineFor(which, n, d, "while acquiring GetEquationMgr")
+        Exit Function
+    End If
+    If eqMgr Is Nothing Then
+        ProbeLine = LineFor(which, -1, "GetEquationMgr returned Nothing", "while acquiring GetEquationMgr")
         Exit Function
     End If
     Err.Clear
     Select Case which
         Case "GetEquationMgr"
-            msg = "ok"
+            detail = "returned an object"
         Case "Add"
             idx = eqMgr.Add(-1, """G1""=0.001")
-            If Err.Number = 0 Then msg = "ok idx=" & Trim(Str(idx)) Else msg = "raised: " & Err.Description
+            n = Err.Number
+            d = Err.Description
+            If n = 0 Then detail = "returned index=" & Trim(Str(idx)) & " (call did not raise; insertion is unverified)"
         Case "Count"
             v = eqMgr.Count
-            If Err.Number = 0 Then msg = "ok count=" & Trim(Str(v)) Else msg = "raised: " & Err.Description
+            n = Err.Number
+            d = Err.Description
+            If n = 0 Then detail = "returned=" & Trim(Str(v))
         Case "Equation"
             v = eqMgr.Equation(0)
-            If Err.Number = 0 Then msg = "ok text=" & CStr(v) Else msg = "raised: " & Err.Description
+            n = Err.Number
+            d = Err.Description
+            If n = 0 Then detail = "returned text=" & CStr(v) & " (index 0 may be absent or pre-existing)"
         Case "Value"
             v = eqMgr.Value(0)
-            If Err.Number = 0 Then msg = "ok value=" & Trim(Str(v)) Else msg = "raised: " & Err.Description
-        Case "EditRebuild3"
-            v = swDoc.EditRebuild3
-            If Err.Number = 0 Then msg = "ok" Else msg = "raised: " & Err.Description
+            n = Err.Number
+            d = Err.Description
+            If n = 0 Then detail = "returned value=" & Trim(Str(v)) & " (index 0 may be absent or pre-existing)"
         Case "Add2-3arg"
             idx = eqMgr.Add2(-1, """G2""=0.002", False)
-            If Err.Number = 0 Then msg = "ok idx=" & Trim(Str(idx)) Else msg = "raised: " & Err.Description
+            n = Err.Number
+            d = Err.Description
+            If n = 0 Then detail = "returned index=" & Trim(Str(idx)) & " (call did not raise; insertion is unverified)"
     End Select
-    ProbeLine = LineFor(which, msg)
+    ProbeLine = LineFor(which, n, d, detail)
 End Function
 
-Function LineFor(ByVal which As String, ByVal msg As String) As String
-    LineFor = "{""type"":""probe"",""member"":""" & JsonStr(which) & """,""result"":""" & JsonStr(msg) & """}"
+Function LineFor(ByVal which As String, ByVal n As Long, ByVal d As String, ByVal detail As String) As String
+    LineFor = "{""type"":""probe"",""member"":""" & JsonStr(which) & """,""err"":" & Trim(Str(n)) & ",""errdesc"":""" & JsonStr(d) & """,""detail"":""" & JsonStr(detail) & """}"
 End Function
 
 ' The report path travels in a one-line file under the TEMP directory that
