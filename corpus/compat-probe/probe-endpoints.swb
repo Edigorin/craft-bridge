@@ -1,9 +1,12 @@
-' craft-bridge probe-endpoints - Phase 0 companion pin: how does one
-' obtain SELECTABLE point handles (relations and dimensions select them),
-' given that GetStartPoint returns Double() arrays? A line and a circle in
-' one sketch: the coordinate readbacks (known), then every candidate form
-' of point handle with its Select result captured - and the circle centre
-' candidates likewise. Diagnostic instrument, not a fidelity golden.
+' craft-bridge probe-endpoints - pin the SELECTABLE point-handle API
+' (relations and dimensions select point objects; coordinate readback is
+' separately pinned as Double() arrays). A line and a circle in one sketch;
+' every documented object-returning candidate - including the GetSketch-
+' Points2, GetStartPoint2/GetEndPoint2 and GetCenterPoint2 forms and the
+' emitter's own GetCenterPoint - reports its type, its coordinates
+' (per-component captured) and its Select result (captured separately).
+' Setup failure on missing geometry fails the run; cleanup always runs.
+' Diagnostic instrument, not a fidelity golden.
 Option Explicit
 
 Dim swApp As SldWorks.SldWorks
@@ -16,7 +19,6 @@ Sub main()
     Dim template As String
     Dim ln As Object
     Dim ci As Object
-    Dim ok As Boolean
     Dim verified As Boolean
     Dim runFailed As Boolean
     Dim closedOk As Boolean
@@ -60,10 +62,15 @@ Sub main()
     n = Err.Number
     d = Err.Description
     WriteLine LineFor("createcircle", n, d, "type=" & TypeName(ci))
+    If ln Is Nothing Or ci Is Nothing Then
+        WriteLine "{""type"":""step"",""index"":2,""command"":""draw"",""status"":""failed"",""message"":""the synthetic geometry is missing; handle pinning is refused""}"
+        runFailed = True
+        GoTo WrapUp
+    End If
     WriteLine PointsEnumLine()
-    WriteLine HandleCandidates("line-start", ln, True)
-    WriteLine HandleCandidates("line-end", ln, False)
-    WriteLine CircleCentreCandidates(ci)
+    WriteLine HandleCandidates("line-start", ln, "GetStartPoint", "StartPoint")
+    WriteLine HandleCandidates("line-end", ln, "GetEndPoint", "EndPoint")
+    WriteLine CentreCandidates(ci)
 WrapUp:
     cleanupMode = CloseMode()
     If cleanupMode = "close" Then
@@ -96,12 +103,13 @@ Fail:
     WriteLine "{""type"":""summary"",""status"":""failed""}"
 End Sub
 
-' The sketch's point collection: count, type and - if objects come back -
-' each one's coordinates and Select result.
+' The sketch's point collections - both spellings - with per-index identity:
+' type, per-component coordinates and Select result, each captured and
+' attributed to its index.
 Function PointsEnumLine() As String
     Dim sk As Object
     Dim ps As Variant
-    Dim v As Variant
+    Dim v As Object
     Dim i As Long
     Dim n As Long
     Dim d As String
@@ -120,37 +128,124 @@ Function PointsEnumLine() As String
     n = Err.Number
     d = Err.Description
     If n <> 0 Then
-        PointsEnumLine = LineFor("sketchpoints", n, d, "stage=sketchpoints")
-        Exit Function
+        detail = "SketchPoints err=" & Trim(Str(n)) & " " & d
+    Else
+        detail = "SketchPoints ok"
     End If
+    WriteLine EnumSub("SketchPoints", ps)
     Err.Clear
-    detail = "type=" & TypeName(ps) & " ubound=" & Trim(Str(UBound(ps)))
+    ps = sk.GetSketchPoints2
     n = Err.Number
     d = Err.Description
     If n <> 0 Then
-        PointsEnumLine = LineFor("sketchpoints", n, d, "stage=ubound " & detail)
+        detail = detail & " | GetSketchPoints2 err=" & Trim(Str(n)) & " " & d
+    Else
+        detail = detail & " | GetSketchPoints2 ok"
+    End If
+    WriteLine EnumSub("GetSketchPoints2", ps)
+    PointsEnumLine = LineFor("sketchpoints", 0, "", detail)
+End Function
+
+' One collection, one record: type, bounds, per-index identity.
+Function EnumSub(ByVal tag As String, ByVal ps As Variant) As String
+    Dim v As Object
+    Dim i As Long
+    Dim n As Long
+    Dim d As String
+    Dim detail As String
+    Dim tmp As String
+    On Error Resume Next
+    Err.Clear
+    detail = "type=" & TypeName(ps)
+    If Err.Number <> 0 Then
+        EnumSub = LineFor("enum-" & tag, Err.Number, Err.Description, "stage=typename")
         Exit Function
     End If
+    Err.Clear
+    tmp = Trim(Str(UBound(ps)))
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        EnumSub = LineFor("enum-" & tag, n, d, "stage=ubound " & detail)
+        Exit Function
+    End If
+    detail = detail & " ubound=" & tmp
     For i = 0 To UBound(ps)
         Err.Clear
         Set v = ps(i)
         n = Err.Number
         d = Err.Description
         If n <> 0 Then
-            detail = detail & " | idx" & Trim(Str(i)) & " set err=" & Trim(Str(n))
+            detail = detail & " | idx" & Trim(Str(i)) & " set err=" & Trim(Str(n)) & " " & d
         ElseIf v Is Nothing Then
             detail = detail & " | idx" & Trim(Str(i)) & " Nothing"
         Else
-            detail = detail & " | idx" & Trim(Str(i)) & " type=" & TypeName(v) & " select=" & CStr(v.Select(False))
+            detail = detail & " | idx" & Trim(Str(i)) & " " & ObjectIdentity(v)
         End If
-        If Err.Number <> 0 Then detail = detail & " err=" & Trim(Str(Err.Number))
     Next i
-    PointsEnumLine = LineFor("sketchpoints", 0, "", detail)
+    EnumSub = LineFor("enum-" & tag, 0, "", detail)
 End Function
 
-' Every candidate form of selectable point handle on a line endpoint,
-' each with its own captured Select result.
-Function HandleCandidates(ByVal tag As String, ByVal ln As Object, ByVal isStart As Boolean) As String
+' Type, per-component coordinates and Select result of one object, every
+' stage captured and named.
+Function ObjectIdentity(ByVal v As Object) As String
+    Dim n As Long
+    Dim d As String
+    Dim detail As String
+    Dim tmp As String
+    Dim sx As Double
+    Dim sy As Double
+    Dim sz As Double
+    Dim selres As Variant
+    On Error Resume Next
+    Err.Clear
+    detail = "type=" & TypeName(v)
+    If Err.Number <> 0 Then detail = "type err=" & Trim(Str(Err.Number))
+    Err.Clear
+    sx = v.X
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        Err.Clear
+        sy = v.Y
+        n = Err.Number
+        d = Err.Description
+    End If
+    If n = 0 Then
+        Err.Clear
+        sz = v.Z
+        n = Err.Number
+        d = Err.Description
+    End If
+    If n = 0 Then
+        detail = detail & " xyz=" & Trim(Str(sx)) & "," & Trim(Str(sy)) & "," & Trim(Str(sz))
+    Else
+        detail = detail & " xyz err=" & Trim(Str(n)) & " " & d
+    End If
+    Err.Clear
+    selres = v.Select(False)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        detail = detail & " | select-call err=" & Trim(Str(n)) & " " & d
+    Else
+        Err.Clear
+        tmp = CStr(selres)
+        n = Err.Number
+        d = Err.Description
+        If n = 0 Then
+            detail = detail & " | select=" & tmp
+        Else
+            detail = detail & " | select-convert err=" & Trim(Str(n)) & " " & d
+        End If
+    End If
+    ObjectIdentity = detail
+End Function
+
+' One endpoint family: the legacy accessor, the documented *2 object form
+' and the property form - each as a Set candidate with identity, plus the
+' array form's type. Every stage captured with its candidate name.
+Function HandleCandidates(ByVal tag As String, ByVal ln As Object, ByVal getter As String, ByVal prop As String) As String
     Dim v As Variant
     Dim sp As Object
     Dim n As Long
@@ -159,7 +254,7 @@ Function HandleCandidates(ByVal tag As String, ByVal ln As Object, ByVal isStart
     On Error Resume Next
     detail = ""
     Err.Clear
-    If isStart Then
+    If getter = "GetStartPoint" Then
         v = ln.GetStartPoint
     Else
         v = ln.GetEndPoint
@@ -169,41 +264,59 @@ Function HandleCandidates(ByVal tag As String, ByVal ln As Object, ByVal isStart
     If n = 0 Then
         detail = detail & "array-form type=" & TypeName(v)
     Else
-        detail = detail & "array-form err=" & Trim(Str(n))
+        detail = detail & "array-form err=" & Trim(Str(n)) & " " & d
     End If
     Err.Clear
-    If isStart Then
+    If getter = "GetStartPoint" Then
         Set sp = ln.GetStartPoint
     Else
         Set sp = ln.GetEndPoint
     End If
     n = Err.Number
     d = Err.Description
-    If n = 0 Then
-        detail = detail & " | set-form type=" & TypeName(sp)
-        If Not sp Is Nothing Then detail = detail & " select=" & CStr(sp.Select(False))
-    Else
+    If n <> 0 Then
         detail = detail & " | set-form err=" & Trim(Str(n)) & " " & d
+    ElseIf sp Is Nothing Then
+        detail = detail & " | set-form Nothing"
+    Else
+        detail = detail & " | set-form " & ObjectIdentity(sp)
     End If
     Err.Clear
-    v = ln.StartPoint
+    If getter = "GetStartPoint" Then
+        Set sp = ln.GetStartPoint2
+    Else
+        Set sp = ln.GetEndPoint2
+    End If
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        detail = detail & " | form2 err=" & Trim(Str(n)) & " " & d
+    ElseIf sp Is Nothing Then
+        detail = detail & " | form2 Nothing"
+    Else
+        detail = detail & " | form2 " & ObjectIdentity(sp)
+    End If
+    Err.Clear
+    v = ln.prop
     n = Err.Number
     d = Err.Description
     If n = 0 Then
-        detail = detail & " | startpoint-prop type=" & TypeName(v)
+        detail = detail & " | prop type=" & TypeName(v)
     Else
-        detail = detail & " | startpoint-prop err=" & Trim(Str(n))
+        detail = detail & " | prop err=" & Trim(Str(n)) & " " & d
     End If
     HandleCandidates = LineFor("handle-" & tag, 0, "", detail)
 End Function
 
-' The circle centre: every candidate form with captured types and Selects.
-Function CircleCentreCandidates(ByVal ci As Object) As String
+' The circle centre: the emitter's GetCenterPoint, the documented
+' GetCenterPoint2, the endpoint-style forms and the coordinate properties.
+Function CentreCandidates(ByVal ci As Object) As String
     Dim v As Variant
     Dim sp As Object
     Dim n As Long
     Dim d As String
     Dim detail As String
+    Dim tmp As String
     On Error Resume Next
     detail = ""
     Err.Clear
@@ -219,31 +332,58 @@ Function CircleCentreCandidates(ByVal ci As Object) As String
     Set sp = ci.GetStartPoint
     n = Err.Number
     d = Err.Description
-    If n = 0 Then
-        detail = detail & " | getstart-set type=" & TypeName(sp)
-        If Not sp Is Nothing Then detail = detail & " select=" & CStr(sp.Select(False))
+    If n <> 0 Then
+        detail = detail & " | getstart-set err=" & Trim(Str(n)) & " " & d
+    ElseIf sp Is Nothing Then
+        detail = detail & " | getstart-set Nothing"
     Else
-        detail = detail & " | getstart-set err=" & Trim(Str(n))
+        detail = detail & " | getstart-set " & ObjectIdentity(sp)
+    End If
+    Err.Clear
+    Set sp = ci.GetCenterPoint
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        detail = detail & " | centre-set err=" & Trim(Str(n)) & " " & d
+    ElseIf sp Is Nothing Then
+        detail = detail & " | centre-set Nothing"
+    Else
+        detail = detail & " | centre-set " & ObjectIdentity(sp)
+    End If
+    Err.Clear
+    Set sp = ci.GetCenterPoint2
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        detail = detail & " | centre2 err=" & Trim(Str(n)) & " " & d
+    ElseIf sp Is Nothing Then
+        detail = detail & " | centre2 Nothing"
+    Else
+        detail = detail & " | centre2 " & ObjectIdentity(sp)
     End If
     Err.Clear
     v = ci.CenterX
     n = Err.Number
     d = Err.Description
     If n = 0 Then
-        detail = detail & " | centerx=" & Trim(Str(v))
+        Err.Clear
+        tmp = Trim(Str(v))
+        If Err.Number = 0 Then detail = detail & " | centerx=" & tmp Else detail = detail & " | centerx convert err"
     Else
-        detail = detail & " | centerx err=" & Trim(Str(n))
+        detail = detail & " | centerx err=" & Trim(Str(n)) & " " & d
     End If
     Err.Clear
     v = ci.CenterY
     n = Err.Number
     d = Err.Description
     If n = 0 Then
-        detail = detail & " | centery=" & Trim(Str(v))
+        Err.Clear
+        tmp = Trim(Str(v))
+        If Err.Number = 0 Then detail = detail & " | centery=" & tmp Else detail = detail & " | centery convert err"
     Else
-        detail = detail & " | centery err=" & Trim(Str(n))
+        detail = detail & " | centery err=" & Trim(Str(n)) & " " & d
     End If
-    CircleCentreCandidates = LineFor("circle-centre", 0, "", detail)
+    CentreCandidates = LineFor("circle-centre", 0, "", detail)
 End Function
 
 Function LineFor(ByVal which As String, ByVal n As Long, ByVal d As String, ByVal detail As String) As String
