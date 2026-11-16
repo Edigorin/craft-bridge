@@ -1,0 +1,498 @@
+' craft-bridge probe-relnames - pin the SketchAddConstraints names with
+' behavioural evidence. The checkpoint's relation step showed the
+' constraint silently not landing (no error, geometry unchanged): the name
+' table is unproven. For each candidate name: fresh entities, apply,
+' rebuild, measure the constraint's own predicate. A name whose predicate
+' does not hold after the call is a silent no-op on this seat.
+Option Explicit
+
+Dim swApp As SldWorks.SldWorks
+Dim swDoc As SldWorks.ModelDoc2
+Dim swSketchMgr As SketchManager
+Dim reportPath As String
+Dim gProbeLog As String
+
+Sub main()
+    Dim template As String
+    Dim ok As Boolean
+    Dim runFailed As Boolean
+    Dim closedOk As Boolean
+    Dim cleanupMode As String
+    Dim errNum As Long
+    Dim errMsg As String
+    On Error GoTo Fail
+    runFailed = False
+    reportPath = ReportPathFromHost()
+    If reportPath = "" Then Err.Raise vbObjectError + 513, "probe-relnames", "no report path"
+    StartReport
+    WriteLine "{""type"":""header"",""macro"":""probe-relnames"",""bridge_version"":""0.1.0""}"
+    Set swApp = Application.SldWorks
+    template = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
+    If template = "" Then Err.Raise vbObjectError + 514, "probe-relnames", "no default part template"
+    Set swDoc = swApp.NewDocument(template, 0, 0, 0)
+    If swDoc Is Nothing Then Err.Raise vbObjectError + 515, "probe-relnames", "no document"
+    Set swSketchMgr = swDoc.SketchManager
+    WriteLine "{""type"":""step"",""index"":-1,""command"":""document.new"",""status"":""created"",""message"":""fresh part from the default template""}"
+    If Not OpenFirstPlane() Then
+        WriteStep 0, "sketch.open", "failed", "the sketch could not be opened; probed: " & gProbeLog
+        runFailed = True
+        GoTo WrapUp
+    End If
+    WriteStep 0, "sketch.open", "created", gProbeLog
+    WriteLine TryLevel("sgVertical", True)
+    WriteLine TryLevel("sgVERTICAL2D", True)
+    WriteLine TryLevel("sgHorizontal", False)
+    WriteLine TryLevel("sgHORIZONTAL2D", False)
+    WriteLine TryEqual("sgEqual")
+    WriteLine TryEqual("sgSAMELENGTH")
+    WriteLine TryParallel("sgParallel")
+    WriteLine TryPerp("sgPerpendicular")
+    WriteLine TryTangent("sgTANGENT")
+    WriteLine TryCoincident("sgCoincident")
+WrapUp:
+    cleanupMode = CloseMode()
+    If cleanupMode = "close" Then
+        CloseOwnedDoc closedOk
+        If closedOk And Not runFailed Then
+            WriteLine "{""type"":""summary"",""status"":""ok""}"
+        Else
+            If Not closedOk Then WriteStep 5, "close", "failed", "the owned document could not be confirmed closed"
+            WriteLine "{""type"":""summary"",""status"":""failed""}"
+        End If
+    ElseIf cleanupMode = "keep" Then
+        WriteStep 5, "owned-document", "kept-open", OwnedDocTitle()
+        If runFailed Then
+            WriteLine "{""type"":""summary"",""status"":""failed""}"
+        Else
+            WriteLine "{""type"":""summary"",""status"":""ok""}"
+        End If
+    Else
+        WriteStep 5, "close-mode", "failed", "the cleanup mode could not be established"
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
+    End If
+    Exit Sub
+Fail:
+    errNum = Err.Number
+    errMsg = Err.Description
+    On Error Resume Next
+    WriteLine "{""type"":""step"",""index"":-1,""command"":""probe"",""status"":""failed"",""message"":""" & JsonStr("err " & Trim(Str(errNum)) & ": " & errMsg) & """}"
+    cleanupMode = CloseMode()
+    If cleanupMode = "close" Then CloseOwnedDoc closedOk
+    WriteLine "{""type"":""summary"",""status"":""failed""}"
+End Sub
+
+' One diagonal line, one constraint name: the predicate is the endpoint
+' delta on the levelled axis (s for vertical, t for horizontal).
+Function TryLevel(ByVal cname As String, ByVal isVertical As Boolean) As String
+    Dim ln As Object
+    Dim v As Variant
+    Dim v2 As Variant
+    Dim detail As String
+    Dim n As Long
+    Dim d As String
+    Dim delta As Double
+    On Error Resume Next
+    Err.Clear
+    Set ln = swSketchMgr.CreateLine(0.01, 0.02, 0#, 0.04, 0.05, 0#)
+    If ln Is Nothing Then
+        TryLevel = LineFor(cname, -1, "no line", "")
+        Exit Function
+    End If
+    swDoc.ClearSelection2 True
+    Err.Clear
+    ln.Select False
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        TryLevel = LineFor(cname, n, "select: " & d, "")
+        Exit Function
+    End If
+    Err.Clear
+    swDoc.SketchAddConstraints cname
+    n = Err.Number
+    d = Err.Description
+    swDoc.ClearSelection2 True
+    swDoc.EditRebuild3
+    v = ln.GetStartPoint
+    v2 = ln.GetEndPoint
+    If isVertical Then
+        delta = v(0) - v2(0)
+    Else
+        delta = v(1) - v2(1)
+    End If
+    detail = "level-delta=" & Trim(Str(delta)) & " err=" & Trim(Str(n)) & " " & d
+    TryLevel = LineFor(cname, n, d, detail)
+End Function
+
+' Two lines of different lengths: the predicate is the length difference.
+Function TryEqual(ByVal cname As String) As String
+    Dim la As Object
+    Dim lb As Object
+    Dim va As Variant
+    Dim vb1 As Variant
+    Dim detail As String
+    Dim n As Long
+    Dim d As String
+    Dim diff As Double
+    On Error Resume Next
+    Set la = swSketchMgr.CreateLine(0.1, 0#, 0#, 0.14, 0#, 0#)
+    Set lb = swSketchMgr.CreateLine(0.1, 0.02, 0#, 0.125, 0.02, 0#)
+    swDoc.ClearSelection2 True
+    Err.Clear
+    la.Select False
+    lb.Select True
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        TryEqual = LineFor(cname, n, "select: " & d, "")
+        Exit Function
+    End If
+    Err.Clear
+    swDoc.SketchAddConstraints cname
+    n = Err.Number
+    d = Err.Description
+    swDoc.ClearSelection2 True
+    swDoc.EditRebuild3
+    va = la.GetStartPoint
+    vb1 = la.GetEndPoint
+    diff = Sqr((vb1(0) - va(0)) * (vb1(0) - va(0)) + (vb1(1) - va(1)) * (vb1(1) - va(1)))
+    va = lb.GetStartPoint
+    vb1 = lb.GetEndPoint
+    diff = diff - Sqr((vb1(0) - va(0)) * (vb1(0) - va(0)) + (vb1(1) - va(1)) * (vb1(1) - va(1)))
+    detail = "len-diff=" & Trim(Str(diff)) & " err=" & Trim(Str(n)) & " " & d
+    TryEqual = LineFor(cname, n, d, detail)
+End Function
+
+' Two parallel-diagonal lines: the predicate is the cross product.
+Function TryParallel(ByVal cname As String) As String
+    Dim la As Object
+    Dim lb As Object
+    Dim a1 As Variant
+    Dim a2 As Variant
+    Dim b1 As Variant
+    Dim b2 As Variant
+    Dim detail As String
+    Dim n As Long
+    Dim d As String
+    Dim cross As Double
+    On Error Resume Next
+    Set la = swSketchMgr.CreateLine(0.2, 0#, 0#, 0.23, 0.04, 0#)
+    Set lb = swSketchMgr.CreateLine(0.2, 0.06, 0#, 0.245, 0.12, 0#)
+    swDoc.ClearSelection2 True
+    Err.Clear
+    la.Select False
+    lb.Select True
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        TryParallel = LineFor(cname, n, "select: " & d, "")
+        Exit Function
+    End If
+    Err.Clear
+    swDoc.SketchAddConstraints cname
+    n = Err.Number
+    d = Err.Description
+    swDoc.ClearSelection2 True
+    swDoc.EditRebuild3
+    a1 = la.GetStartPoint
+    a2 = la.GetEndPoint
+    b1 = lb.GetStartPoint
+    b2 = lb.GetEndPoint
+    cross = (a2(0) - a1(0)) * (b2(1) - b1(1)) - (a2(1) - a1(1)) * (b2(0) - b1(0))
+    detail = "cross=" & Trim(Str(cross)) & " err=" & Trim(Str(n)) & " " & d
+    TryParallel = LineFor(cname, n, d, detail)
+End Function
+
+' Two perpendicular-by-construction lines: the predicate is the dot product.
+Function TryPerp(ByVal cname As String) As String
+    Dim la As Object
+    Dim lb As Object
+    Dim a1 As Variant
+    Dim a2 As Variant
+    Dim b1 As Variant
+    Dim b2 As Variant
+    Dim detail As String
+    Dim n As Long
+    Dim d As String
+    Dim dotp As Double
+    On Error Resume Next
+    Set la = swSketchMgr.CreateLine(0.3, 0#, 0#, 0.33, 0.04, 0#)
+    Set lb = swSketchMgr.CreateLine(0.36, 0#, 0#, 0.32, 0.03, 0#)
+    swDoc.ClearSelection2 True
+    Err.Clear
+    la.Select False
+    lb.Select True
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        TryPerp = LineFor(cname, n, "select: " & d, "")
+        Exit Function
+    End If
+    Err.Clear
+    swDoc.SketchAddConstraints cname
+    n = Err.Number
+    d = Err.Description
+    swDoc.ClearSelection2 True
+    swDoc.EditRebuild3
+    a1 = la.GetStartPoint
+    a2 = la.GetEndPoint
+    b1 = lb.GetStartPoint
+    b2 = lb.GetEndPoint
+    dotp = (a2(0) - a1(0)) * (b2(0) - b1(0)) + (a2(1) - a1(1)) * (b2(1) - b1(1))
+    detail = "dot=" & Trim(Str(dotp)) & " err=" & Trim(Str(n)) & " " & d
+    TryPerp = LineFor(cname, n, d, detail)
+End Function
+
+' A line and a circle near it: tangency has no cheap scalar here, so the
+' record is the captured call result only.
+Function TryTangent(ByVal cname As String) As String
+    Dim la As Object
+    Dim ci As Object
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    Set la = swSketchMgr.CreateLine(0.4, 0#, 0#, 0.46, 0#, 0#)
+    Set ci = swSketchMgr.CreateCircleByRadius(0.43, 0.01, 0#, 0.01)
+    swDoc.ClearSelection2 True
+    Err.Clear
+    la.Select False
+    ci.Select True
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        TryTangent = LineFor(cname, n, "select: " & d, "")
+        Exit Function
+    End If
+    Err.Clear
+    swDoc.SketchAddConstraints cname
+    n = Err.Number
+    d = Err.Description
+    swDoc.ClearSelection2 True
+    swDoc.EditRebuild3
+    TryTangent = LineFor(cname, n, d, "call-result only; err=" & Trim(Str(n)) & " " & d)
+End Function
+
+' Two line endpoints: coincidence is the endpoint distance.
+Function TryCoincident(ByVal cname As String) As String
+    Dim la As Object
+    Dim lb As Object
+    Dim sa As Object
+    Dim sb As Object
+    Dim detail As String
+    Dim n As Long
+    Dim d As String
+    Dim dist As Double
+    On Error Resume Next
+    Set la = swSketchMgr.CreateLine(0.5, 0#, 0#, 0.53, 0.04, 0#)
+    Set lb = swSketchMgr.CreateLine(0.535, 0.045, 0#, 0.57, 0#, 0#)
+    swDoc.ClearSelection2 True
+    Err.Clear
+    Set sa = la.GetEndPoint2
+    Set sb = lb.GetStartPoint2
+    sa.Select False
+    sb.Select True
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        TryCoincident = LineFor(cname, n, "select: " & d, "")
+        Exit Function
+    End If
+    Err.Clear
+    swDoc.SketchAddConstraints cname
+    n = Err.Number
+    d = Err.Description
+    swDoc.ClearSelection2 True
+    swDoc.EditRebuild3
+    dist = Sqr((sa.X - sb.X) * (sa.X - sb.X) + (sa.Y - sb.Y) * (sa.Y - sb.Y))
+    detail = "point-dist=" & Trim(Str(dist)) & " err=" & Trim(Str(n)) & " " & d
+    TryCoincident = LineFor(cname, n, d, detail)
+End Function
+
+Function LineFor(ByVal which As String, ByVal n As Long, ByVal d As String, ByVal detail As String) As String
+    LineFor = "{""type"":""probe"",""member"":""" & JsonStr(which) & """,""err"":" & Trim(Str(n)) & ",""errdesc"":""" & JsonStr(d) & """,""detail"":""" & JsonStr(detail) & """}"
+End Function
+
+Function OpenFirstPlane() As Boolean
+    Dim feat As Object
+    Dim nm As String
+    Dim fname As String
+    Dim sk As Object
+    Dim sel As Boolean
+    On Error Resume Next
+    OpenFirstPlane = False
+    gProbeLog = ""
+    Set feat = swDoc.FirstFeature
+    Do While Not feat Is Nothing
+        nm = feat.GetTypeName2()
+        If InStr(1, nm, "lane", vbTextCompare) > 0 Then
+            fname = feat.Name
+            sel = feat.Select(False)
+            If sel Then
+                swSketchMgr.InsertSketch True
+                Set sk = swSketchMgr.ActiveSketch
+                If sk Is Nothing Then
+                    gProbeLog = gProbeLog & fname & ": opened but no active sketch object; "
+                    Exit Function
+                End If
+                gProbeLog = gProbeLog & fname & ": opened; "
+                OpenFirstPlane = True
+                Exit Function
+            Else
+                gProbeLog = gProbeLog & fname & ": select returned false; "
+            End If
+        End If
+        Set feat = feat.GetNextFeature
+    Loop
+End Function
+
+' Truncate the report so this run never inherits a previous run's lines.
+Sub StartReport()
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Output As #f
+    Close #f
+End Sub
+
+Sub WriteLine(ByVal text As String)
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Append As #f
+    Print #f, text
+    Close #f
+End Sub
+
+Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)
+    WriteLine "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
+End Sub
+
+' JSON string escaping. This is not VBA-literal escaping: it is only for the
+' report file. Generated code strings are escaped separately by the generator.
+Function JsonStr(ByVal s As String) As String
+    Dim t As String
+    t = Replace(s, "\", "\\")
+    t = Replace(t, """", "\""")
+    t = Replace(t, vbCrLf, "\n")
+    t = Replace(t, vbCr, "\n")
+    t = Replace(t, vbLf, "\n")
+    t = Replace(t, vbTab, "\t")
+    JsonStr = t
+End Function
+
+Sub CloseOwnedDoc(ByRef closedOk As Boolean)
+    Dim exact As String
+    Dim d As Object
+    Dim t2 As String
+    Dim cnt As Long
+    Dim isOurs As Boolean
+    On Error Resume Next
+    closedOk = False
+    If swDoc Is Nothing Then
+        closedOk = True
+        Exit Sub
+    End If
+    Err.Clear
+    exact = swDoc.GetTitle
+    If Err.Number <> 0 Then Exit Sub
+    If Trim(exact) = "" Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then
+            cnt = cnt + 1
+            If d Is swDoc Then isOurs = True
+        End If
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt <> 1 Or Not isOurs Then Exit Sub
+    Err.Clear
+    swApp.CloseDoc exact
+    If Err.Number <> 0 Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    cnt = 0
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then cnt = cnt + 1
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt = 0 Then closedOk = True
+End Sub
+
+Function CloseMode() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim ok As Boolean
+    Dim e3 As Long
+    CloseMode = "unknown"
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p = "" Then Exit Function
+    p = p & "\craft-bridge-report-path.txt"
+    Err.Clear
+    f = FreeFile
+    Open p For Input As #f
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    Line Input #f, oneLine
+    ok = (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    ok = ok And (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    e3 = Err.Number
+    Close #f
+    If Not ok Then Exit Function
+    If e3 = 0 Then
+    If Trim(oneLine) = "close-after-run" Then CloseMode = "close" Else CloseMode = "unknown"
+    ElseIf e3 = 62 And ok Then
+    CloseMode = "keep"
+    End If
+End Function
+
+Function OwnedDocTitle() As String
+    On Error Resume Next
+    OwnedDocTitle = ""
+    If swDoc Is Nothing Then Exit Function
+    OwnedDocTitle = "" & swDoc.GetTitle
+End Function
+
+Function ReportPathFromHost() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim got As Boolean
+    ReportPathFromHost = ""
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p <> "" Then
+    p = p & "\craft-bridge-report-path.txt"
+    Err.Clear
+    f = FreeFile
+    Open p For Input As #f
+    If Err.Number = 0 Then
+    Err.Clear
+    Line Input #f, oneLine
+    got = (Err.Number = 0)
+    Err.Clear
+    Close #f
+    If got Then
+    oneLine = Trim(oneLine)
+    If oneLine <> "" Then
+    ReportPathFromHost = oneLine
+    Exit Function
+    End If
+    End If
+    End If
+    Err.Clear
+    End If
+    ReportPathFromHost = Trim(Environ$("CRAFT_BRIDGE_REPORT"))
+    End Function
