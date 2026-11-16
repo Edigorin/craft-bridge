@@ -31,7 +31,13 @@ Sub main()
     WriteLine ProbeLine("EditRebuild3")
     WriteLine ProbeLine("Add2-3arg")
     WriteLine ProbeAdd40mm()
-    WriteLine CloseLine()
+    Dim closed As Boolean
+    WriteLine CloseLine(closed)
+    If Not closed Then
+        WriteLine "{""type"":""step"",""index"":-1,""command"":""close"",""status"":""failed"",""message"":""the owned document could not be confirmed closed""}"
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
+        Exit Sub
+    End If
     WriteLine "{""type"":""summary"",""status"":""ok""}"
     Exit Sub
 Fail:
@@ -40,7 +46,8 @@ Fail:
     errMsg = Err.Description
     On Error Resume Next
     WriteLine "{""type"":""step"",""index"":-1,""command"":""eqdiag"",""status"":""failed"",""message"":""" & JsonStr("err " & Trim(Str(errNum)) & ": " & errMsg) & """}"
-    WriteLine CloseLine()
+    Dim closed As Boolean
+    WriteLine CloseLine(closed)
     WriteLine "{""type"":""summary"",""status"":""failed""}"
 End Sub
 
@@ -170,19 +177,34 @@ Function ProbeAdd40mm() As String
 End Function
 
 ' Close exactly the document this probe created - never any other - and
-' verify it: after CloseDoc the captured document object must stop
-' answering. Reports its own outcome as one probe line on both paths.
-Function CloseLine() As String
+' verify it by a live enumeration of open documents: the owned title must
+' be absent. An empty title is refused (a name-based close would hit the
+' active document, which may not be ours), and a failed query proves
+' nothing: it stays an unverified failure. Reports its own outcome as one
+' probe line on both paths.
+Function CloseLine(ByRef ok As Boolean) As String
     Dim t As String
     Dim n As Long
     Dim d As String
+    Dim cnt As Long
     On Error Resume Next
+    ok = False
+    If swDoc Is Nothing Then
+        ok = True
+        CloseLine = LineFor("close-owned-document", 0, "", "no owned document to close")
+        Exit Function
+    End If
     Err.Clear
     t = swDoc.GetTitle
     n = Err.Number
     d = Err.Description
     If n <> 0 Then
-        CloseLine = LineFor("close-owned-document", n, d, "title lookup failed")
+        CloseLine = LineFor("close-owned-document", n, d, "title lookup failed; nothing closed")
+        Exit Function
+    End If
+    t = Trim(t)
+    If t = "" Then
+        CloseLine = LineFor("close-owned-document", -1, "the owned document has no title", "refusing to close: an empty title would target the active document")
         Exit Function
     End If
     Err.Clear
@@ -194,12 +216,37 @@ Function CloseLine() As String
         Exit Function
     End If
     Err.Clear
-    t = swDoc.GetTitle
-    If Err.Number <> 0 Then
-        CloseLine = LineFor("close-owned-document", 0, "", "verified closed (the document object no longer answers)")
-    Else
-        CloseLine = LineFor("close-owned-document", -1, "the document object still answers after CloseDoc", "closure NOT verified")
+    cnt = CountOpenWithTitle(t)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        CloseLine = LineFor("close-owned-document", n, d, "closure NOT verified: the open-document query failed")
+        Exit Function
     End If
+    If cnt = 0 Then
+        ok = True
+        CloseLine = LineFor("close-owned-document", 0, "", "verified closed: no open document answers to " & t)
+    Else
+        CloseLine = LineFor("close-owned-document", -1, "an open document still answers to " & t, "closure NOT verified")
+    End If
+End Function
+
+' Count the open documents answering to a title through a live enumeration.
+' Any raise propagates so the caller records an unverified failure.
+Function CountOpenWithTitle(ByVal t As String) As Long
+    Dim d As Object
+    Dim cnt As Long
+    On Error GoTo EnumFail
+    cnt = 0
+    Set d = swApp.GetFirstDocument
+    Do While Not d Is Nothing
+        If d.GetTitle = t Then cnt = cnt + 1
+        Set d = d.GetNext
+    Loop
+    CountOpenWithTitle = cnt
+    Exit Function
+EnumFail:
+    Err.Raise Err.Number, , Err.Description
 End Function
 
 Function LineFor(ByVal which As String, ByVal n As Long, ByVal d As String, ByVal detail As String) As String
