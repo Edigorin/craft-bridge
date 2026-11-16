@@ -65,7 +65,7 @@ Sub main()
     ' The stage under test. If it stalls, this probe - and only this probe -
     ' loses its remaining records and its cleanup; the timeout path is the
     ' documented stop-and-reconcile.
-    DimStage()
+    DimStage
 WrapUp:
     cleanupMode = CloseMode()
     If cleanupMode = "close" Then
