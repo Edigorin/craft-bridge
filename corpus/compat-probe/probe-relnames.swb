@@ -1,9 +1,20 @@
 ' craft-bridge probe-relnames - pin the SketchAddConstraints names with
 ' behavioural evidence. The checkpoint's relation step showed the
 ' constraint silently not landing (no error, geometry unchanged): the name
-' table is unproven. For each candidate name: fresh entities, apply,
-' rebuild, measure the constraint's own predicate. A name whose predicate
-' does not hold after the call is a silent no-op on this seat.
+' table is unproven. For each candidate name: fresh entities at unique
+' coordinates, a live pre-call baseline of the constraint's own predicate,
+' the call with its numeric error and description captured, a SolveSketch
+' (EditRebuild3 EXITS sketch edit: rebuild + name-selected re-entry +
+' verified active-sketch identity), and the post-solve predicate. A name
+' whose predicate does not move toward zero after the call is a silent
+' no-op on this seat. A case that cannot produce a complete, discriminating
+' record - missing geometry, a degenerate or nondiscriminating pre-call
+' baseline, degenerate post-solve geometry, a failed solve or re-entry, an
+' unmeasurable or uncomputable predicate - fails the run with a failed
+' step; tri-state ownership-checked cleanup and the summary run on every
+' path. Never a fake success. A completed run means every case produced a
+' complete, discriminating record - it does NOT mean every relation
+' landed: the predicate values in the records say that.
 Option Explicit
 
 Dim swApp As SldWorks.SldWorks
@@ -12,13 +23,18 @@ Dim swSketchMgr As SketchManager
 Dim reportPath As String
 Dim gProbeLog As String
 Dim gDimToggle As Boolean
+Dim gDimToggleSaved As Boolean
+Dim skName As String
+' A pre-call predicate must sit comfortably above solver noise to
+' discriminate a silent no-op; degenerate geometry (a zero-length line)
+' must be refused before it can fake a zero predicate.
+Const gDiscFloor As Double = 0.000001
+Const gDegenLen As Double = 0.000001
 
 Sub main()
     Dim template As String
-    Dim ok As Boolean
     Dim runFailed As Boolean
-    Dim closedOk As Boolean
-    Dim cleanupMode As String
+    Dim caseOk As Boolean
     Dim errNum As Long
     Dim errMsg As String
     On Error GoTo Fail
@@ -28,13 +44,18 @@ Sub main()
     StartReport
     WriteLine "{""type"":""header"",""macro"":""probe-relnames"",""bridge_version"":""0.1.0""}"
     Set swApp = Application.SldWorks
+    ' The input-dimension-value dialog blocks AddDimension2 (minimal.swb):
+    ' save the owner's value, disable, verify the disable; every exit
+    ' restores the SAVED value and verifies the restore - never force one.
+    gDimToggle = swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate)
+    gDimToggleSaved = True
+    swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, False
+    If swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate) Then Err.Raise vbObjectError + 528, "probe-relnames", "the input-dimension-value dialog could not be disabled"
     template = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
     If template = "" Then Err.Raise vbObjectError + 514, "probe-relnames", "no default part template"
     Set swDoc = swApp.NewDocument(template, 0, 0, 0)
     If swDoc Is Nothing Then Err.Raise vbObjectError + 515, "probe-relnames", "no document"
     Set swSketchMgr = swDoc.SketchManager
-    gDimToggle = swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate)
-    swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, False
     WriteLine "{""type"":""step"",""index"":-1,""command"":""document.new"",""status"":""created"",""message"":""fresh part from the default template""}"
     If Not OpenFirstPlane() Then
         WriteStep 0, "sketch.open", "failed", "the sketch could not be opened; probed: " & gProbeLog
@@ -42,75 +63,137 @@ Sub main()
         GoTo WrapUp
     End If
     WriteStep 0, "sketch.open", "created", gProbeLog
-    WriteLine TryLevelDim("sgVERTICAL2D")
-    WriteLine TryLevel("sgVERTICAL2D", True)
-    WriteLine TryLevel("sgHORIZONTAL2D", False)
-    WriteLine TryEqual("sgSAMELENGTH")
-    WriteLine TryParallel("sgPARALLEL")
-    WriteLine TryPerp("sgPERPENDICULAR")
-    WriteLine TryTangent("sgTANGENT")
-    WriteLine TryCoincident("sgCOINCIDENT")
-    WriteLine TryCoincident("sgMERGEPOINTS")
-WrapUp:
-    swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle
-    cleanupMode = CloseMode()
-    If cleanupMode = "close" Then
-        CloseOwnedDoc closedOk
-        If closedOk And Not runFailed Then
-            WriteLine "{""type"":""summary"",""status"":""ok""}"
-        Else
-            If Not closedOk Then WriteStep 5, "close", "failed", "the owned document could not be confirmed closed"
-            WriteLine "{""type"":""summary"",""status"":""failed""}"
-        End If
-    ElseIf cleanupMode = "keep" Then
-        WriteStep 5, "owned-document", "kept-open", OwnedDocTitle()
-        If runFailed Then
-            WriteLine "{""type"":""summary"",""status"":""failed""}"
-        Else
-            WriteLine "{""type"":""summary"",""status"":""ok""}"
-        End If
-    Else
-        WriteStep 5, "close-mode", "failed", "the cleanup mode could not be established"
-        WriteLine "{""type"":""summary"",""status"":""failed""}"
+    skName = swSketchMgr.ActiveSketch.Name
+    WriteLine TryLevelDim(1, "sgVERTICAL2D", caseOk)
+    If Not caseOk Then
+        runFailed = True
+        GoTo WrapUp
     End If
+    WriteLine TryLevel(2, "sgVERTICAL2D", True, caseOk)
+    If Not caseOk Then
+        runFailed = True
+        GoTo WrapUp
+    End If
+    WriteLine TryLevel(3, "sgHORIZONTAL2D", False, caseOk)
+    If Not caseOk Then
+        runFailed = True
+        GoTo WrapUp
+    End If
+    WriteLine TryPoints(4, "sgHORIZONTALPOINTS2D", False, caseOk)
+    If Not caseOk Then
+        runFailed = True
+        GoTo WrapUp
+    End If
+    WriteLine TryPoints(5, "sgVERTPOINTS2D", True, caseOk)
+    If Not caseOk Then
+        runFailed = True
+        GoTo WrapUp
+    End If
+    WriteLine TryEqual(6, "sgSAMELENGTH", caseOk)
+    If Not caseOk Then
+        runFailed = True
+        GoTo WrapUp
+    End If
+    WriteLine TryParallel(7, "sgPARALLEL", caseOk)
+    If Not caseOk Then
+        runFailed = True
+        GoTo WrapUp
+    End If
+    WriteLine TryPerp(8, "sgPERPENDICULAR", caseOk)
+    If Not caseOk Then
+        runFailed = True
+        GoTo WrapUp
+    End If
+    WriteLine TryTangent(9, "sgTANGENT", caseOk)
+    If Not caseOk Then
+        runFailed = True
+        GoTo WrapUp
+    End If
+    WriteLine TryCoincident(10, "sgCOINCIDENT", caseOk)
+    If Not caseOk Then
+        runFailed = True
+        GoTo WrapUp
+    End If
+    WriteLine TryCoincident(11, "sgMERGEPOINTS", caseOk)
+    If Not caseOk Then
+        runFailed = True
+        GoTo WrapUp
+    End If
+WrapUp:
+    FinishRun runFailed
     Exit Sub
 Fail:
     errNum = Err.Number
     errMsg = Err.Description
     On Error Resume Next
-    swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle
+    runFailed = True
     WriteLine "{""type"":""step"",""index"":-1,""command"":""probe"",""status"":""failed"",""message"":""" & JsonStr("err " & Trim(Str(errNum)) & ": " & errMsg) & """}"
-    cleanupMode = CloseMode()
-    If cleanupMode = "close" Then CloseOwnedDoc closedOk
-    WriteLine "{""type"":""summary"",""status"":""failed""}"
+    FinishRun runFailed
 End Sub
 
-' One diagonal line, one constraint name: the predicate is the endpoint
-' delta on the levelled axis (s for vertical, t for horizontal).
-Function TryLevel(ByVal cname As String, ByVal isVertical As Boolean) As String
-    Static seq As Long
+' The checkpoint's failing interplay: a diagonal line WITH a driving
+' length dimension, then the level constraint (sgVERTICAL2D). If the
+' dimension blocks the solve, the delta stays nonzero here too. The
+' pre-call baseline is measured AFTER the dimension exists (a dimension
+' can already move geometry). Geometry: line (0.01,0.02)-(0.04,0.05),
+' dimension at (0.025,0.035); pre-call level-delta -0.03.
+Function TryLevelDim(ByVal idx As Long, ByVal cname As String, ByRef caseOk As Boolean) As String
     Dim ln As Object
+    Dim dd As SldWorks.DisplayDimension
     Dim v As Variant
     Dim v2 As Variant
     Dim detail As String
     Dim n As Long
     Dim d As String
+    Dim pre As Double
     Dim delta As Double
+    Dim seg As Double
+    Dim solved As Boolean
+    Dim reason As String
     On Error Resume Next
+    caseOk = False
     Err.Clear
-    seq = seq + 1
-    Set ln = swSketchMgr.CreateLine(0.01 + 0.05 * seq, 0.02, 0#, 0.04 + 0.05 * seq, 0.05, 0#)
+    Set ln = swSketchMgr.CreateLine(0.01, 0.02, 0#, 0.04, 0.05, 0#)
     If ln Is Nothing Then
-        TryLevel = LineFor(cname, -1, "no line", "")
+        TryLevelDim = StepFor(idx, "probe." & cname, "failed", "line geometry is missing (create err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
         Exit Function
     End If
-    swDoc.ClearSelection2 True
+    If Not SelectOne(ln, reason) Then
+        TryLevelDim = StepFor(idx, "probe." & cname, "failed", "line select failed: " & reason & "; the case cannot produce evidence")
+        Exit Function
+    End If
     Err.Clear
-    ln.Select False
-    n = Err.Number
-    d = Err.Description
-    If n <> 0 Then
-        TryLevel = LineFor(cname, n, "select: " & d, "")
+    Set dd = swDoc.AddDimension2(0.025, 0.035, 0#)
+    If dd Is Nothing Then
+        TryLevelDim = StepFor(idx, "probe." & cname, "failed", "dimension geometry is missing (err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
+        Exit Function
+    End If
+    If Not SelectOne(ln, reason) Then
+        TryLevelDim = StepFor(idx, "probe." & cname, "failed", "line re-select failed: " & reason & "; the case cannot produce evidence")
+        Exit Function
+    End If
+    If Not LineEnds(ln, v, v2, reason) Then
+        TryLevelDim = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    Err.Clear
+    seg = SegLen(v, v2)
+    If Err.Number <> 0 Then
+        TryLevelDim = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be computed: length err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If seg < gDegenLen Then
+        TryLevelDim = StepFor(idx, "probe." & cname, "failed", "degenerate line geometry (length " & Trim(Str(seg)) & "); the case is refused")
+        Exit Function
+    End If
+    Err.Clear
+    pre = v(0) - v2(0)
+    If Err.Number <> 0 Then
+        TryLevelDim = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be computed: err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If Abs(pre) < gDiscFloor Then
+        TryLevelDim = StepFor(idx, "probe." & cname, "failed", "pre-call baseline " & Trim(Str(pre)) & " is not discriminating; the case is refused")
         Exit Function
     End If
     Err.Clear
@@ -118,235 +201,212 @@ Function TryLevel(ByVal cname As String, ByVal isVertical As Boolean) As String
     n = Err.Number
     d = Err.Description
     swDoc.ClearSelection2 True
-    swDoc.EditRebuild3
-    v = ln.GetStartPoint
-    v2 = ln.GetEndPoint
+    solved = SolveSketch(reason)
+    If Not solved Then
+        TryLevelDim = StepFor(idx, "probe." & cname, "failed", "solve/re-entry failed: " & reason)
+        Exit Function
+    End If
+    If Not LineEnds(ln, v, v2, reason) Then
+        TryLevelDim = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    Err.Clear
+    seg = SegLen(v, v2)
+    If Err.Number <> 0 Then
+        TryLevelDim = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be computed: length err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If seg < gDegenLen Then
+        TryLevelDim = StepFor(idx, "probe." & cname, "failed", "post-solve geometry is degenerate (length " & Trim(Str(seg)) & "); the predicate could not be measured")
+        Exit Function
+    End If
+    Err.Clear
+    delta = v(0) - v2(0)
+    If Err.Number <> 0 Then
+        TryLevelDim = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be computed: err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    detail = "dim+level-delta=" & Trim(Str(delta)) & " pre-call=" & Trim(Str(pre)) & " err=" & Trim(Str(n)) & " " & d
+    TryLevelDim = LineFor(cname, n, d, detail)
+    caseOk = True
+End Function
+
+' One diagonal line, one constraint name: the predicate is the endpoint
+' delta on the levelled axis (s for vertical, t for horizontal; the seat
+' frame alignment is proven by the v3 sgVERTICAL2D pin, which measured
+' model-space deltas). Unique geometry per call (Static seq): seq=1 line
+' (0.06,0.02)-(0.09,0.05), seq=2 line (0.11,0.02)-(0.14,0.05); pre-call
+' level-delta -0.03 on the levelled axis in both calls.
+Function TryLevel(ByVal idx As Long, ByVal cname As String, ByVal isVertical As Boolean, ByRef caseOk As Boolean) As String
+    Static seq As Long
+    Dim ln As Object
+    Dim v As Variant
+    Dim v2 As Variant
+    Dim detail As String
+    Dim n As Long
+    Dim d As String
+    Dim pre As Double
+    Dim delta As Double
+    Dim seg As Double
+    Dim solved As Boolean
+    Dim reason As String
+    On Error Resume Next
+    caseOk = False
+    seq = seq + 1
+    Err.Clear
+    Set ln = swSketchMgr.CreateLine(0.01 + 0.05 * seq, 0.02, 0#, 0.04 + 0.05 * seq, 0.05, 0#)
+    If ln Is Nothing Then
+        TryLevel = StepFor(idx, "probe." & cname, "failed", "line geometry is missing (create err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
+        Exit Function
+    End If
+    If Not SelectOne(ln, reason) Then
+        TryLevel = StepFor(idx, "probe." & cname, "failed", "line select failed: " & reason & "; the case cannot produce evidence")
+        Exit Function
+    End If
+    If Not LineEnds(ln, v, v2, reason) Then
+        TryLevel = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    Err.Clear
+    seg = SegLen(v, v2)
+    If Err.Number <> 0 Then
+        TryLevel = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be computed: length err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If seg < gDegenLen Then
+        TryLevel = StepFor(idx, "probe." & cname, "failed", "degenerate line geometry (length " & Trim(Str(seg)) & "); the case is refused")
+        Exit Function
+    End If
+    Err.Clear
+    If isVertical Then
+        pre = v(0) - v2(0)
+    Else
+        pre = v(1) - v2(1)
+    End If
+    If Err.Number <> 0 Then
+        TryLevel = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be computed: err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If Abs(pre) < gDiscFloor Then
+        TryLevel = StepFor(idx, "probe." & cname, "failed", "pre-call baseline " & Trim(Str(pre)) & " is not discriminating; the case is refused")
+        Exit Function
+    End If
+    Err.Clear
+    swDoc.SketchAddConstraints cname
+    n = Err.Number
+    d = Err.Description
+    swDoc.ClearSelection2 True
+    solved = SolveSketch(reason)
+    If Not solved Then
+        TryLevel = StepFor(idx, "probe." & cname, "failed", "solve/re-entry failed: " & reason)
+        Exit Function
+    End If
+    If Not LineEnds(ln, v, v2, reason) Then
+        TryLevel = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    Err.Clear
+    seg = SegLen(v, v2)
+    If Err.Number <> 0 Then
+        TryLevel = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be computed: length err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If seg < gDegenLen Then
+        TryLevel = StepFor(idx, "probe." & cname, "failed", "post-solve geometry is degenerate (length " & Trim(Str(seg)) & "); the predicate could not be measured")
+        Exit Function
+    End If
+    Err.Clear
     If isVertical Then
         delta = v(0) - v2(0)
     Else
         delta = v(1) - v2(1)
     End If
-    detail = "level-delta=" & Trim(Str(delta)) & " err=" & Trim(Str(n)) & " " & d
+    If Err.Number <> 0 Then
+        TryLevel = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be computed: err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    detail = "level-delta=" & Trim(Str(delta)) & " pre-call=" & Trim(Str(pre)) & " err=" & Trim(Str(n)) & " " & d
     TryLevel = LineFor(cname, n, d, detail)
+    caseOk = True
 End Function
 
-' Two lines of different lengths: the predicate is the length difference.
-' The checkpoint's failing interplay: a diagonal line WITH a driving
-' length dimension, then the level constraint. If the dimension blocks the
-' solve, the delta stays nonzero here too.
-Function TryLevelDim(ByVal cname As String) As String
-    Dim ln As Object
-    Dim dd As SldWorks.DisplayDimension
-    Dim dp As SldWorks.Dimension
-    Dim v As Variant
-    Dim v2 As Variant
-    Dim detail As String
-    Dim n As Long
-    Dim d As String
-    Dim delta As Double
-    On Error Resume Next
-    Err.Clear
-    Set ln = swSketchMgr.CreateLine(0.01, 0.02, 0#, 0.04, 0.05, 0#)
-    If ln Is Nothing Then
-        TryLevelDim = LineFor(cname, -1, "no line", "")
-        Exit Function
-    End If
-    swDoc.ClearSelection2 True
-    ln.Select False
-    Err.Clear
-    Set dd = swDoc.AddDimension2(0.025, 0.035, 0#)
-    If dd Is Nothing Then
-        TryLevelDim = LineFor(cname, -1, "no dimension", "")
-        Exit Function
-    End If
-    Set dp = dd.GetDimension2(0)
-    swDoc.ClearSelection2 True
-    ln.Select False
-    Err.Clear
-    swDoc.SketchAddConstraints cname
-    n = Err.Number
-    d = Err.Description
-    swDoc.ClearSelection2 True
-    swDoc.EditRebuild3
-    v = ln.GetStartPoint
-    v2 = ln.GetEndPoint
-    delta = v(0) - v2(0)
-    detail = "dim+level-delta=" & Trim(Str(delta)) & " err=" & Trim(Str(n)) & " " & d
-    TryLevelDim = LineFor(cname, n, d, detail)
-End Function
-
-Function TryEqual(ByVal cname As String) As String
-    Dim la As Object
-    Dim lb As Object
-    Dim va As Variant
-    Dim vb1 As Variant
-    Dim detail As String
-    Dim n As Long
-    Dim d As String
-    Dim diff As Double
-    On Error Resume Next
-    Set la = swSketchMgr.CreateLine(0.1, 0#, 0#, 0.14, 0#, 0#)
-    Set lb = swSketchMgr.CreateLine(0.1, 0.02, 0#, 0.125, 0.02, 0#)
-    swDoc.ClearSelection2 True
-    Err.Clear
-    la.Select False
-    lb.Select True
-    n = Err.Number
-    d = Err.Description
-    If n <> 0 Then
-        TryEqual = LineFor(cname, n, "select: " & d, "")
-        Exit Function
-    End If
-    Err.Clear
-    swDoc.SketchAddConstraints cname
-    n = Err.Number
-    d = Err.Description
-    swDoc.ClearSelection2 True
-    swDoc.EditRebuild3
-    va = la.GetStartPoint
-    vb1 = la.GetEndPoint
-    diff = Sqr((vb1(0) - va(0)) * (vb1(0) - va(0)) + (vb1(1) - va(1)) * (vb1(1) - va(1)))
-    va = lb.GetStartPoint
-    vb1 = lb.GetEndPoint
-    diff = diff - Sqr((vb1(0) - va(0)) * (vb1(0) - va(0)) + (vb1(1) - va(1)) * (vb1(1) - va(1)))
-    detail = "len-diff=" & Trim(Str(diff)) & " err=" & Trim(Str(n)) & " " & d
-    TryEqual = LineFor(cname, n, d, detail)
-End Function
-
-' Two parallel-diagonal lines: the predicate is the cross product.
-Function TryParallel(ByVal cname As String) As String
-    Dim la As Object
-    Dim lb As Object
-    Dim a1 As Variant
-    Dim a2 As Variant
-    Dim b1 As Variant
-    Dim b2 As Variant
-    Dim detail As String
-    Dim n As Long
-    Dim d As String
-    Dim cross As Double
-    On Error Resume Next
-    Set la = swSketchMgr.CreateLine(0.2, 0#, 0#, 0.23, 0.04, 0#)
-    Set lb = swSketchMgr.CreateLine(0.2, 0.06, 0#, 0.245, 0.12, 0#)
-    swDoc.ClearSelection2 True
-    Err.Clear
-    la.Select False
-    lb.Select True
-    n = Err.Number
-    d = Err.Description
-    If n <> 0 Then
-        TryParallel = LineFor(cname, n, "select: " & d, "")
-        Exit Function
-    End If
-    Err.Clear
-    swDoc.SketchAddConstraints cname
-    n = Err.Number
-    d = Err.Description
-    swDoc.ClearSelection2 True
-    swDoc.EditRebuild3
-    a1 = la.GetStartPoint
-    a2 = la.GetEndPoint
-    b1 = lb.GetStartPoint
-    b2 = lb.GetEndPoint
-    cross = (a2(0) - a1(0)) * (b2(1) - b1(1)) - (a2(1) - a1(1)) * (b2(0) - b1(0))
-    detail = "cross=" & Trim(Str(cross)) & " err=" & Trim(Str(n)) & " " & d
-    TryParallel = LineFor(cname, n, d, detail)
-End Function
-
-' Two perpendicular-by-construction lines: the predicate is the dot product.
-Function TryPerp(ByVal cname As String) As String
-    Dim la As Object
-    Dim lb As Object
-    Dim a1 As Variant
-    Dim a2 As Variant
-    Dim b1 As Variant
-    Dim b2 As Variant
-    Dim detail As String
-    Dim n As Long
-    Dim d As String
-    Dim dotp As Double
-    On Error Resume Next
-    Set la = swSketchMgr.CreateLine(0.3, 0#, 0#, 0.33, 0.04, 0#)
-    Set lb = swSketchMgr.CreateLine(0.36, 0#, 0#, 0.32, 0.03, 0#)
-    swDoc.ClearSelection2 True
-    Err.Clear
-    la.Select False
-    lb.Select True
-    n = Err.Number
-    d = Err.Description
-    If n <> 0 Then
-        TryPerp = LineFor(cname, n, "select: " & d, "")
-        Exit Function
-    End If
-    Err.Clear
-    swDoc.SketchAddConstraints cname
-    n = Err.Number
-    d = Err.Description
-    swDoc.ClearSelection2 True
-    swDoc.EditRebuild3
-    a1 = la.GetStartPoint
-    a2 = la.GetEndPoint
-    b1 = lb.GetStartPoint
-    b2 = lb.GetEndPoint
-    dotp = (a2(0) - a1(0)) * (b2(0) - b1(0)) + (a2(1) - a1(1)) * (b2(1) - b1(1))
-    detail = "dot=" & Trim(Str(dotp)) & " err=" & Trim(Str(n)) & " " & d
-    TryPerp = LineFor(cname, n, d, detail)
-End Function
-
-' A line and a circle near it: tangency has no cheap scalar here, so the
-' record is the captured call result only.
-Function TryTangent(ByVal cname As String) As String
-    Dim la As Object
-    Dim ci As Object
-    Dim n As Long
-    Dim d As String
-    On Error Resume Next
-    Set la = swSketchMgr.CreateLine(0.4, 0#, 0#, 0.46, 0#, 0#)
-    Set ci = swSketchMgr.CreateCircleByRadius(0.43, 0.01, 0#, 0.01)
-    swDoc.ClearSelection2 True
-    Err.Clear
-    la.Select False
-    ci.Select True
-    n = Err.Number
-    d = Err.Description
-    If n <> 0 Then
-        TryTangent = LineFor(cname, n, "select: " & d, "")
-        Exit Function
-    End If
-    Err.Clear
-    swDoc.SketchAddConstraints cname
-    n = Err.Number
-    d = Err.Description
-    swDoc.ClearSelection2 True
-    swDoc.EditRebuild3
-    TryTangent = LineFor(cname, n, d, "call-result only; err=" & Trim(Str(n)) & " " & d)
-End Function
-
-' Two line endpoints: coincidence is the endpoint distance.
-Function TryCoincident(ByVal cname As String) As String
+' Two point handles (GetStartPoint2 of two lines): the predicate is the
+' shared coordinate's delta (t for horizontal points, s for vertical).
+' Unique geometry per call (Static seq): seq=1 lines
+' (0.16,0.018)-(0.185,0.038) and (0.205,0.062)-(0.23,0.022) with pre-call
+' shared deltas -0.045 (x) and -0.044 (y); seq=2 lines
+' (0.255,0.026)-(0.28,0.048) and (0.3,0.072)-(0.325,0.026) with pre-call
+' shared deltas -0.045 (x) and -0.046 (y).
+Function TryPoints(ByVal idx As Long, ByVal cname As String, ByVal isVertical As Boolean, ByRef caseOk As Boolean) As String
     Static seq As Long
     Dim la As Object
     Dim lb As Object
     Dim sa As Object
     Dim sb As Object
+    Dim ax As Double
+    Dim px1 As Double
+    Dim py1 As Double
+    Dim px2 As Double
+    Dim py2 As Double
     Dim detail As String
     Dim n As Long
     Dim d As String
-    Dim dist As Double
+    Dim pre As Double
+    Dim delta As Double
+    Dim solved As Boolean
+    Dim reason As String
     On Error Resume Next
+    caseOk = False
     seq = seq + 1
-    Set la = swSketchMgr.CreateLine(0.5 + 0.1 * seq, 0#, 0#, 0.53 + 0.1 * seq, 0.04, 0#)
-    Set lb = swSketchMgr.CreateLine(0.535 + 0.1 * seq, 0.045, 0#, 0.57 + 0.1 * seq, 0#, 0#)
-    swDoc.ClearSelection2 True
+    ax = 0.065 + 0.095 * seq
     Err.Clear
-    Set sa = la.GetEndPoint2
+    Set la = swSketchMgr.CreateLine(ax, 0.01 + 0.008 * seq, 0#, ax + 0.025, 0.028 + 0.01 * seq, 0#)
+    If la Is Nothing Then
+        TryPoints = StepFor(idx, "probe." & cname, "failed", "first line geometry is missing (create err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
+        Exit Function
+    End If
+    Err.Clear
+    Set lb = swSketchMgr.CreateLine(ax + 0.045, 0.052 + 0.01 * seq, 0#, ax + 0.07, 0.018 + 0.004 * seq, 0#)
+    If lb Is Nothing Then
+        TryPoints = StepFor(idx, "probe." & cname, "failed", "second line geometry is missing (create err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
+        Exit Function
+    End If
+    Err.Clear
+    Set sa = la.GetStartPoint2
+    If sa Is Nothing Then
+        TryPoints = StepFor(idx, "probe." & cname, "failed", "first point handle is missing (err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
+        Exit Function
+    End If
+    Err.Clear
     Set sb = lb.GetStartPoint2
-    sa.Select False
-    sb.Select True
-    n = Err.Number
-    d = Err.Description
-    If n <> 0 Then
-        TryCoincident = LineFor(cname, n, "select: " & d, "")
+    If sb Is Nothing Then
+        TryPoints = StepFor(idx, "probe." & cname, "failed", "second point handle is missing (err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
+        Exit Function
+    End If
+    If Not SelectTwo(sa, sb, reason) Then
+        TryPoints = StepFor(idx, "probe." & cname, "failed", "point pair select failed: " & reason & "; the case cannot produce evidence")
+        Exit Function
+    End If
+    If Not PointXY(sa, px1, py1, reason) Then
+        TryPoints = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    If Not PointXY(sb, px2, py2, reason) Then
+        TryPoints = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    Err.Clear
+    If isVertical Then
+        pre = px1 - px2
+    Else
+        pre = py1 - py2
+    End If
+    If Err.Number <> 0 Then
+        TryPoints = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be computed: err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If Abs(pre) < gDiscFloor Then
+        TryPoints = StepFor(idx, "probe." & cname, "failed", "pre-call baseline " & Trim(Str(pre)) & " is not discriminating; the case is refused")
         Exit Function
     End If
     Err.Clear
@@ -354,14 +414,819 @@ Function TryCoincident(ByVal cname As String) As String
     n = Err.Number
     d = Err.Description
     swDoc.ClearSelection2 True
-    swDoc.EditRebuild3
-    dist = Sqr((sa.X - sb.X) * (sa.X - sb.X) + (sa.Y - sb.Y) * (sa.Y - sb.Y))
-    detail = "point-dist=" & Trim(Str(dist)) & " err=" & Trim(Str(n)) & " " & d
+    solved = SolveSketch(reason)
+    If Not solved Then
+        TryPoints = StepFor(idx, "probe." & cname, "failed", "solve/re-entry failed: " & reason)
+        Exit Function
+    End If
+    If Not PointXY(sa, px1, py1, reason) Then
+        TryPoints = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    If Not PointXY(sb, px2, py2, reason) Then
+        TryPoints = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    Err.Clear
+    If isVertical Then
+        delta = px1 - px2
+    Else
+        delta = py1 - py2
+    End If
+    If Err.Number <> 0 Then
+        TryPoints = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be computed: err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    detail = "shared-delta=" & Trim(Str(delta)) & " pre-call=" & Trim(Str(pre)) & " err=" & Trim(Str(n)) & " " & d
+    TryPoints = LineFor(cname, n, d, detail)
+    caseOk = True
+End Function
+
+' Two lines of different lengths (0.04 and 0.025): the predicate is the
+' length difference. A zero-length line is refused as degenerate at BOTH
+' stages - it can fake a zero difference. Geometry:
+' (0.345,0.01)-(0.385,0.01) and (0.345,0.032)-(0.37,0.032); pre-call
+' len-diff 0.015.
+Function TryEqual(ByVal idx As Long, ByVal cname As String, ByRef caseOk As Boolean) As String
+    Dim la As Object
+    Dim lb As Object
+    Dim a1 As Variant
+    Dim a2 As Variant
+    Dim b1 As Variant
+    Dim b2 As Variant
+    Dim segA As Double
+    Dim segB As Double
+    Dim detail As String
+    Dim n As Long
+    Dim d As String
+    Dim pre As Double
+    Dim diff As Double
+    Dim solved As Boolean
+    Dim reason As String
+    On Error Resume Next
+    caseOk = False
+    Err.Clear
+    Set la = swSketchMgr.CreateLine(0.345, 0.01, 0#, 0.385, 0.01, 0#)
+    If la Is Nothing Then
+        TryEqual = StepFor(idx, "probe." & cname, "failed", "first line geometry is missing (create err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
+        Exit Function
+    End If
+    Err.Clear
+    Set lb = swSketchMgr.CreateLine(0.345, 0.032, 0#, 0.37, 0.032, 0#)
+    If lb Is Nothing Then
+        TryEqual = StepFor(idx, "probe." & cname, "failed", "second line geometry is missing (create err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
+        Exit Function
+    End If
+    If Not SelectTwo(la, lb, reason) Then
+        TryEqual = StepFor(idx, "probe." & cname, "failed", "line pair select failed: " & reason & "; the case cannot produce evidence")
+        Exit Function
+    End If
+    If Not LineEnds(la, a1, a2, reason) Then
+        TryEqual = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    If Not LineEnds(lb, b1, b2, reason) Then
+        TryEqual = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    Err.Clear
+    segA = SegLen(a1, a2)
+    segB = SegLen(b1, b2)
+    If Err.Number <> 0 Then
+        TryEqual = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be computed: length err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If segA < gDegenLen Or segB < gDegenLen Then
+        TryEqual = StepFor(idx, "probe." & cname, "failed", "degenerate line geometry (lengths " & Trim(Str(segA)) & " and " & Trim(Str(segB)) & "); the case is refused")
+        Exit Function
+    End If
+    Err.Clear
+    pre = segA - segB
+    If Err.Number <> 0 Then
+        TryEqual = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be computed: err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If Abs(pre) < gDiscFloor Then
+        TryEqual = StepFor(idx, "probe." & cname, "failed", "pre-call baseline " & Trim(Str(pre)) & " is not discriminating; the case is refused")
+        Exit Function
+    End If
+    Err.Clear
+    swDoc.SketchAddConstraints cname
+    n = Err.Number
+    d = Err.Description
+    swDoc.ClearSelection2 True
+    solved = SolveSketch(reason)
+    If Not solved Then
+        TryEqual = StepFor(idx, "probe." & cname, "failed", "solve/re-entry failed: " & reason)
+        Exit Function
+    End If
+    If Not LineEnds(la, a1, a2, reason) Then
+        TryEqual = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    If Not LineEnds(lb, b1, b2, reason) Then
+        TryEqual = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    Err.Clear
+    segA = SegLen(a1, a2)
+    segB = SegLen(b1, b2)
+    If Err.Number <> 0 Then
+        TryEqual = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be computed: length err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If segA < gDegenLen Or segB < gDegenLen Then
+        TryEqual = StepFor(idx, "probe." & cname, "failed", "post-solve geometry is degenerate (lengths " & Trim(Str(segA)) & " and " & Trim(Str(segB)) & "); the predicate could not be measured")
+        Exit Function
+    End If
+    Err.Clear
+    diff = segA - segB
+    If Err.Number <> 0 Then
+        TryEqual = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be computed: err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    detail = "len-diff=" & Trim(Str(diff)) & " pre-call=" & Trim(Str(pre)) & " err=" & Trim(Str(n)) & " " & d
+    TryEqual = LineFor(cname, n, d, detail)
+    caseOk = True
+End Function
+
+' Two NON-parallel diagonal lines (v3's were parallel by construction:
+' cross was already 0 before the call, a fake-success baseline). The
+' predicate is the cross product; zero-length lines are refused as
+' degenerate at BOTH stages. Geometry: (0.41,0.01)-(0.45,0.06) and
+' (0.41,0.085)-(0.47,0.115); pre-call cross -0.0018.
+Function TryParallel(ByVal idx As Long, ByVal cname As String, ByRef caseOk As Boolean) As String
+    Dim la As Object
+    Dim lb As Object
+    Dim a1 As Variant
+    Dim a2 As Variant
+    Dim b1 As Variant
+    Dim b2 As Variant
+    Dim segA As Double
+    Dim segB As Double
+    Dim detail As String
+    Dim n As Long
+    Dim d As String
+    Dim pre As Double
+    Dim cross As Double
+    Dim solved As Boolean
+    Dim reason As String
+    On Error Resume Next
+    caseOk = False
+    Err.Clear
+    Set la = swSketchMgr.CreateLine(0.41, 0.01, 0#, 0.45, 0.06, 0#)
+    If la Is Nothing Then
+        TryParallel = StepFor(idx, "probe." & cname, "failed", "first line geometry is missing (create err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
+        Exit Function
+    End If
+    Err.Clear
+    Set lb = swSketchMgr.CreateLine(0.41, 0.085, 0#, 0.47, 0.115, 0#)
+    If lb Is Nothing Then
+        TryParallel = StepFor(idx, "probe." & cname, "failed", "second line geometry is missing (create err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
+        Exit Function
+    End If
+    If Not SelectTwo(la, lb, reason) Then
+        TryParallel = StepFor(idx, "probe." & cname, "failed", "line pair select failed: " & reason & "; the case cannot produce evidence")
+        Exit Function
+    End If
+    If Not LineEnds(la, a1, a2, reason) Then
+        TryParallel = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    If Not LineEnds(lb, b1, b2, reason) Then
+        TryParallel = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    Err.Clear
+    segA = SegLen(a1, a2)
+    segB = SegLen(b1, b2)
+    If Err.Number <> 0 Then
+        TryParallel = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be computed: length err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If segA < gDegenLen Or segB < gDegenLen Then
+        TryParallel = StepFor(idx, "probe." & cname, "failed", "degenerate line geometry (lengths " & Trim(Str(segA)) & " and " & Trim(Str(segB)) & "); the case is refused")
+        Exit Function
+    End If
+    Err.Clear
+    pre = (a2(0) - a1(0)) * (b2(1) - b1(1)) - (a2(1) - a1(1)) * (b2(0) - b1(0))
+    If Err.Number <> 0 Then
+        TryParallel = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be computed: err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If Abs(pre) < gDiscFloor Then
+        TryParallel = StepFor(idx, "probe." & cname, "failed", "pre-call baseline " & Trim(Str(pre)) & " is not discriminating; the case is refused")
+        Exit Function
+    End If
+    Err.Clear
+    swDoc.SketchAddConstraints cname
+    n = Err.Number
+    d = Err.Description
+    swDoc.ClearSelection2 True
+    solved = SolveSketch(reason)
+    If Not solved Then
+        TryParallel = StepFor(idx, "probe." & cname, "failed", "solve/re-entry failed: " & reason)
+        Exit Function
+    End If
+    If Not LineEnds(la, a1, a2, reason) Then
+        TryParallel = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    If Not LineEnds(lb, b1, b2, reason) Then
+        TryParallel = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    Err.Clear
+    segA = SegLen(a1, a2)
+    segB = SegLen(b1, b2)
+    If Err.Number <> 0 Then
+        TryParallel = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be computed: length err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If segA < gDegenLen Or segB < gDegenLen Then
+        TryParallel = StepFor(idx, "probe." & cname, "failed", "post-solve geometry is degenerate (lengths " & Trim(Str(segA)) & " and " & Trim(Str(segB)) & "); the predicate could not be measured")
+        Exit Function
+    End If
+    Err.Clear
+    cross = (a2(0) - a1(0)) * (b2(1) - b1(1)) - (a2(1) - a1(1)) * (b2(0) - b1(0))
+    If Err.Number <> 0 Then
+        TryParallel = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be computed: err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    detail = "cross=" & Trim(Str(cross)) & " pre-call=" & Trim(Str(pre)) & " err=" & Trim(Str(n)) & " " & d
+    TryParallel = LineFor(cname, n, d, detail)
+    caseOk = True
+End Function
+
+' Two NON-perpendicular lines (v3's were perpendicular by construction:
+' dot was already 0 before the call, a fake-success baseline). The
+' predicate is the dot product; zero-length lines are refused as
+' degenerate at BOTH stages. Geometry: (0.5,0.01)-(0.54,0.07) and
+' (0.575,0.02)-(0.62,0.055); pre-call dot 0.0039.
+Function TryPerp(ByVal idx As Long, ByVal cname As String, ByRef caseOk As Boolean) As String
+    Dim la As Object
+    Dim lb As Object
+    Dim a1 As Variant
+    Dim a2 As Variant
+    Dim b1 As Variant
+    Dim b2 As Variant
+    Dim segA As Double
+    Dim segB As Double
+    Dim detail As String
+    Dim n As Long
+    Dim d As String
+    Dim pre As Double
+    Dim dotp As Double
+    Dim solved As Boolean
+    Dim reason As String
+    On Error Resume Next
+    caseOk = False
+    Err.Clear
+    Set la = swSketchMgr.CreateLine(0.5, 0.01, 0#, 0.54, 0.07, 0#)
+    If la Is Nothing Then
+        TryPerp = StepFor(idx, "probe." & cname, "failed", "first line geometry is missing (create err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
+        Exit Function
+    End If
+    Err.Clear
+    Set lb = swSketchMgr.CreateLine(0.575, 0.02, 0#, 0.62, 0.055, 0#)
+    If lb Is Nothing Then
+        TryPerp = StepFor(idx, "probe." & cname, "failed", "second line geometry is missing (create err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
+        Exit Function
+    End If
+    If Not SelectTwo(la, lb, reason) Then
+        TryPerp = StepFor(idx, "probe." & cname, "failed", "line pair select failed: " & reason & "; the case cannot produce evidence")
+        Exit Function
+    End If
+    If Not LineEnds(la, a1, a2, reason) Then
+        TryPerp = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    If Not LineEnds(lb, b1, b2, reason) Then
+        TryPerp = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    Err.Clear
+    segA = SegLen(a1, a2)
+    segB = SegLen(b1, b2)
+    If Err.Number <> 0 Then
+        TryPerp = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be computed: length err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If segA < gDegenLen Or segB < gDegenLen Then
+        TryPerp = StepFor(idx, "probe." & cname, "failed", "degenerate line geometry (lengths " & Trim(Str(segA)) & " and " & Trim(Str(segB)) & "); the case is refused")
+        Exit Function
+    End If
+    Err.Clear
+    pre = (a2(0) - a1(0)) * (b2(0) - b1(0)) + (a2(1) - a1(1)) * (b2(1) - b1(1))
+    If Err.Number <> 0 Then
+        TryPerp = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be computed: err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If Abs(pre) < gDiscFloor Then
+        TryPerp = StepFor(idx, "probe." & cname, "failed", "pre-call baseline " & Trim(Str(pre)) & " is not discriminating; the case is refused")
+        Exit Function
+    End If
+    Err.Clear
+    swDoc.SketchAddConstraints cname
+    n = Err.Number
+    d = Err.Description
+    swDoc.ClearSelection2 True
+    solved = SolveSketch(reason)
+    If Not solved Then
+        TryPerp = StepFor(idx, "probe." & cname, "failed", "solve/re-entry failed: " & reason)
+        Exit Function
+    End If
+    If Not LineEnds(la, a1, a2, reason) Then
+        TryPerp = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    If Not LineEnds(lb, b1, b2, reason) Then
+        TryPerp = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    Err.Clear
+    segA = SegLen(a1, a2)
+    segB = SegLen(b1, b2)
+    If Err.Number <> 0 Then
+        TryPerp = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be computed: length err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If segA < gDegenLen Or segB < gDegenLen Then
+        TryPerp = StepFor(idx, "probe." & cname, "failed", "post-solve geometry is degenerate (lengths " & Trim(Str(segA)) & " and " & Trim(Str(segB)) & "); the predicate could not be measured")
+        Exit Function
+    End If
+    Err.Clear
+    dotp = (a2(0) - a1(0)) * (b2(0) - b1(0)) + (a2(1) - a1(1)) * (b2(1) - b1(1))
+    If Err.Number <> 0 Then
+        TryPerp = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be computed: err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    detail = "dot=" & Trim(Str(dotp)) & " pre-call=" & Trim(Str(pre)) & " err=" & Trim(Str(n)) & " " & d
+    TryPerp = LineFor(cname, n, d, detail)
+    caseOk = True
+End Function
+
+' A line and a circle near it (v3's were tangent by construction: the gap
+' was already 0 before the call). The record is the captured call result
+' plus the geometric predicate |distance(centre, line) - radius|: the
+' centre through the GetCenterPoint2 handle and the radius through
+' GetRadius (both seat-pinned). A zero-length line makes the distance
+' undefined and a nonpositive radius is degenerate - both refused at BOTH
+' stages. Geometry: line (0.655,0.015)-(0.735,0.015), circle centre
+' (0.695,0.045) radius 0.012; pre-call gap 0.018.
+Function TryTangent(ByVal idx As Long, ByVal cname As String, ByRef caseOk As Boolean) As String
+    Dim la As Object
+    Dim ci As Object
+    Dim cph As Object
+    Dim a1 As Variant
+    Dim a2 As Variant
+    Dim px As Double
+    Dim py As Double
+    Dim rad As Double
+    Dim seg As Double
+    Dim dist As Double
+    Dim gap As Double
+    Dim detail As String
+    Dim n As Long
+    Dim d As String
+    Dim pre As Double
+    Dim solved As Boolean
+    Dim reason As String
+    On Error Resume Next
+    caseOk = False
+    Err.Clear
+    Set la = swSketchMgr.CreateLine(0.655, 0.015, 0#, 0.735, 0.015, 0#)
+    If la Is Nothing Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "line geometry is missing (create err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
+        Exit Function
+    End If
+    Err.Clear
+    Set ci = swSketchMgr.CreateCircleByRadius(0.695, 0.045, 0#, 0.012)
+    If ci Is Nothing Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "circle geometry is missing (create err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
+        Exit Function
+    End If
+    If Not SelectTwo(la, ci, reason) Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "line+circle select failed: " & reason & "; the case cannot produce evidence")
+        Exit Function
+    End If
+    If Not LineEnds(la, a1, a2, reason) Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    Err.Clear
+    seg = SegLen(a1, a2)
+    If Err.Number <> 0 Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be computed: length err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If seg < gDegenLen Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "degenerate line geometry (length " & Trim(Str(seg)) & "); the distance to the line is undefined and the case is refused")
+        Exit Function
+    End If
+    Err.Clear
+    Set cph = ci.GetCenterPoint2
+    If cph Is Nothing Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "centre handle is missing (err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
+        Exit Function
+    End If
+    If Not PointXY(cph, px, py, reason) Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    Err.Clear
+    rad = ci.GetRadius
+    If Err.Number <> 0 Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be measured: radius err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If rad < gDegenLen Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "degenerate circle geometry (radius " & Trim(Str(rad)) & "); the case is refused")
+        Exit Function
+    End If
+    Err.Clear
+    dist = Abs((a2(0) - a1(0)) * (a1(1) - py) - (a1(0) - px) * (a2(1) - a1(1))) / seg
+    If Err.Number <> 0 Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be computed: err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    Err.Clear
+    gap = Abs(dist - rad)
+    If Err.Number <> 0 Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be computed: err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    pre = gap
+    If Abs(pre) < gDiscFloor Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "pre-call baseline " & Trim(Str(pre)) & " is not discriminating; the case is refused")
+        Exit Function
+    End If
+    Err.Clear
+    swDoc.SketchAddConstraints cname
+    n = Err.Number
+    d = Err.Description
+    swDoc.ClearSelection2 True
+    solved = SolveSketch(reason)
+    If Not solved Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "solve/re-entry failed: " & reason)
+        Exit Function
+    End If
+    If Not LineEnds(la, a1, a2, reason) Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    Err.Clear
+    seg = SegLen(a1, a2)
+    If Err.Number <> 0 Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be computed: length err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If seg < gDegenLen Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "post-solve geometry is degenerate (length " & Trim(Str(seg)) & "); the predicate could not be measured")
+        Exit Function
+    End If
+    If Not PointXY(cph, px, py, reason) Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    Err.Clear
+    rad = ci.GetRadius
+    If Err.Number <> 0 Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be measured: radius err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If rad < gDegenLen Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "post-solve circle is degenerate (radius " & Trim(Str(rad)) & "); the predicate could not be measured")
+        Exit Function
+    End If
+    Err.Clear
+    dist = Abs((a2(0) - a1(0)) * (a1(1) - py) - (a1(0) - px) * (a2(1) - a1(1))) / seg
+    If Err.Number <> 0 Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be computed: err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    Err.Clear
+    gap = Abs(dist - rad)
+    If Err.Number <> 0 Then
+        TryTangent = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be computed: err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    detail = "tangency-gap=" & Trim(Str(gap)) & " pre-call=" & Trim(Str(pre)) & " centre-dist=" & Trim(Str(dist)) & " radius=" & Trim(Str(rad)) & " err=" & Trim(Str(n)) & " " & d
+    TryTangent = LineFor(cname, n, d, detail)
+    caseOk = True
+End Function
+
+' Two line endpoints (la's end, lb's start): coincidence is the endpoint
+' distance. Unique geometry per call (Static seq): seq=1 lines
+' (0.85,0)-(0.88,0.04) and (0.885,0.045)-(0.92,0), seq=2 lines
+' (0.95,0)-(0.98,0.04) and (0.985,0.045)-(1.02,0); pre-call point-dist
+' 0.00707 in both calls.
+Function TryCoincident(ByVal idx As Long, ByVal cname As String, ByRef caseOk As Boolean) As String
+    Static seq As Long
+    Dim la As Object
+    Dim lb As Object
+    Dim sa As Object
+    Dim sb As Object
+    Dim px1 As Double
+    Dim py1 As Double
+    Dim px2 As Double
+    Dim py2 As Double
+    Dim detail As String
+    Dim n As Long
+    Dim d As String
+    Dim pre As Double
+    Dim dist As Double
+    Dim solved As Boolean
+    Dim reason As String
+    On Error Resume Next
+    caseOk = False
+    seq = seq + 1
+    Err.Clear
+    Set la = swSketchMgr.CreateLine(0.75 + 0.1 * seq, 0#, 0#, 0.78 + 0.1 * seq, 0.04, 0#)
+    If la Is Nothing Then
+        TryCoincident = StepFor(idx, "probe." & cname, "failed", "first line geometry is missing (create err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
+        Exit Function
+    End If
+    Err.Clear
+    Set lb = swSketchMgr.CreateLine(0.785 + 0.1 * seq, 0.045, 0#, 0.82 + 0.1 * seq, 0#, 0#)
+    If lb Is Nothing Then
+        TryCoincident = StepFor(idx, "probe." & cname, "failed", "second line geometry is missing (create err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
+        Exit Function
+    End If
+    Err.Clear
+    Set sa = la.GetEndPoint2
+    If sa Is Nothing Then
+        TryCoincident = StepFor(idx, "probe." & cname, "failed", "end point handle is missing (err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
+        Exit Function
+    End If
+    Err.Clear
+    Set sb = lb.GetStartPoint2
+    If sb Is Nothing Then
+        TryCoincident = StepFor(idx, "probe." & cname, "failed", "start point handle is missing (err " & Trim(Str(Err.Number)) & " " & Err.Description & "); the case cannot produce evidence")
+        Exit Function
+    End If
+    If Not SelectTwo(sa, sb, reason) Then
+        TryCoincident = StepFor(idx, "probe." & cname, "failed", "point pair select failed: " & reason & "; the case cannot produce evidence")
+        Exit Function
+    End If
+    If Not PointXY(sa, px1, py1, reason) Then
+        TryCoincident = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    If Not PointXY(sb, px2, py2, reason) Then
+        TryCoincident = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    Err.Clear
+    pre = Sqr((px1 - px2) * (px1 - px2) + (py1 - py2) * (py1 - py2))
+    If Err.Number <> 0 Then
+        TryCoincident = StepFor(idx, "probe." & cname, "failed", "pre-call predicate could not be computed: err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    If Abs(pre) < gDiscFloor Then
+        TryCoincident = StepFor(idx, "probe." & cname, "failed", "pre-call baseline " & Trim(Str(pre)) & " is not discriminating; the case is refused")
+        Exit Function
+    End If
+    Err.Clear
+    swDoc.SketchAddConstraints cname
+    n = Err.Number
+    d = Err.Description
+    swDoc.ClearSelection2 True
+    solved = SolveSketch(reason)
+    If Not solved Then
+        TryCoincident = StepFor(idx, "probe." & cname, "failed", "solve/re-entry failed: " & reason)
+        Exit Function
+    End If
+    If Not PointXY(sa, px1, py1, reason) Then
+        TryCoincident = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    If Not PointXY(sb, px2, py2, reason) Then
+        TryCoincident = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be measured: " & reason)
+        Exit Function
+    End If
+    Err.Clear
+    dist = Sqr((px1 - px2) * (px1 - px2) + (py1 - py2) * (py1 - py2))
+    If Err.Number <> 0 Then
+        TryCoincident = StepFor(idx, "probe." & cname, "failed", "post-solve predicate could not be computed: err " & Trim(Str(Err.Number)) & " " & Err.Description)
+        Exit Function
+    End If
+    detail = "point-dist=" & Trim(Str(dist)) & " pre-call=" & Trim(Str(pre)) & " err=" & Trim(Str(n)) & " " & d
     TryCoincident = LineFor(cname, n, d, detail)
+    caseOk = True
+End Function
+
+' Rebuild and stay in sketch edit (seat-proven 2026-11-16: EditRebuild3
+' EXITS sketch edit - sketch API calls then silently do nothing). The
+' rebuild is required before any behavioural readback of a constraint;
+' re-entry is required before any further sketch API call. Same call
+' sequence as minimal.swb's Sub SolveSketch, but every solve-stage outcome
+' is checked - the EditRebuild3 Boolean (documented Boolean return), the
+' SelectByID2 Boolean and error, the InsertSketch error (InsertSketch is a
+' Sub and has no Boolean) - and the final active sketch must BE our sketch
+' (Name identity), because minimal.swb's Err.Raise runs under its own
+' On Error Resume Next and silently falls through. Here any uncertainty
+' returns False with a reason and fails the run: never a fake success.
+Function SolveSketch(ByRef reason As String) As Boolean
+    Dim sk As Object
+    Dim nm As String
+    Dim rebuilt As Boolean
+    Dim selOk As Boolean
+    On Error Resume Next
+    SolveSketch = False
+    reason = ""
+    Err.Clear
+    rebuilt = swDoc.EditRebuild3
+    If Err.Number <> 0 Then
+        reason = "editrebuild3 err " & Trim(Str(Err.Number)) & " " & Err.Description
+        Exit Function
+    End If
+    If Not rebuilt Then
+        reason = "editrebuild3 returned false"
+        Exit Function
+    End If
+    Err.Clear
+    Set sk = swSketchMgr.ActiveSketch
+    If Err.Number <> 0 Then
+        reason = "activesketch err " & Trim(Str(Err.Number)) & " " & Err.Description
+        Exit Function
+    End If
+    If sk Is Nothing Then
+        Err.Clear
+        selOk = swDoc.Extension.SelectByID2(skName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+        If Err.Number <> 0 Then
+            reason = "select-for-reentry err " & Trim(Str(Err.Number)) & " " & Err.Description
+            Exit Function
+        End If
+        If Not selOk Then
+            reason = "select-for-reentry returned false"
+            Exit Function
+        End If
+        Err.Clear
+        swSketchMgr.InsertSketch True
+        If Err.Number <> 0 Then
+            reason = "insertsketch err " & Trim(Str(Err.Number)) & " " & Err.Description
+            Exit Function
+        End If
+        Err.Clear
+        Set sk = swSketchMgr.ActiveSketch
+        If Err.Number <> 0 Then
+            reason = "activesketch-after-reentry err " & Trim(Str(Err.Number)) & " " & Err.Description
+            Exit Function
+        End If
+        If sk Is Nothing Then
+            reason = "sketch edit could not be re-entered"
+            Exit Function
+        End If
+    End If
+    Err.Clear
+    nm = sk.Name
+    If Err.Number <> 0 Then
+        reason = "active sketch name err " & Trim(Str(Err.Number)) & " " & Err.Description
+        Exit Function
+    End If
+    If nm <> skName Then
+        reason = "the active sketch is " & nm & ", expected " & skName
+        Exit Function
+    End If
+    SolveSketch = True
+End Function
+
+' Select one entity on a fresh selection list; the Boolean result AND the
+' error are captured. Any uncertainty returns False with a reason.
+Function SelectOne(ByVal a As Object, ByRef reason As String) As Boolean
+    Dim selA As Boolean
+    On Error Resume Next
+    SelectOne = False
+    reason = ""
+    swDoc.ClearSelection2 True
+    Err.Clear
+    selA = a.Select(False)
+    If Err.Number <> 0 Then
+        reason = "select err " & Trim(Str(Err.Number)) & " " & Err.Description
+        Exit Function
+    End If
+    If Not selA Then
+        reason = "select returned false"
+        Exit Function
+    End If
+    SelectOne = True
+End Function
+
+' Select two entities, first fresh, second appended; every outcome
+' captured. Any uncertainty returns False with a reason.
+Function SelectTwo(ByVal a As Object, ByVal b As Object, ByRef reason As String) As Boolean
+    Dim selA As Boolean
+    Dim selB As Boolean
+    On Error Resume Next
+    SelectTwo = False
+    reason = ""
+    swDoc.ClearSelection2 True
+    Err.Clear
+    selA = a.Select(False)
+    If Err.Number <> 0 Then
+        reason = "select a err " & Trim(Str(Err.Number)) & " " & Err.Description
+        Exit Function
+    End If
+    Err.Clear
+    selB = b.Select(True)
+    If Err.Number <> 0 Then
+        reason = "select b err " & Trim(Str(Err.Number)) & " " & Err.Description
+        Exit Function
+    End If
+    If Not selA Then
+        reason = "select a returned false"
+        Exit Function
+    End If
+    If Not selB Then
+        reason = "select b returned false"
+        Exit Function
+    End If
+    SelectTwo = True
+End Function
+
+' A line's endpoint arrays with every stage captured, the array shape
+' guarded and the components validated as numeric: a failed or silent
+' readback must never present as a measured zero (a fake pin).
+Function LineEnds(ByVal ln As Object, ByRef a As Variant, ByRef b As Variant, ByRef reason As String) As Boolean
+    On Error Resume Next
+    LineEnds = False
+    reason = ""
+    Err.Clear
+    a = ln.GetStartPoint
+    If Err.Number <> 0 Then
+        reason = "start readback err " & Trim(Str(Err.Number)) & " " & Err.Description
+        Exit Function
+    End If
+    If Not IsArray(a) Then
+        reason = "start readback is not an array"
+        Exit Function
+    End If
+    If LBound(a) <> 0 Or UBound(a) < 2 Then
+        reason = "start readback has an unexpected shape"
+        Exit Function
+    End If
+    If Not IsNumeric(a(0)) Or Not IsNumeric(a(1)) Then
+        reason = "start readback components are not numeric"
+        Exit Function
+    End If
+    Err.Clear
+    b = ln.GetEndPoint
+    If Err.Number <> 0 Then
+        reason = "end readback err " & Trim(Str(Err.Number)) & " " & Err.Description
+        Exit Function
+    End If
+    If Not IsArray(b) Then
+        reason = "end readback is not an array"
+        Exit Function
+    End If
+    If LBound(b) <> 0 Or UBound(b) < 2 Then
+        reason = "end readback has an unexpected shape"
+        Exit Function
+    End If
+    If Not IsNumeric(b(0)) Or Not IsNumeric(b(1)) Then
+        reason = "end readback components are not numeric"
+        Exit Function
+    End If
+    LineEnds = True
+End Function
+
+' One point handle's coordinates, each component captured. The typed
+' Double assignment IS the numeric validation (a coercion failure raises
+' and is trapped): a failed or silent readback must never present as a
+' measured zero.
+Function PointXY(ByVal pt As Object, ByRef px As Double, ByRef py As Double, ByRef reason As String) As Boolean
+    On Error Resume Next
+    PointXY = False
+    reason = ""
+    Err.Clear
+    px = pt.X
+    If Err.Number <> 0 Then
+        reason = "point x err " & Trim(Str(Err.Number)) & " " & Err.Description
+        Exit Function
+    End If
+    Err.Clear
+    py = pt.Y
+    If Err.Number <> 0 Then
+        reason = "point y err " & Trim(Str(Err.Number)) & " " & Err.Description
+        Exit Function
+    End If
+    PointXY = True
+End Function
+
+' 2D length between two array points; only called with shape-guarded,
+' numeric-validated arrays from LineEnds. Any arithmetic failure raises
+' and is trapped by the caller's Err check (fail-closed, never a silent 0).
+Function SegLen(ByVal a As Variant, ByVal b As Variant) As Double
+    SegLen = Sqr((b(0) - a(0)) * (b(0) - a(0)) + (b(1) - a(1)) * (b(1) - a(1)))
 End Function
 
 Function LineFor(ByVal which As String, ByVal n As Long, ByVal d As String, ByVal detail As String) As String
     LineFor = "{""type"":""probe"",""member"":""" & JsonStr(which) & """,""err"":" & Trim(Str(n)) & ",""errdesc"":""" & JsonStr(d) & """,""detail"":""" & JsonStr(detail) & """}"
+End Function
+
+Function StepFor(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String) As String
+    StepFor = "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
 End Function
 
 Function OpenFirstPlane() As Boolean
@@ -416,7 +1281,7 @@ Sub WriteLine(ByVal text As String)
 End Sub
 
 Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)
-    WriteLine "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
+    WriteLine StepFor(idx, command, status, message)
 End Sub
 
 ' JSON string escaping. This is not VBA-literal escaping: it is only for the
@@ -431,6 +1296,45 @@ Function JsonStr(ByVal s As String) As String
     t = Replace(t, vbTab, "\t")
     JsonStr = t
 End Function
+
+' Every exit runs the same finish: restore the SAVED preference value
+' (never force one) and verify the restore, then the tri-state
+' ownership-checked cleanup and the summary. runFailed is ByRef: a failed
+' preference restore or a failed close turns the summary to failed.
+Sub FinishRun(ByRef runFailed As Boolean)
+    Dim cleanupMode As String
+    Dim closedOk As Boolean
+    On Error Resume Next
+    If gDimToggleSaved Then
+        If Not swApp Is Nothing Then
+            swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle
+            If swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate) <> gDimToggle Then
+                WriteStep 5, "toggle-restore", "failed", "the input-dimension-value preference did not restore"
+                runFailed = True
+            End If
+        End If
+    End If
+    cleanupMode = CloseMode()
+    If cleanupMode = "close" Then
+        CloseOwnedDoc closedOk
+        If closedOk And Not runFailed Then
+            WriteLine "{""type"":""summary"",""status"":""ok""}"
+        Else
+            If Not closedOk Then WriteStep 5, "close", "failed", "the owned document could not be confirmed closed"
+            WriteLine "{""type"":""summary"",""status"":""failed""}"
+        End If
+    ElseIf cleanupMode = "keep" Then
+        WriteStep 5, "owned-document", "kept-open", OwnedDocTitle()
+        If runFailed Then
+            WriteLine "{""type"":""summary"",""status"":""failed""}"
+        Else
+            WriteLine "{""type"":""summary"",""status"":""ok""}"
+        End If
+    Else
+        WriteStep 5, "close-mode", "failed", "the cleanup mode could not be established"
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
+    End If
+End Sub
 
 Sub CloseOwnedDoc(ByRef closedOk As Boolean)
     Dim exact As String
