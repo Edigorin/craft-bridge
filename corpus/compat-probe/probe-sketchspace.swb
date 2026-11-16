@@ -1,11 +1,12 @@
 ' craft-bridge probe-sketchspace - Phase 0 diagnostic: in which space do
 ' SolidWorks sketch-point readbacks and dimension text placements live?
 ' An asymmetric off-origin line at known sketch coordinates, read back in
-' BOTH contexts (active sketch and after closing it, each context
-' verified), with the model-to-sketch transform (all thirteen entries
-' including scale) reported alongside. Every call captures its numeric
-' error and description immediately; incomplete measurements are never
-' labeled successful. Diagnostic instrument, not a fidelity golden.
+' BOTH contexts, each context verified before any measurement borrows its
+' name, with the full model-to-sketch transform (through scale) reported
+' alongside. Every call captures its numeric error and description at its
+' own stage; incomplete measurements are never labeled successful, and a
+' failed setup or context check fails the run while cleanup still runs.
+' Diagnostic instrument, not a fidelity golden.
 Option Explicit
 
 Dim swApp As SldWorks.SldWorks
@@ -18,11 +19,14 @@ Sub main()
     Dim template As String
     Dim ln As SketchSegment
     Dim ok As Boolean
+    Dim verified As Boolean
+    Dim runFailed As Boolean
     Dim closedOk As Boolean
     Dim cleanupMode As String
     Dim errNum As Long
     Dim errMsg As String
     On Error GoTo Fail
+    runFailed = False
     reportPath = ReportPathFromHost()
     If reportPath = "" Then Err.Raise vbObjectError + 513, "probe-sketchspace", "no report path"
     StartReport
@@ -35,45 +39,66 @@ Sub main()
     Set swSketchMgr = swDoc.SketchManager
     WriteLine "{""type"":""step"",""index"":-1,""command"":""document.new"",""status"":""created"",""message"":""fresh part from the default template""}"
     If Not OpenFirstPlane() Then
-        WriteLine "{""type"":""step"",""index"":0,""command"":""sketch.open"",""status"":""failed"",""message"":""" & JsonStr("no plane-like feature accepted; probed: " & gProbeLog) & """}"
+        WriteLine "{""type"":""step"",""index"":0,""command"":""sketch.open"",""status"":""failed"",""message"":""" & JsonStr("the sketch could not be opened and verified; probed: " & gProbeLog) & """}"
+        runFailed = True
         GoTo WrapUp
     End If
     WriteLine "{""type"":""step"",""index"":0,""command"":""sketch.open"",""status"":""created"",""message"":""" & JsonStr(gProbeLog) & """}"
+    ReportContext "active", verified
+    If Not verified Then
+        WriteLine "{""type"":""step"",""index"":1,""command"":""context"",""status"":""failed"",""message"":""the active-sketch context is not verified; no measurement will be named after it""}"
+        runFailed = True
+        GoTo WrapUp
+    End If
     ' Asymmetric and off-origin on purpose: any axis swap or reflection
     ' moves these points, so the readback space cannot hide.
     Set ln = swSketchMgr.CreateLine(0.013, 0.027, 0#, 0.041, -0.009, 0#)
-    WriteLine ContextLine("active")
     WriteLine PointLine("active-predim", ln)
     WriteLine TransformLine()
     Err.Clear
     ok = ln.Select(False)
     If Not ok Then
-        WriteLine LineFor("dimension", -1, "Select returned false", "no dimension placed")
+        WriteLine "{""type"":""step"",""index"":2,""command"":""dimension"",""status"":""failed"",""message"":""line selection failed; no dimension placed and no later measurement claimed""}"
+        runFailed = True
         GoTo WrapUp
     End If
     WriteLine DimLine()
     ' The active read AFTER the dimension: solver effects must not be
     ' confounded with the coordinate-context change.
-    WriteLine ContextLine("active")
+    ReportContext "active", verified
+    If Not verified Then
+        WriteLine "{""type"":""step"",""index"":3,""command"":""context"",""status"":""failed"",""message"":""the active context is not verified before closing; the post-dimension read is refused""}"
+        runFailed = True
+        GoTo WrapUp
+    End If
     WriteLine PointLine("active-postdim", ln)
     swSketchMgr.InsertSketch True
-    WriteLine ContextLine("closed")
+    ReportContext "closed", verified
+    If Not verified Then
+        WriteLine "{""type"":""step"",""index"":4,""command"":""context"",""status"":""failed"",""message"":""the closed context is not verified; the closed read is refused""}"
+        runFailed = True
+        GoTo WrapUp
+    End If
     WriteLine PointLine("closed", ln)
 WrapUp:
     cleanupMode = CloseMode()
     If cleanupMode = "close" Then
         CloseOwnedDoc closedOk
-        If closedOk Then
+        If closedOk And Not runFailed Then
             WriteLine "{""type"":""summary"",""status"":""ok""}"
         Else
-            WriteStep 1, "close", "failed", "the owned document could not be confirmed closed"
+            If Not closedOk Then WriteStep 5, "close", "failed", "the owned document could not be confirmed closed"
             WriteLine "{""type"":""summary"",""status"":""failed""}"
         End If
     ElseIf cleanupMode = "keep" Then
-        WriteStep 1, "owned-document", "kept-open", OwnedDocTitle()
-        WriteLine "{""type"":""summary"",""status"":""ok""}"
+        WriteStep 5, "owned-document", "kept-open", OwnedDocTitle()
+        If runFailed Then
+            WriteLine "{""type"":""summary"",""status"":""failed""}"
+        Else
+            WriteLine "{""type"":""summary"",""status"":""ok""}"
+        End If
     Else
-        WriteStep 1, "close-mode", "failed", "the cleanup mode could not be established"
+        WriteStep 5, "close-mode", "failed", "the cleanup mode could not be established"
         WriteLine "{""type"":""summary"",""status"":""failed""}"
     End If
     Exit Sub
@@ -87,34 +112,38 @@ Fail:
     WriteLine "{""type"":""summary"",""status"":""failed""}"
 End Sub
 
-' Confirm the claimed coordinate context before any record is named after it.
-Function ContextLine(ByVal ctx As String) As String
+' Verify and report the claimed coordinate context; the caller must gate
+' every context-named measurement on the result.
+Sub ReportContext(ByVal ctx As String, ByRef verified As Boolean)
     Dim sk As Object
     Dim n As Long
     Dim d As String
     On Error Resume Next
+    verified = False
     Err.Clear
     Set sk = swSketchMgr.ActiveSketch
     n = Err.Number
     d = Err.Description
     If n <> 0 Then
-        ContextLine = LineFor("context-" & ctx, n, d, "active-sketch query failed")
-        Exit Function
+        WriteLine LineFor("context-" & ctx, n, d, "active-sketch query failed; context NOT verified")
+        Exit Sub
     End If
     If ctx = "active" Then
         If sk Is Nothing Then
-            ContextLine = LineFor("context-active", -1, "no active sketch", "context NOT verified")
+            WriteLine LineFor("context-active", -1, "no active sketch", "context NOT verified")
         Else
-            ContextLine = LineFor("context-active", 0, "", "verified: a sketch is active")
+            verified = True
+            WriteLine LineFor("context-active", 0, "", "verified: a sketch is active")
         End If
     Else
         If sk Is Nothing Then
-            ContextLine = LineFor("context-closed", 0, "", "verified: no sketch is active")
+            verified = True
+            WriteLine LineFor("context-closed", 0, "", "verified: no sketch is active")
         Else
-            ContextLine = LineFor("context-closed", -1, "a sketch is still active", "context NOT verified")
+            WriteLine LineFor("context-closed", -1, "a sketch is still active", "context NOT verified")
         End If
     End If
-End Function
+End Sub
 
 ' All three point components, each captured and attributed to its own
 ' stage; nothing is labeled successful when a stage failed.
@@ -172,20 +201,24 @@ Function PointLine(ByVal ctx As String, ByVal ln As Object) As String
     sx = sp.X
     n1 = Err.Number
     d1 = Err.Description
-    If n1 = 0 Then
-        Err.Clear
-        sy = sp.Y
-        n1 = Err.Number
-        d1 = Err.Description
-    End If
-    If n1 = 0 Then
-        Err.Clear
-        sz = sp.Z
-        n1 = Err.Number
-        d1 = Err.Description
-    End If
     If n1 <> 0 Then
-        PointLine = LineFor("point-" & ctx, n1, d1, detail & " | stage=end-component")
+        PointLine = LineFor("point-" & ctx, n1, d1, detail & " | stage=end-x")
+        Exit Function
+    End If
+    Err.Clear
+    sy = sp.Y
+    n1 = Err.Number
+    d1 = Err.Description
+    If n1 <> 0 Then
+        PointLine = LineFor("point-" & ctx, n1, d1, detail & " | stage=end-y")
+        Exit Function
+    End If
+    Err.Clear
+    sz = sp.Z
+    n1 = Err.Number
+    d1 = Err.Description
+    If n1 <> 0 Then
+        PointLine = LineFor("point-" & ctx, n1, d1, detail & " | stage=end-z")
         Exit Function
     End If
     detail = detail & " | end x=" & Trim(Str(sx)) & " y=" & Trim(Str(sy)) & " z=" & Trim(Str(sz))
@@ -240,9 +273,9 @@ Function TransformLine() As String
     TransformLine = LineFor("transform", 0, "", detail)
 End Function
 
-' The dimension: value and name through a separate dimension object (the
-' checkpoint's pattern), and every text-position readback candidate the
-' API may expose - each captured, absence reported as data.
+' The dimension: value and name through a separate dimension object; each
+' text-position candidate records member access and then decoding as
+' separate stages - an unsupported candidate is data, never a position.
 Function DimLine() As String
     Dim dd As Object
     Dim dm As Object
@@ -250,6 +283,8 @@ Function DimLine() As String
     Dim d As String
     Dim detail As String
     Dim v As Variant
+    Dim na As Long
+    Dim da As String
     On Error Resume Next
     Err.Clear
     Set dd = swDoc.AddDimension2(0.055, -0.035, 0#)
@@ -267,7 +302,6 @@ Function DimLine() As String
         DimLine = LineFor("dimension", n, d, "stage=getdimension2")
         Exit Function
     End If
-    detail = ""
     Err.Clear
     v = dm.SystemValue
     n = Err.Number
@@ -279,20 +313,34 @@ Function DimLine() As String
     detail = "value=" & Trim(Str(v))
     Err.Clear
     v = dm.Name
-    If Err.Number = 0 Then detail = detail & " | name=" & CStr(v) Else detail = detail & " | name err=" & Trim(Str(Err.Number))
+    na = Err.Number
+    da = Err.Description
+    If na = 0 Then
+        detail = detail & " | name=" & CStr(v)
+    Else
+        detail = detail & " | name-read err=" & Trim(Str(na)) & " " & da
+    End If
     Err.Clear
     v = dd.GetTextPosition
-    If Err.Number = 0 Then
-        detail = detail & " | textpos=" & Trim(Str(v(0))) & "," & Trim(Str(v(1))) & "," & Trim(Str(v(2)))
+    na = Err.Number
+    da = Err.Description
+    If na <> 0 Then
+        detail = detail & " | textpos-get member err=" & Trim(Str(na)) & " " & da
     Else
-        detail = detail & " | textpos-get unsupported err=" & Trim(Str(Err.Number))
+        Err.Clear
+        detail = detail & " | textpos-get=" & Trim(Str(v(0))) & "," & Trim(Str(v(1))) & "," & Trim(Str(v(2)))
+        If Err.Number <> 0 Then detail = detail & " decode err=" & Trim(Str(Err.Number)) & " " & Err.Description
     End If
     Err.Clear
     v = dd.TextPosition
-    If Err.Number = 0 Then
-        detail = detail & " | textpos-prop=" & Trim(Str(v(0))) & "," & Trim(Str(v(1))) & "," & Trim(Str(v(2)))
+    na = Err.Number
+    da = Err.Description
+    If na <> 0 Then
+        detail = detail & " | textpos-prop member err=" & Trim(Str(na)) & " " & da
     Else
-        detail = detail & " | textpos-prop unsupported err=" & Trim(Str(Err.Number))
+        Err.Clear
+        detail = detail & " | textpos-prop=" & Trim(Str(v(0))) & "," & Trim(Str(v(1))) & "," & Trim(Str(v(2)))
+        If Err.Number <> 0 Then detail = detail & " decode err=" & Trim(Str(Err.Number)) & " " & Err.Description
     End If
     DimLine = LineFor("dimension", 0, "", detail)
 End Function
@@ -302,49 +350,85 @@ Function LineFor(ByVal which As String, ByVal n As Long, ByVal d As String, ByVa
 End Function
 
 ' Open the first plane-like feature and confirm an active sketch before
-' claiming success. No frame acceptance here: this probe pins semantics.
+' claiming success. Sketch-opening success and frame evidence are reported
+' separately: a frame read failure never rewrites an opened sketch into a
+' failure, and never into a silent success either - it lands in the log.
 Function OpenFirstPlane() As Boolean
     Dim feat As Object
     Dim nm As String
     Dim sk As Object
+    Dim n As Long
     On Error Resume Next
     OpenFirstPlane = False
     gProbeLog = ""
     Err.Clear
     Set feat = swDoc.FirstFeature
+    n = Err.Number
+    If n <> 0 Then
+        gProbeLog = gProbeLog & "stage=firstfeature err=" & Trim(Str(n)) & "; "
+        Exit Function
+    End If
     Do While Not feat Is Nothing
+        Err.Clear
         nm = feat.GetTypeName2()
-        If Err.Number <> 0 Then Exit Function
+        If Err.Number <> 0 Then
+            gProbeLog = gProbeLog & "stage=typename err=" & Trim(Str(Err.Number)) & "; "
+            Exit Function
+        End If
         If InStr(1, nm, "lane", vbTextCompare) > 0 Then
             Err.Clear
             If feat.Select(False) Then
                 Err.Clear
                 swSketchMgr.InsertSketch True
-                If Err.Number <> 0 Then Exit Function
+                If Err.Number <> 0 Then
+                    gProbeLog = gProbeLog & feat.Name & ": insertsketch err=" & Trim(Str(Err.Number)) & "; "
+                    Exit Function
+                End If
                 Err.Clear
                 Set sk = swSketchMgr.ActiveSketch
-                If Err.Number <> 0 Then Exit Function
-                If sk Is Nothing Then Exit Function
-                gProbeLog = gProbeLog & feat.Name & ": " & FrameText() & "; "
+                If Err.Number <> 0 Then
+                    gProbeLog = gProbeLog & feat.Name & ": activesketch err=" & Trim(Str(Err.Number)) & "; "
+                    Exit Function
+                End If
+                If sk Is Nothing Then
+                    gProbeLog = gProbeLog & feat.Name & ": opened but no active sketch object; "
+                    Exit Function
+                End If
+                gProbeLog = gProbeLog & feat.Name & ": opened; frame " & FrameTextEx() & "; "
                 OpenFirstPlane = True
                 Exit Function
             End If
         End If
         Err.Clear
         Set feat = feat.GetNextFeature
-        If Err.Number <> 0 Then Exit Function
+        If Err.Number <> 0 Then
+            gProbeLog = gProbeLog & "stage=nextfeature err=" & Trim(Str(Err.Number)) & "; "
+            Exit Function
+        End If
     Loop
 End Function
 
-' The active sketch's frame as report text: the fail-closed messages name
-' exactly what each probed plane offered.
-Function FrameText() As String
-    Dim tr As Variant, a As Variant
+' Probe-local frame evidence with full capture (the checkpoint helper does
+' not capture indexing failures; this one reports them).
+Function FrameTextEx() As String
+    Dim tr As Object
+    Dim a As Variant
     On Error Resume Next
+    Err.Clear
     Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
-    If Err.Number <> 0 Then FrameText = "(no frame)": Exit Function
+    If Err.Number <> 0 Then
+        FrameTextEx = "(frame unavailable: get err " & Trim(Str(Err.Number)) & ")"
+        Exit Function
+    End If
+    Err.Clear
     a = tr.ArrayData
-    FrameText = "u=(" & Vec3Text(a(0), a(3), a(6)) & ") v=(" & Vec3Text(a(1), a(4), a(7)) & ") n=(" & Vec3Text(a(2), a(5), a(8)) & ") o=(" & Vec3Text(a(9), a(10), a(11)) & ")"
+    If Err.Number <> 0 Then
+        FrameTextEx = "(frame unavailable: arraydata err " & Trim(Str(Err.Number)) & ")"
+        Exit Function
+    End If
+    Err.Clear
+    FrameTextEx = "u=(" & Vec3Text(a(0), a(3), a(6)) & ") v=(" & Vec3Text(a(1), a(4), a(7)) & ") n=(" & Vec3Text(a(2), a(5), a(8)) & ") o=(" & Vec3Text(a(9), a(10), a(11)) & ")"
+    If Err.Number <> 0 Then FrameTextEx = "(frame unavailable: index err " & Trim(Str(Err.Number)) & ")"
 End Function
 
 Function Vec3Text(ByVal x As Double, ByVal y As Double, ByVal z As Double) As String
