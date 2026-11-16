@@ -2077,6 +2077,55 @@ fn truth_table_decisions_refuse_unmeasured_cells() {
         assert_eq!(truth::extrude_two_sided_swap(want, 0), None);
         assert_eq!(truth::revolve_reverse_flag(want, 0), None);
         assert_eq!(truth::revolve_two_sided_swap(want, 0), None);
+        assert_eq!(truth::revolve_in_evidence_scope(want, 1, 0), None);
+    }
+}
+
+#[test]
+fn revolve_flags_agree_under_both_candidate_laws_in_the_evidence_scope() {
+    // The probe records read two ways: the flag selects an ABSOLUTE side in
+    // units of the sketch normal (TT = -1), or a right-hand SENSE about the
+    // drawn axis direction (TT = +1). The two readings give identical flags
+    // exactly where the configuration chirality (map_side * sigma) matches
+    // the probe's - which is what makes the evidence scope's decisions
+    // established rather than assumed. Outside it the readings diverge and
+    // the gate refuses.
+    const TT_ABSOLUTE: i32 = -1; // the same records, absolute-in-normal reading
+    for w in [-1, 1] {
+        for sigma in [-1, 1] {
+            // Blind partial: want sense = sigma * direction sign.
+            for d in [-1, 1] {
+                let sense_law =
+                    truth::revolve_reverse_flag(sigma * d, truth::TT_REV_SENSE).unwrap();
+                let absolute_law = truth::revolve_reverse_flag(w * d, TT_ABSOLUTE).unwrap();
+                let in_scope =
+                    truth::revolve_in_evidence_scope(w, sigma, truth::TT_REV_PROBE_CHIRALITY)
+                        .unwrap();
+                if in_scope {
+                    assert_eq!(
+                        sense_law, absolute_law,
+                        "w={w} sigma={sigma} d={d}: the laws disagree inside the evidence scope"
+                    );
+                }
+            }
+            // Two-sided: the swap decision reads the same way.
+            let sense_law =
+                truth::revolve_two_sided_swap(sigma, truth::TT_REV_TWO_FIRST_SIDE).unwrap();
+            let absolute_law = truth::revolve_two_sided_swap(w, TT_ABSOLUTE).unwrap();
+            let in_scope =
+                truth::revolve_in_evidence_scope(w, sigma, truth::TT_REV_PROBE_CHIRALITY).unwrap();
+            if in_scope {
+                assert_eq!(
+                    sense_law, absolute_law,
+                    "w={w} sigma={sigma}: swap laws disagree"
+                );
+            } else {
+                assert_ne!(
+                    sense_law, absolute_law,
+                    "w={w} sigma={sigma}: outside the scope the laws must diverge (or the gate is vacuous)"
+                );
+            }
+        }
     }
 }
 
@@ -2233,17 +2282,17 @@ fn extrude_builders_carry_the_direction_truth_table() {
     let case = Case::new(TRACER);
     case.build_to("tt.swb", false).unwrap();
     let text = fs::read_to_string(case.dir.path().join("tt.swb")).unwrap();
-    for (name, probe) in [
-        ("TT_EX_DIR_TRUE_SIDE", "probe-extrudedir"),
-        ("TT_EX_FIRST_SIDE", "probe-twosided"),
-        ("TT_EX_THROUGH_ALL_DIR", "probe-throughall"),
-        ("TT_REV_SENSE", "probe-revolvedir"),
-        ("TT_REV_TWO_FIRST_SIDE", "probe-revolvedir"),
-        ("TT_REV_DIR_LAW", "TT_REV_DIR_LAW"),
+    for (name, value, probe) in [
+        ("TT_EX_DIR_TRUE_SIDE", -1, "probe-extrudedir"),
+        ("TT_EX_FIRST_SIDE", 1, "probe-twosided"),
+        ("TT_EX_THROUGH_ALL_DIR", -1, "probe-throughall"),
+        ("TT_REV_SENSE", 1, "probe-revolvedir"),
+        ("TT_REV_TWO_FIRST_SIDE", 1, "probe-revolvedir"),
+        ("TT_REV_PROBE_CHIRALITY", -1, "probe-revolvedir"),
     ] {
         assert!(
-            text.contains(&format!("Const {name} As Long = 0")),
-            "{name}: the unmeasured slot is missing"
+            text.contains(&format!("Const {name} As Long = {value}")),
+            "{name}: the measured value is not emitted"
         );
         let at = text.find(&format!("Const {name}")).expect("the constant");
         let line = &text[at..text[at..].find('\n').unwrap() + at];
@@ -2473,8 +2522,9 @@ fn revolve_builders_map_the_axis_and_gate_the_sweep_law() {
     // gate precedes the measured sense, and both refusals name their probe.
     let partial = builder_region(&text, "BuildRevolve1");
     assert!(
-        partial.contains("TT_REV_DIR_LAW <> 1") && partial.contains("seat evidence"),
-        "the structural-law gate is missing"
+        partial.contains("gMapSide(0) * -1 <> TT_REV_PROBE_CHIRALITY")
+            && partial.contains("outside it and the candidate sweep laws disagree"),
+        "the evidence-scope gate is missing"
     );
     assert!(
         partial.contains("TT_REV_SENSE = 0") && partial.contains("probe-revolvedir"),

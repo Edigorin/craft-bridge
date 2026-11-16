@@ -30,12 +30,12 @@ Dim regSign(0 To 0) As Double
 ' Each constant comes from a direction probe's runtime report (corpus/
 ' compat-probe); 0 = UNMEASURED and every decision that consults it
 ' refuses with a named reason - never a silent guess, never 'created'.
-Const TT_EX_DIR_TRUE_SIDE As Long = 0      ' probe-extrudedir: Dir=True sends material toward TT * the sketch normal
-Const TT_EX_FIRST_SIDE As Long = 0         ' probe-twosided: the first depth's end sits toward TT * the sketch normal (Dir=False call shape)
-Const TT_EX_THROUGH_ALL_DIR As Long = 0    ' probe-throughall: the through-all Dir=True reading (its contract allows inconclusive)
-Const TT_REV_SENSE As Long = 0             ' probe-revolvedir: ReverseDir=False sweeps the right-hand +angle sense about the drawn axis when +1
-Const TT_REV_TWO_FIRST_SIDE As Long = 0    ' probe-revolvedir: the two-sided first angle sweeps right-hand sense TT about the drawn axis
-Const TT_REV_DIR_LAW As Long = 0           ' the structural law (1 = right-hand rule about the drawn axis): accepted from seat evidence, never from the probes alone
+Const TT_EX_DIR_TRUE_SIDE As Long = -1      ' probe-extrudedir: Dir=True sends material toward TT * the sketch normal
+Const TT_EX_FIRST_SIDE As Long = 1         ' probe-twosided: the first depth's end sits toward TT * the sketch normal (Dir=False call shape)
+Const TT_EX_THROUGH_ALL_DIR As Long = -1    ' probe-throughall: the through-all Dir=True reading (measured directly; its inconclusive branch did not occur)
+Const TT_REV_SENSE As Long = 1             ' probe-revolvedir: ReverseDir=False sweeps the right-hand +angle sense about the drawn axis when +1
+Const TT_REV_TWO_FIRST_SIDE As Long = 1    ' probe-revolvedir: the two-sided first angle sweeps right-hand sense TT about the drawn axis
+Const TT_REV_PROBE_CHIRALITY As Long = -1   ' the configuration chirality the revolve evidence establishes (probe-revolvedir: one directed axis and one profile side)
 Dim skName0 As String
 Dim pt0(0 To 2) As Object
 Dim sl0(0 To 0) As Object

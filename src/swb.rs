@@ -248,7 +248,7 @@ pub fn emit(
         crate::truth::TT_EX_FIRST_SIDE
     ));
     out.push_str(&format!(
-        "Const TT_EX_THROUGH_ALL_DIR As Long = {}    ' probe-throughall: the through-all Dir=True reading (its contract allows inconclusive)\n",
+        "Const TT_EX_THROUGH_ALL_DIR As Long = {}    ' probe-throughall: the through-all Dir=True reading (measured directly; its inconclusive branch did not occur)\n",
         crate::truth::TT_EX_THROUGH_ALL_DIR
     ));
     out.push_str(&format!(
@@ -260,8 +260,8 @@ pub fn emit(
         crate::truth::TT_REV_TWO_FIRST_SIDE
     ));
     out.push_str(&format!(
-        "Const TT_REV_DIR_LAW As Long = {}           ' the structural law (1 = right-hand rule about the drawn axis): accepted from seat evidence, never from the probes alone\n",
-        crate::truth::TT_REV_DIR_LAW
+        "Const TT_REV_PROBE_CHIRALITY As Long = {}   ' the configuration chirality the revolve evidence establishes (probe-revolvedir: one directed axis and one profile side)\n",
+        crate::truth::TT_REV_PROBE_CHIRALITY
     ));
     for s in steps {
         if matches!(
@@ -2187,8 +2187,10 @@ fn axis_sigma(sk: &SketchStep, axis: &AxisSel) -> Result<i32, String> {
 /// "like geometry" (both helper-axis endpoints go through MapU/MapV; a
 /// profile-line axis is already drawn mapped, so the drawn direction is the
 /// mapped source direction). The sweep direction runs through the direction
-/// truth table: the structural-law gate (TT_REV_DIR_LAW), the measured
-/// sense constants, and the source-side factor from the profile geometry.
+/// truth table: the evidence-scope gate (TT_REV_PROBE_CHIRALITY - the
+/// chirality where every candidate reading of the probe evidence agrees),
+/// the measured sense constants, and the source-side factor from the
+/// profile geometry.
 /// Full turns and mid-plane forms are direction-free and consult no
 /// constant. Everything unestablished fails with a named reason before the
 /// feature call - never "created". A refusal emits ONLY the refusal: every
@@ -2250,9 +2252,20 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep, sk: Option<&SketchStep>) ->
     body.push_str(&format!(
         "    If Not gMapValid({sidx}) Then gMsg = \"frame adaptation: the profile sketch carries no valid adaptation map; refusing to report created\": GoTo ExFail\n"
     ));
-    // The structural-law gate: the sense constants alone never unlock a
-    // directional revolve (the probes measure one directed axis only).
-    let law_gate = "    If TT_REV_DIR_LAW <> 1 Then gMsg = \"the revolve sweep-direction law is not established: probe-revolvedir measures one frame and one directed axis, and the right-hand-rule law has not been accepted from seat evidence (TT_REV_DIR_LAW); refusing to report created\": GoTo ExFail\n";
+    // The evidence-scope gate (the plan review's evidence-scoped
+    // restriction): the probes measure one frame and ONE directed axis, so
+    // the two candidate sweep laws (absolute side in normal units; the
+    // right-hand sense about the drawn axis) are indistinguishable there.
+    // Where the configuration chirality gMapSide * sigma equals the
+    // probe's, the two readings produce IDENTICAL flags and the sweep side
+    // is established under either; outside it the readings diverge and the
+    // step refuses with a named reason - the sense constants alone never
+    // unlock an unestablished case.
+    let scope_gate = |sg: i32| {
+        format!(
+        "    If gMapSide({sidx}) * {sg} <> TT_REV_PROBE_CHIRALITY Then gMsg = \"the revolve sweep-direction evidence is scoped to the probe's configuration chirality (probe-revolvedir: one directed axis and one profile side); this map orientation and profile side are outside it and the candidate sweep laws disagree there; refusing to report created\": GoTo ExFail\n"
+    )
+    };
     let select_sketch = format!(
         "    ok = swDoc.Extension.SelectByID2(skName{sidx}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n    If Not ok Then gMsg = \"could not select the profile sketch\": GoTo ExFail\n"
     );
@@ -2267,7 +2280,7 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep, sk: Option<&SketchStep>) ->
                 let Ok(sg) = &sigma else { unreachable!() };
                 let want = if *reverse { -sg } else { *sg };
                 locals.push_str("    Dim revFlag As Boolean\n");
-                body.push_str(law_gate);
+                body.push_str(&scope_gate(*sg));
                 body.push_str("    If TT_REV_SENSE = 0 Then gMsg = \"the revolve sweep-direction truth table is unmeasured: probe-revolvedir has not established which side ReverseDir=False sweeps toward; refusing to report created\": GoTo ExFail\n");
                 body.push_str(&format!("    revFlag = (TT_REV_SENSE <> {want})\n"));
                 "revFlag"
@@ -2282,7 +2295,7 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep, sk: Option<&SketchStep>) ->
         {
             let Ok(sg) = &sigma else { unreachable!() };
             locals.push_str("    Dim swapR As Boolean\n    Dim aA As Double\n    Dim aB As Double\n    Dim wFirst As Long\n    Dim wSecond As Long\n");
-            body.push_str(law_gate);
+            body.push_str(&scope_gate(*sg));
             body.push_str("    If TT_REV_TWO_FIRST_SIDE = 0 Then gMsg = \"the two-sided revolve angle truth table is unmeasured: probe-revolvedir has not established which side receives the first angle; refusing to report created\": GoTo ExFail\n");
             body.push_str(&format!(
                 "    swapR = (TT_REV_TWO_FIRST_SIDE <> {sg})\n    If swapR Then\n    aA = {}\n    aB = {}\n    wFirst = 2\n    wSecond = 1\n    Else\n    aA = {}\n    aB = {}\n    wFirst = 1\n    wSecond = 2\n    End If\n",

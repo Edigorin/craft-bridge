@@ -1,79 +1,109 @@
-//! The extrude/revolve direction truth table (Phase 1 batch 2).
+//! The extrude/revolve direction truth table (Phase 1 batch 2), MEASURED
+//! ON THE SEAT 2026-11-16 from the four direction probes' runtime reports
+//! (`/tmp/opencode/seat-reports/probe-{extrudedir,twosided,throughall,
+//! revolvedir}.jsonl`; probes in `corpus/compat-probe/`).
 //!
-//! Every constant below is MEASURED ON THE SEAT from a direction probe's
-//! runtime report (`corpus/compat-probe/probe-extrudedir`, `-twosided`,
-//! `-throughall`, `-revolvedir`). `0` is the UNMEASURED sentinel: every
-//! decision that consults an unmeasured cell refuses with a named reason and
-//! the step never reports `created` (docs/mapping.md, "Direction truth
-//! table"). Filling a constant is a one-line change here, followed by golden
-//! and corpus regeneration; the emitted macro carries the value in its
-//! `TT_*` VBA constants and names its probe in every refusal.
+//! `0` remains the UNMEASURED sentinel in the decision functions: every
+//! decision that consults an unmeasured cell refuses with a named reason
+//! and the step never reports `created` (docs/mapping.md, "Direction truth
+//! table"). The emitted macro carries the values in its `TT_*` VBA
+//! constants and keeps the sentinel checks at runtime.
 //!
-//! Structural law gate: the probes run one frame and one directed axis, so
-//! the revolve rows below assume the right-hand-rule law
-//! (`TT_REV_DIR_LAW`) about the drawn axis direction. That law is a
-//! SEPARATE acceptance: filling the sense constants alone unlocks nothing
-//! until the law value is set from seat evidence (the sweep-direction
-//! acceptance check or a discriminating probe).
+//! Revolve evidence scope: the probes run one frame and ONE directed axis,
+//! so the sweep rows are read under two candidate laws (the flag selects an
+//! absolute side in units of the sketch normal, or a right-hand sense about
+//! the drawn axis direction). The two laws give IDENTICAL flags exactly
+//! when the configuration chirality matches the probe's
+//! (`TT_REV_PROBE_CHIRALITY`): that scope is the executable gate
+//! (the plan review's "evidence-scoped restriction") - directional revolve
+//! forms run there under either law and refuse with a named reason outside
+//! it.
 
 /// `FeatureExtrusion2`'s `Dir=True` flag sends material toward this many
-/// times the profile sketch normal `n_sk` (`+1` = toward `n_sk`). The
-/// two-sided and blind call shapes are measured separately below.
+/// times the profile sketch normal `n_sk` (`+1` = toward `n_sk`).
 ///
-/// SLOT: probe-extrudedir cases `dir-true` / `dir-false` (the box's X extent
-/// on the verified Front frame names the physical side; D1 identity
-/// confirms the dimension).
-pub const TT_EX_DIR_TRUE_SIDE: i32 = 0;
+/// MEASURED (probe-extrudedir `dir-true`/`dir-false`, 2026-11-16): Dir=True
+/// put the blind 0.012 m box at x in [-0.012, 0] (the verified Front frame's
+/// `n_sk` = +X) = toward MINUS the normal; Dir=False at [0, 0.012].
+/// D1@Boss-Extrude1 read back the depth in SI metres.
+pub const TT_EX_DIR_TRUE_SIDE: i32 = -1;
 
 /// With the emitter's two-sided `FeatureExtrusion2` call shape (`Dir=False`,
 /// first depth in argument 1), the FIRST depth's end sits toward this many
 /// times `n_sk`. A source first side that resolves elsewhere swaps the two
 /// depth arguments (and the D1/D2 dimension indices).
 ///
-/// SLOT: probe-twosided (the box's unequal X extents name the assignment;
-/// both D1/D2 identities confirm the arguments).
-pub const TT_EX_FIRST_SIDE: i32 = 0;
+/// MEASURED (probe-twosided, 2026-11-16): first 0.010 / second 0.030 put the
+/// box at x in [-0.03, 0.01] - the first depth's end on the PLUS normal side;
+/// D1@ = 0.010 and D2@ = 0.030 confirm argument order to identity.
+pub const TT_EX_FIRST_SIDE: i32 = 1;
 
 /// The through-all call shape's `Dir=True` reading (same form as
-/// `TT_EX_DIR_TRUE_SIDE`). probe-throughall's own interpretation contract
-/// allows an INCONCLUSIVE result (a fresh part offers no bounded material
-/// for "through all"; the side is never inferred from the blind cases), in
-/// which case this stays `0` and through-all extrudes refuse with a named
-/// reason.
+/// `TT_EX_DIR_TRUE_SIDE`).
 ///
-/// SLOT: probe-throughall cases `dir-true` / `dir-false`.
-pub const TT_EX_THROUGH_ALL_DIR: i32 = 0;
+/// MEASURED (probe-throughall `dir-true`/`dir-false`, 2026-11-16): its own
+/// measured cases, never inferred from blind - Dir=True put the body at
+/// x in [-1, 0], Dir=False at [0, 1]: through-all obeys the Dir flag like
+/// blind. The probe's own contract allowed an inconclusive result; the
+/// fresh part produced measurable bodies both ways. No D1 dimension exists
+/// on the through-all feature (the informative look came back empty).
+pub const TT_EX_THROUGH_ALL_DIR: i32 = -1;
 
 /// With the emitter's blind revolve call shape (`ReverseDir=False`), the
 /// sweep is the right-hand rotation about the drawn axis direction (the
 /// construction line, start to end) by `+angle` when this is `+1`, and
 /// about the opposite direction when `-1`.
 ///
-/// SLOT: probe-revolvedir cases `blind-270-normal` / `blind-270-reverse`
-/// (the mass-property centroid names the sweep side; the axis endpoint
-/// order is pinned as evidence).
-pub const TT_REV_SENSE: i32 = 0;
+/// MEASURED (probe-revolvedir `blind-270-normal`/`blind-270-reverse`,
+/// 2026-11-16): the drawn axis (0,-0.010)->(0,0.080) = +t with the profile
+/// on the +u side. ReverseDir=False put the 270 deg centroid at
+/// (u, n) = (-0.0046, -0.0046) = mid-angle -135 deg = toward MINUS the
+/// normal first = the right-hand +angle sense about +t (t_hat x u_hat =
+/// -n_hat); ReverseDir=True mirrored to mid-angle +135 deg. Readings via
+/// MassProperty `centerofmass` (the American spelling; `centreofmass`
+/// raises 438).
+pub const TT_REV_SENSE: i32 = 1;
 
 /// With the emitter's two-sided revolve call shape (`ReverseDir=False`), the
 /// FIRST angle sweeps with right-hand sense `+1` or `-1` about the drawn
 /// axis direction (start to end).
 ///
-/// SLOT: probe-revolvedir case `twosided-100-150` (the centroid names which
-/// side received the 100 deg first angle; D1/D2 identities confirm the
-/// arguments).
-pub const TT_REV_TWO_FIRST_SIDE: i32 = 0;
+/// MEASURED (probe-revolvedir `twosided-100-150`, 2026-11-16): D1 = 100 deg
+/// and D2 = 150 deg (identities in radians), centroid at mid-angle +24.6 deg
+/// -> the swept span [-100, +150]: the FIRST angle occupied the minus-
+/// normal side = the same right-hand +angle sense as the blind form above
+/// (two independent measurements agreeing). D1 sweeps like ReverseDir=False.
+pub const TT_REV_TWO_FIRST_SIDE: i32 = 1;
 
-/// The structural law the two rows above are read under. `0` =
-/// UNESTABLISHED: directional revolves (blind partial and two-sided) refuse
-/// with a named reason even when the sense constants are filled, because the
-/// probes measure one frame and one directed axis only. `1` = the
-/// right-hand-rule law about the drawn axis direction (start to end) has
-/// been accepted from seat evidence.
+/// The evidence-scope gate for directional revolve forms: the configuration
+/// chirality the probe establishes, `sign((drawn axis direction x profile
+/// radial side) . sketch normal)`. The probe's pinned setup (drawn axis
+/// (0,-0.010)->(0,0.080), profile on the +u side, n_sk = +X) has chirality
+/// (t_hat x u_hat).n_hat = -1.
 ///
-/// SLOT: not filled from the four probes alone; set from the sweep-direction
-/// seat-acceptance check ("sweep direction and volume of partial revolves
-/// are acceptance checks") or a discriminating probe.
-pub const TT_REV_DIR_LAW: i32 = 0;
+/// A replay's chirality is `map_side * sigma` (the runtime `gMapSide` times
+/// the emit-time source-side factor). Where it equals this value the two
+/// candidate sweep laws (absolute side in units of the normal; right-hand
+/// sense about the drawn axis) produce IDENTICAL flags, so the sweep side
+/// is established under either reading; elsewhere the two readings diverge,
+/// the probes cannot distinguish them, and the step refuses with a named
+/// reason - never `created`. This is the plan review's evidence-scoped
+/// restriction; the sweep-direction seat-acceptance check remains the
+/// outer guard for the residual structural hypotheses.
+pub const TT_REV_PROBE_CHIRALITY: i32 = -1;
+
+/// The evidence-scope check for a directional revolve: `None` while the
+/// chirality cell is unmeasured, `true` inside the probe's scope.
+pub fn revolve_in_evidence_scope(
+    map_side: i32,
+    sigma: i32,
+    tt_probe_chirality: i32,
+) -> Option<bool> {
+    if tt_probe_chirality == 0 {
+        return None;
+    }
+    Some(map_side * sigma == tt_probe_chirality)
+}
 
 /// Tolerance for profile-side classification, in millimetres (the recipe's
 /// sketch coordinates).

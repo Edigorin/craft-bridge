@@ -274,20 +274,34 @@ extrude in this phase: it is `failed`.
 
 The physical side a call flag selects is **measured on the seat**, never
 assumed. Every constant below lives in `src/truth.rs` and is emitted into
-the macro as a `TT_*` VBA constant; `0` is the UNMEASURED sentinel and
-every runtime decision that consults an unmeasured cell refuses with a
-named reason naming its probe - a step whose direction semantics cannot be
-established fails and never reports `created`. Filling a constant is a
-one-line change followed by golden and corpus regeneration.
+the macro as a `TT_*` VBA constant. **Measured 2026-11-16** from the four
+direction probes' runtime reports (all green, exit 0); `0` remains the
+UNMEASURED sentinel and every runtime decision that consults an unmeasured
+cell refuses with a named reason naming its probe - a step whose direction
+semantics cannot be established fails and never reports `created`.
 
 | Constant | Meaning | Evidence |
 |---|---|---|
-| `TT_EX_DIR_TRUE_SIDE` | `FeatureExtrusion2`'s `Dir=True` sends material toward `TT * n_sk` (the profile sketch normal) | probe-extrudedir (`dir-true`/`dir-false`; bounding box + D1 identity) |
-| `TT_EX_FIRST_SIDE` | with the two-sided call shape (`Dir=False`), the first depth argument's end sits toward `TT * n_sk` | probe-twosided (unequal box extents + D1/D2 identities) |
-| `TT_EX_THROUGH_ALL_DIR` | the through-all call shape's `Dir=True` reading | probe-throughall; its own interpretation contract allows an INCONCLUSIVE result (no bounded material in a fresh part; the side is never inferred from the blind cases), in which case through-all extrudes refuse with a named reason |
-| `TT_REV_SENSE` | with the blind revolve call shape (`ReverseDir=False`), the sweep is the right-hand rotation by `+angle` about the drawn axis direction (start to end) when `+1`, about the opposite direction when `-1` | probe-revolvedir (`blind-270-normal`/`blind-270-reverse`; mass-property centroid + volume; the axis endpoint order is pinned as evidence) |
-| `TT_REV_TWO_FIRST_SIDE` | with the two-sided revolve call shape (`ReverseDir=False`), the first angle sweeps with right-hand sense `TT` about the drawn axis direction | probe-revolvedir (`twosided-100-150`; centroid + D1/D2 identities) |
-| `TT_REV_DIR_LAW` | the structural law the two rows above are read under (`1` = the right-hand rule about the drawn axis direction) | **not** filled from the four probes alone (they run one frame and one directed axis): set from the sweep-direction seat-acceptance check or a discriminating probe. Directional revolves refuse with a named reason while it is `0`, even when the sense constants are filled |
+| `TT_EX_DIR_TRUE_SIDE = -1` | `FeatureExtrusion2`'s `Dir=True` sends material toward TT * n_sk | probe-extrudedir: Dir=True put the blind 0.012 m box at x in [-0.012, 0] on the verified Front frame (n_sk = +X) = MINUS the normal; Dir=False at [0, 0.012]; D1 identity in SI metres |
+| `TT_EX_FIRST_SIDE = +1` | with the two-sided call shape (`Dir=False`), the first depth argument's end sits toward TT * n_sk | probe-twosided: first 0.010 / second 0.030 put the box at x in [-0.03, 0.01] - the FIRST end on the PLUS normal side; D1 = 0.010, D2 = 0.030 confirm argument identity |
+| `TT_EX_THROUGH_ALL_DIR = -1` | the through-all call shape's `Dir=True` reading | probe-throughall, measured directly (its own cases, never inferred from blind): Dir=True gave x in [-1, 0], Dir=False [0, 1] - through-all obeys the Dir flag like blind. The probe's contract allowed an inconclusive result; the fresh part produced measurable bodies both ways. No D1 dimension exists on a through-all feature |
+| `TT_REV_SENSE = +1` | with the blind revolve call shape (`ReverseDir=False`), the sweep is the right-hand rotation by +angle about the drawn axis direction (start to end) when +1 | probe-revolvedir blind-270 cases: ReverseDir=False's centroid at (u,n) = (-0.0046, -0.0046) = mid-angle -135 deg = toward MINUS the normal first = right-hand +angle about the drawn +t axis (t_hat x u_hat = -n_hat); ReverseDir=True mirrored. Centroids via MassProperty `centerofmass` (American spelling; `centreofmass` raises 438) |
+| `TT_REV_TWO_FIRST_SIDE = +1` | with the two-sided revolve call shape (`ReverseDir=False`), the first angle sweeps with right-hand sense TT about the drawn axis direction | probe-revolvedir twosided-100-150: D1 = 100 deg, D2 = 150 deg (radian identities), centroid at mid-angle +24.6 deg -> span [-100, +150]: the first angle on the MINUS-normal side = the same right-hand +angle sense as the blind form (two independent measurements agreeing) |
+| `TT_REV_PROBE_CHIRALITY = -1` | the evidence-scope gate: the configuration chirality sign((drawn axis direction x profile radial side) . sketch normal) the probe establishes | probe-revolvedir's pinned setup: drawn axis (0,-0.010)->(0,0.080) = +t, profile on the +u side, n_sk = +X -> (t_hat x u_hat).n_hat = -1 |
+
+The revolve rows are read under two candidate structural laws (the flag
+selects an absolute side in units of the normal, or a right-hand sense
+about the drawn axis direction): the four probe cases share one frame and
+one directed axis and cannot distinguish them. The two readings produce
+**identical flags** exactly where the configuration chirality `gMapSide *
+sigma` equals `TT_REV_PROBE_CHIRALITY` - that scope is the executable
+gate (the plan review's evidence-scoped restriction): directional revolve
+forms (blind partial, two-sided) run there under either law and refuse
+with a named reason outside it. Full turns and mid-plane forms are
+direction-free and consult no cell. The sweep-direction seat-acceptance
+check remains the outer guard for the residual structural hypotheses
+(e.g. whether the flag follows the drawn endpoint order or a
+host-canonicalized axis direction).
 
 Source-side rules the adaptation applies on top of the constants
 (source-pinned from SolidCraft's own sources):
@@ -319,14 +333,19 @@ Source-side rules the adaptation applies on top of the constants
   the interval `[-angle2, +angle]` - `angle` on the normal side, `angle2`
   "turned back from the profile" - so BOTH angles must be positive and a
   signed combination is refused before feature creation, never folded into
-  an opposite-sided pair; symmetric splits the (total) angle either side
-  "whichever way the axis points"; a full turn (360 deg) is
-  convention-free and consults no cell.
+  an opposite-sided pair; symmetric splits the angle either side "whichever
+  way the axis points"; a full turn (360 deg) is convention-free and
+  consults no cell.
 - **Direction-free forms**: symmetric (mid-plane) extrude and revolve and
   full-turn revolves span both sides, so no direction decision exists -
-  their builders never consult the truth table (and their single argument
-  is the total depth/angle: the documented mid-plane call shape,
-  checkpoint-pending and probe-confirmable).
+  their builders never consult the truth table. Their single argument is
+  the total depth/angle: the mid-plane revolve's TOTAL reading is now
+  evidence-confirmed (probe-revolvedir `midplane-270`: the volume equals
+  the blind 270 deg case exactly - 8.4823e-05 - and D1 read back the
+  passed 270 deg, so the mid-plane angle is the whole turn, matching the
+  documented call shape); the symmetric extrude's mid-plane depth scale
+  rests on the same documented semantics with its D1 echo readback - no
+  probe case covers it (recorded gap).
 
 ## Revolve (tracer phase)
 

@@ -30,12 +30,12 @@ Dim regSign(0 To 0) As Double
 ' Each constant comes from a direction probe's runtime report (corpus/
 ' compat-probe); 0 = UNMEASURED and every decision that consults it
 ' refuses with a named reason - never a silent guess, never 'created'.
-Const TT_EX_DIR_TRUE_SIDE As Long = 0      ' probe-extrudedir: Dir=True sends material toward TT * the sketch normal
-Const TT_EX_FIRST_SIDE As Long = 0         ' probe-twosided: the first depth's end sits toward TT * the sketch normal (Dir=False call shape)
-Const TT_EX_THROUGH_ALL_DIR As Long = 0    ' probe-throughall: the through-all Dir=True reading (its contract allows inconclusive)
-Const TT_REV_SENSE As Long = 0             ' probe-revolvedir: ReverseDir=False sweeps the right-hand +angle sense about the drawn axis when +1
-Const TT_REV_TWO_FIRST_SIDE As Long = 0    ' probe-revolvedir: the two-sided first angle sweeps right-hand sense TT about the drawn axis
-Const TT_REV_DIR_LAW As Long = 0           ' the structural law (1 = right-hand rule about the drawn axis): accepted from seat evidence, never from the probes alone
+Const TT_EX_DIR_TRUE_SIDE As Long = -1      ' probe-extrudedir: Dir=True sends material toward TT * the sketch normal
+Const TT_EX_FIRST_SIDE As Long = 1         ' probe-twosided: the first depth's end sits toward TT * the sketch normal (Dir=False call shape)
+Const TT_EX_THROUGH_ALL_DIR As Long = -1    ' probe-throughall: the through-all Dir=True reading (measured directly; its inconclusive branch did not occur)
+Const TT_REV_SENSE As Long = 1             ' probe-revolvedir: ReverseDir=False sweeps the right-hand +angle sense about the drawn axis when +1
+Const TT_REV_TWO_FIRST_SIDE As Long = 1    ' probe-revolvedir: the two-sided first angle sweeps right-hand sense TT about the drawn axis
+Const TT_REV_PROBE_CHIRALITY As Long = -1   ' the configuration chirality the revolve evidence establishes (probe-revolvedir: one directed axis and one profile side)
 Dim feat1 As SldWorks.Feature
 Dim feat2 As SldWorks.Feature
 Dim skName0 As String
@@ -580,7 +580,7 @@ Function BuildRevolve1() As String
     Dim ax As Object
     Dim revFlag As Boolean
     If Not gMapValid(0) Then gMsg = "frame adaptation: the profile sketch carries no valid adaptation map; refusing to report created": GoTo ExFail
-    If TT_REV_DIR_LAW <> 1 Then gMsg = "the revolve sweep-direction law is not established: probe-revolvedir measures one frame and one directed axis, and the right-hand-rule law has not been accepted from seat evidence (TT_REV_DIR_LAW); refusing to report created": GoTo ExFail
+    If gMapSide(0) * -1 <> TT_REV_PROBE_CHIRALITY Then gMsg = "the revolve sweep-direction evidence is scoped to the probe's configuration chirality (probe-revolvedir: one directed axis and one profile side); this map orientation and profile side are outside it and the candidate sweep laws disagree there; refusing to report created": GoTo ExFail
     If TT_REV_SENSE = 0 Then gMsg = "the revolve sweep-direction truth table is unmeasured: probe-revolvedir has not established which side ReverseDir=False sweeps toward; refusing to report created": GoTo ExFail
     revFlag = (TT_REV_SENSE <> -1)
     ok = swDoc.Extension.SelectByID2(skName0, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
