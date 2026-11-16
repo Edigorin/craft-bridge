@@ -72,3 +72,18 @@ with cross-references (`tracer-prim`), the five modification families
 (`tracer-mod`), and mirrors with live seed bindings (`tracer-pat`). Fallback
 paths are exercised in the build tests with packed boundary and final
 snapshots. Anything the seat reports as a correction becomes a new fixture.
+
+## Runner quirks (measured on the seat)
+
+- `RunMacro2` raises "Type mismatch" on this seat **on every invocation**,
+  successful or not - it is unusable and only the legacy `RunMacro` return
+  value is the invocation gate (`tools/run-macro.vbs` falls back
+  automatically). Do not read the "RunMacro2 failed" line as a diagnosis.
+- A macro that fails to **compile** shows up as: RunMacro returns failure,
+  exit code 6 from the runner, and **no runtime report at all** (the report
+  file is only created once `main` runs). Bisect with committed compile
+  probes under `corpus/compat-probe/` (the `probe-ck*` series did exactly
+  this for the `sgn` identifier defect).
+- VBA intrinsic names (`Sgn`, `Val`, `Mid`, ...) cannot be identifiers:
+  `Dim sgn As Double` is a compile error. Enforced offline by
+  `no_identifier_shadows_a_vba_intrinsic` (tests/build_tests.rs).

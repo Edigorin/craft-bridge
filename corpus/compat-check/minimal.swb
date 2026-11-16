@@ -66,7 +66,7 @@ Sub main()
     Dim compS As Double
     Dim compT As Double
     Dim created As Double
-    Dim sgn As Double
+    Dim signVal As Double
     Dim lengthNow As Double
     stepIdx = -1
     On Error GoTo Fail
@@ -147,20 +147,20 @@ Sub main()
     ' either sign. The resolved sign goes into the assigned value so later
     ' edits keep tracking.
     If Abs(created - 0.05) <= 0.000001 Then
-        sgn = 1#
+        signVal = 1#
     ElseIf Abs(created + 0.05) <= 0.000001 Then
-        sgn = -1#
+        signVal = -1#
     Else
         Err.Raise vbObjectError + 524, "minimal.swb", "the dimension measures " & Trim(Str(created)) & " but the source value is 0.05"
     End If
-    dp.SystemValue = sgn * 0.05
+    dp.SystemValue = signVal * 0.05
     swDoc.ClearSelection2 True
     ' Behavioural kind evidence: the value edit must carry the geometry.
     v = ln.GetStartPoint
     v2 = ln.GetEndPoint
     lengthNow = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))
     If Abs(lengthNow - 0.05) > 0.000001 Then Err.Raise vbObjectError + 527, "minimal.swb", "the value edit did not carry the geometry: length " & Trim(Str(lengthNow))
-    WriteStep stepIdx, "sketch.dimension", "created", "length = 0.05 m; kind verified against the projection; sign " & Trim(Str(sgn))
+    WriteStep stepIdx, "sketch.dimension", "created", "length = 0.05 m; kind verified against the projection; sign " & Trim(Str(signVal))
 
     ' ---- step 3: edit-and-follow (acceptance check) ----
     stepIdx = 3

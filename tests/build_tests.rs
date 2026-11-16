@@ -901,11 +901,11 @@ fn checkpoint_carries_the_map_and_classification_treatment() {
         "the dimension kind is not verified"
     );
     assert!(
-        checkpoint.contains("sgn = 1#") && checkpoint.contains("sgn = -1#"),
+        checkpoint.contains("signVal = 1#") && checkpoint.contains("signVal = -1#"),
         "the sign is not resolved"
     );
     assert!(
-        checkpoint.contains("dp.SystemValue = sgn * 0.05"),
+        checkpoint.contains("dp.SystemValue = signVal * 0.05"),
         "the resolved sign is not carried by the value"
     );
     // The geometry is diagonal, so every dimension kind measures a
@@ -1550,12 +1550,12 @@ fn dims_verify_kind_and_resolve_signs_in_the_equation() {
         "the length kind is not verified against the projection"
     );
     // Sign resolution covers both signs and fails closed on neither.
-    assert!(region.contains("sgn = 1#") && region.contains("sgn = -1#"));
+    assert!(region.contains("signVal = 1#") && region.contains("signVal = -1#"));
     assert!(region.contains("but the source value is"));
     // The sign lives in the equation RHS and the expected value - never only
     // in the initial SystemValue - so parameter edits keep tracking.
     assert!(
-        region.contains("AddDimEquation(dm, \"40mm\", sgn * 0.04, 0, sgn)"),
+        region.contains("AddDimEquation(dm, \"40mm\", signVal * 0.04, 0, signVal)"),
         "the equation does not carry the runtime sign"
     );
     assert!(
@@ -1737,6 +1737,98 @@ fn distance_dims_refuse_ambiguous_kinds_and_verify_behaviour() {
         text.contains("non-permutation map"),
         "the omission path lost its named reason"
     );
+}
+
+#[test]
+fn no_identifier_shadows_a_vba_intrinsic() {
+    // Seat-proven compile rule: a VBA intrinsic name cannot be an
+    // identifier - `Dim sgn As Double` is a compile error that RunMacro
+    // reports only as a bare failure with no report (bisected 2026-11-16).
+    const INTRINSICS: &[&str] = &[
+        "sgn", "abs", "val", "mid", "left", "right", "len", "asc", "chr", "instr", "date", "time",
+        "now", "timer", "format", "string", "array", "filter", "split", "join", "lcase", "ucase",
+        "trim", "str", "fix", "int", "round", "sin", "cos", "tan", "log", "exp", "hex", "oct",
+        "rgb", "environ", "shell", "name", "kill", "width", "spc", "tab", "stop", "line", "open",
+        "close", "input", "print",
+    ];
+    for (name, recipe) in [
+        ("tracer", TRACER),
+        ("stop-rule", TRACER_STOP),
+        ("revolve", TRACER_REVOLVE),
+        ("primitives", TRACER_PRIM),
+        ("modifications", TRACER_MOD),
+        ("patterns", TRACER_PAT),
+    ] {
+        let case = Case::new(recipe);
+        case.build_to("intrinsics.swb", false).unwrap();
+        let text = fs::read_to_string(case.dir.path().join("intrinsics.swb")).unwrap();
+        assert_no_intrinsic_shadowing(&text, name);
+    }
+    assert_no_intrinsic_shadowing(
+        include_str!("../corpus/compat-check/minimal.swb"),
+        "checkpoint",
+    );
+}
+
+fn assert_no_intrinsic_shadowing(text: &str, what: &str) {
+    const INTRINSICS: &[&str] = &[
+        "sgn", "abs", "val", "mid", "left", "right", "len", "asc", "chr", "instr", "date", "time",
+        "now", "timer", "format", "string", "array", "filter", "split", "join", "lcase", "ucase",
+        "trim", "str", "fix", "int", "round", "sin", "cos", "tan", "log", "exp", "hex", "oct",
+        "rgb", "environ", "shell", "name", "kill", "width", "spc", "tab", "stop", "line", "open",
+        "close", "input", "print",
+    ];
+    let mut check = |name: &str, at: usize| {
+        assert!(
+            !INTRINSICS.contains(&name.to_lowercase().as_str()),
+            "{what}: identifier {name} shadows a VBA intrinsic (line {at})"
+        );
+    };
+    for (i, line) in text.lines().enumerate() {
+        let t = line.trim();
+        let up = t.to_uppercase();
+        if up.starts_with("DIM ") || up.starts_with("CONST ") {
+            for part in t[4..].split(',') {
+                if let Some(m) = part.split_whitespace().next() {
+                    let name = m.split('(').next().unwrap_or("");
+                    if !name.is_empty() {
+                        check(name, i + 1);
+                    }
+                }
+            }
+        }
+        for kw in ["FUNCTION ", "SUB "] {
+            if up.starts_with(kw) {
+                if let Some(m) = t[kw.len()..].split('(').next() {
+                    let name = m.trim();
+                    if !name.is_empty() {
+                        check(name, i + 1);
+                    }
+                }
+                if let Some(plist) = t.split('(').nth(1) {
+                    for p in plist.split(',') {
+                        // The parameter NAME is the first non-keyword token;
+                        // the type follows "As".
+                        for tok in p.trim().split_whitespace() {
+                            let low = tok.to_lowercase();
+                            if low == "byval"
+                                || low == "byref"
+                                || low == "optional"
+                                || low == "paramarray"
+                            {
+                                continue;
+                            }
+                            let name = tok.trim_end_matches(')').trim();
+                            if !name.is_empty() {
+                                check(name, i + 1);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Structural scan over emitted VBA: substring tests cannot catch a fused

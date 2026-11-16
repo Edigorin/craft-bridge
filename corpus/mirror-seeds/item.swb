@@ -339,7 +339,7 @@ Function Dims0() As Boolean
     Dim proj As Double
     Dim other As Double
     Dim created As Double
-    Dim sgn As Double
+    Dim signVal As Double
     Dim sT As Double
     Dim tT As Double
     Dim mx As Double
@@ -1312,14 +1312,14 @@ End Function
 ' Add an equation driving a dimension and verify it evaluated: the
 ' dimension name is captured at runtime, the value must match the
 ' expectation after a rebuild. Never presence alone.
-Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long, ByVal sgn As Double) As Boolean
+Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long, ByVal signVal As Double) As Boolean
 On Error GoTo EqFail
 Dim eqMgr As Object
 Dim eqText As String
 Dim idx As Long
 Set eqMgr = swDoc.GetEquationMgr
 If eqMgr Is Nothing Then gMsg = "the equation manager is missing": GoTo EqFail
-If sgn < 0 Then
+If signVal < 0 Then
 eqText = """" & dm.Name & """=-1 * (" & rhs & ")"
 Else
 eqText = """" & dm.Name & """=" & rhs
@@ -1331,7 +1331,7 @@ If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = "the driven value does no
 
 If eqMgr.Equation(idx) <> eqText Then gMsg = "the stored equation reads back differently": GoTo EqFail
 If slot >= 0 Then regName(slot) = dm.Name
-If slot >= 0 Then regSign(slot) = sgn
+If slot >= 0 Then regSign(slot) = signVal
 AddDimEquation = True
 Exit Function
 EqFail:

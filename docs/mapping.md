@@ -214,7 +214,10 @@ dimension slots carry their sign (`regSign`) and downstream equation
 references normalize back to source semantics through `SlotRef`, so
 parameter edits keep meaning what the source meant. The
 input-dimension-value preference is disabled with a verified readback and
-restored with one at every exit.
+restored with one at every exit. No VBA identifier may shadow an intrinsic
+(`sgn`, `val`, `mid`, ...): `Dim sgn As Double` is a **compile error** that
+the runner reports only as a bare invocation failure with no report -
+regressed by `no_identifier_shadows_a_vba_intrinsic`.
 
 **Solve verification (runtime):** after relations and driving dimensions are
 added, the macro reads the solved geometry back (line endpoints via
