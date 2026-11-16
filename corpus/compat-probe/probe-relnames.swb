@@ -50,6 +50,7 @@ Sub main()
     WriteLine TryCoincident("sgCOINCIDENT")
     WriteLine TryCoincident("sgMERGEPOINTS")
 WrapUp:
+    swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, True
     cleanupMode = CloseMode()
     If cleanupMode = "close" Then
         CloseOwnedDoc closedOk
@@ -75,6 +76,7 @@ Fail:
     errNum = Err.Number
     errMsg = Err.Description
     On Error Resume Next
+    swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, True
     WriteLine "{""type"":""step"",""index"":-1,""command"":""probe"",""status"":""failed"",""message"":""" & JsonStr("err " & Trim(Str(errNum)) & ": " & errMsg) & """}"
     cleanupMode = CloseMode()
     If cleanupMode = "close" Then CloseOwnedDoc closedOk
