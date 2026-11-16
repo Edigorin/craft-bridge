@@ -27,6 +27,7 @@ Dim gProbeLog As String
 Sub main()
     Dim template As String
     Dim closedOk As Boolean
+    Dim closeMode As String
     Dim ok As Boolean
     Dim ln As SketchSegment
     Dim dp As SldWorks.Dimension
@@ -82,7 +83,8 @@ Sub main()
 
     ' ---- done ----
     swSketchMgr.InsertSketch True
-    If CloseAfterRun() Then
+    closeMode = CloseMode()
+    If closeMode = "close" Then
         CloseOwnedDoc closedOk
         If closedOk Then
             WriteLine "{""type"":""summary"",""status"":""ok""}"
@@ -90,9 +92,12 @@ Sub main()
             WriteStep stepIdx, "close", "failed", "the owned document could not be confirmed closed"
             WriteLine "{""type"":""summary"",""status"":""failed""}"
         End If
-    Else
+    ElseIf closeMode = "keep" Then
         WriteStep stepIdx, "owned-document", "kept-open", OwnedDocTitle()
         WriteLine "{""type"":""summary"",""status"":""ok""}"
+    Else
+        WriteStep stepIdx, "close-mode", "failed", "the cleanup mode could not be established"
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
     End If
     Exit Sub
 
@@ -105,10 +110,13 @@ Fail:
     If reportPath = "" Then reportPath = ReportPathFromHost()
     If reportPath <> "" Then
         WriteStep stepIdx, "macro", "failed", "err " & Trim(Str(errNum)) & ": " & errMsg
-        WriteLine "{""type"":""summary"",""status"":""failed""}"
     End If
-    If CloseAfterRun() Then
+    closeMode = CloseMode()
+    If closeMode = "close" Then
         CloseOwnedDoc closedOk
+    End If
+    If reportPath <> "" Then
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
     End If
 End Sub
 
@@ -145,6 +153,7 @@ End Sub
 Sub CloseOwnedDoc(ByRef closedOk As Boolean)
     Dim exact As String
     Dim d As Object
+    Dim t2 As String
     Dim cnt As Long
     Dim isOurs As Boolean
     On Error Resume Next
@@ -158,31 +167,69 @@ Sub CloseOwnedDoc(ByRef closedOk As Boolean)
     If Err.Number <> 0 Then Exit Sub
     If Trim(exact) = "" Then Exit Sub
     Err.Clear
-    cnt = 0
-    isOurs = False
     Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
     Do While Not d Is Nothing
-        If d.GetTitle = exact Then
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then
             cnt = cnt + 1
             If d Is swDoc Then isOurs = True
         End If
+        Err.Clear
         Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
     Loop
-    If Err.Number <> 0 Then Exit Sub
     If cnt <> 1 Or Not isOurs Then Exit Sub
     Err.Clear
     swApp.CloseDoc exact
     If Err.Number <> 0 Then Exit Sub
     Err.Clear
-    cnt = 0
     Set d = swApp.GetFirstDocument
-    Do While Not d Is Nothing
-        If d.GetTitle = exact Then cnt = cnt + 1
-        Set d = d.GetNext
-    Loop
     If Err.Number <> 0 Then Exit Sub
+    cnt = 0
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then cnt = cnt + 1
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
     If cnt = 0 Then closedOk = True
 End Sub
+
+Function CloseMode() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim ok As Boolean
+    CloseMode = "unknown"
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p = "" Then Exit Function
+    p = p & "\craft-bridge-report-path.txt"
+    Err.Clear
+    f = FreeFile
+    Open p For Input As #f
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    Line Input #f, oneLine
+    ok = (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    ok = ok And (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    Close #f
+    If Not ok Then Exit Function
+    If Trim(oneLine) = "close-after-run" Then CloseMode = "close" Else CloseMode = "keep"
+End Function
+
+Function OwnedDocTitle() As String
+    On Error Resume Next
+    OwnedDocTitle = ""
+    If swDoc Is Nothing Then Exit Function
+    OwnedDocTitle = "" & swDoc.GetTitle
+End Function
 
 ' The report path travels in a one-line file under the TEMP directory that
     ' the host rewrites before every run: preferred over CRAFT_BRIDGE_REPORT,

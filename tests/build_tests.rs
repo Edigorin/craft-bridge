@@ -1139,10 +1139,11 @@ fn report_path_prefers_the_fresh_path_file_over_the_environment() {
 
 #[test]
 fn runs_close_their_own_document_by_coordinated_sequencing() {
-    // The owner rule: runs leave no documents open. Smoke runs carry a
-    // close-after-run flag and the macro closes its own document; harness
-    // runs keep it open for acceptance checking and check-part.vbs closes
-    // it after the checks. Never a close-all.
+    // The owner rule: runs leave no documents open - by coordinated
+    // sequencing, never a close-all. Smoke runs carry a close-after-run
+    // authorization (consumed after the run) and the macro closes its own
+    // document; harness runs keep the part open and check-part.vbs closes
+    // exactly the run-bound handed-off title after the checks.
     let case = Case::new(TRACER);
     case.build_to("closecheck.swb", false).unwrap();
     let generated = fs::read_to_string(case.dir.path().join("closecheck.swb")).unwrap();
@@ -1158,8 +1159,12 @@ fn runs_close_their_own_document_by_coordinated_sequencing() {
             "{name}: no owned-document closer"
         );
         assert!(
-            text.contains("CloseAfterRun()"),
-            "{name}: the close is not flag-scoped"
+            text.contains("Function CloseMode()"),
+            "{name}: no close-mode reader"
+        );
+        assert!(
+            text.contains("Function OwnedDocTitle()"),
+            "{name}: no owned-title reporter"
         );
         assert!(
             text.contains("If cnt <> 1 Or Not isOurs Then Exit Sub"),
@@ -1169,24 +1174,40 @@ fn runs_close_their_own_document_by_coordinated_sequencing() {
     let smoke = include_str!("../tools/seat-smoke.ps1");
     assert!(
         smoke.contains("\"close-after-run\""),
-        "the smoke run does not carry the close flag"
+        "the smoke run does not carry the close authorization"
+    );
+    assert!(
+        smoke.contains("Set-Content -Path $pathFile -Value @($reportPath, $macroDir)"),
+        "the close authorization is not consumed after the run"
     );
     let checker = include_str!("../tools/check-part.vbs");
     assert!(
-        checker.contains("check:close:=pass"),
-        "the checker does not close the checked document"
+        checker.contains("ownedTitle = WScript.Arguments(3)"),
+        "the checker takes no run-bound handoff"
+    );
+    assert!(
+        checker.contains("closeTitle = ownedTitle"),
+        "the checker does not close the handed-off title"
+    );
+    assert!(
+        checker.contains("the active document is not the handed-off owned document"),
+        "the checker does not verify the handoff before checking"
+    );
+    let harness = include_str!("../tools/seat-harness.ps1");
+    assert!(
+        harness.contains("\"command\":\"owned-document\""),
+        "the harness does not read the handoff"
     );
 }
 
-/// Structural scan over emitted VBA: the substring tests cannot catch a
-/// fused statement line (a lost newline turns a block If into a single-line
-/// one and orphans the later End If) or a duplicate declaration in a scope.
+/// Structural scan over emitted VBA: substring tests cannot catch a fused
+/// statement line (a lost newline turns a block If into a single-line one
+/// and orphans the later End If) or a duplicate declaration in a scope.
 fn assert_vba_structure(text: &str, what: &str) {
     let mut block_ifs = 0i32;
     let mut end_ifs = 0i32;
     let mut procs = 0i32;
     let mut end_procs = 0i32;
-    let mut current: Vec<String> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for line in text.lines() {
         let mut code = String::new();
@@ -1211,13 +1232,9 @@ fn assert_vba_structure(text: &str, what: &str) {
         }
         let t = code.trim();
         let up = t.to_uppercase();
-        // scope bookkeeping
         if up.starts_with("FUNCTION ") || up.starts_with("SUB ") {
             procs += 1;
             seen.clear();
-            for name in current.drain(..) {
-                let _ = name;
-            }
         }
         if up.starts_with("END FUNCTION") || up.starts_with("END SUB") {
             end_procs += 1;
@@ -1233,9 +1250,6 @@ fn assert_vba_structure(text: &str, what: &str) {
                 }
             }
         }
-        // block-If accounting: a line whose code ends with THEN opens a
-        // block; a fused line (statements after Then) does not - and then
-        // its later End If is orphaned, which this count exposes.
         if up.starts_with("IF ") && up.ends_with("THEN") {
             block_ifs += 1;
         }

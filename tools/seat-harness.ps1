@@ -87,7 +87,14 @@ foreach ($item in $items) {
         # removed first and an empty or malformed one is a failure.
         $checkOut = Join-Path $ReportDir "$name-checks.txt"
         Move-SeatEvidenceAside -Path $checkOut | Out-Null
-        $r = Invoke-SeatCommand -FilePath "cscript" -ArgumentList @("//nologo", (Join-Path $PSScriptRoot "check-part.vbs"), $expect, $stepRef, $checkOut) -TimeoutSeconds 300
+        $ownedTitle = ""
+        foreach ($ln in Get-Content $itemReport) {
+            if ($ln -match '"command":"owned-document"' -and $ln -match '"message":"([^"]*)"') {
+                $ownedTitle = $Matches[1]
+            }
+        }
+        if (-not $ownedTitle) { throw "${name}: the macro reported no owned-document handoff; nothing will be closed" }
+        $r = Invoke-SeatCommand -FilePath "cscript" -ArgumentList @("//nologo", (Join-Path $PSScriptRoot "check-part.vbs"), $expect, $stepRef, $checkOut, $ownedTitle) -TimeoutSeconds 300
         $r.StdOut | Set-Content (Join-Path $ReportDir "$name-check.log")
         $r.StdErr | Set-Content (Join-Path $ReportDir "$name-check.err.log")
         if ($r.TimedOut) {

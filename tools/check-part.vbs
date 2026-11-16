@@ -2,18 +2,26 @@
 ' against an expect file, and against the STEP reference body's mass
 ' properties. Invoked only by tools/seat-harness.ps1.
 '
-' Usage: cscript //nologo check-part.vbs <expect-file> <step-reference> <out-file>
+' Usage: cscript //nologo check-part.vbs <expect-file> <step-reference> <out-file> <owned-title>
+' The owned title is the run-bound handoff from the macro's report: the
+' only document this checker will ever close. It is never guessed from
+' whatever happens to be active.
 ' Expect file lines: feature:<name>=<kind>, dim:<name>=<metres>, volume_tol=<rel>
 ' Output file lines: check:<name>=pass|fail, detail:<name>=<text>, volume:<side>=<value>
 Option Explicit
-Dim swApp, swDoc, expectPath, stepPath, outPath, f, line, parts
-If WScript.Arguments.Count < 3 Then
-  WScript.Echo "usage: check-part.vbs <expect> <step-reference> <out>"
+Dim swApp, swDoc, expectPath, stepPath, outPath, ownedTitle, f, line, parts
+If WScript.Arguments.Count < 4 Then
+  WScript.Echo "usage: check-part.vbs <expect> <step-reference> <out> <owned-title>"
   WScript.Quit 4
 End If
 expectPath = WScript.Arguments(0)
 stepPath = WScript.Arguments(1)
 outPath = WScript.Arguments(2)
+ownedTitle = WScript.Arguments(3)
+If Trim(ownedTitle) = "" Then
+  WScript.Echo "error: empty owned-title handoff; nothing will be checked or closed"
+  WScript.Quit 4
+End If
 
 On Error Resume Next
 Set swApp = CreateObject("SldWorks.Application")
@@ -24,6 +32,12 @@ End If
 Set swDoc = swApp.ActiveDoc
 If swDoc Is Nothing Then
   WScript.Echo "error: no active document (the macro run must leave the part open)"
+  WScript.Quit 5
+End If
+' The active document must be the handed-off one: the checks run on it and
+' the close below targets the handoff by name. A mismatch refuses both.
+If swDoc.GetTitle <> ownedTitle Then
+  WScript.Echo "error: the active document is not the handed-off owned document"
   WScript.Quit 5
 End If
 
@@ -166,17 +180,16 @@ Do Until f.AtEndOfStream
 Loop
 f.Close
 
-' The owner rule: runs leave no documents open. This checker's document is
-' the item's rebuilt part: close exactly it, after every check, and verify
-' the close by a live enumeration. An empty title or an ambiguous title is
-' refused: a name-based close would hit whatever is active.
-Dim closeTitle, d, cnt, isOurs
-closeTitle = ""
-Err.Clear
-closeTitle = swDoc.GetTitle
-If Err.Number <> 0 Or Trim(closeTitle) = "" Then
+' The owner rule: runs leave no documents open. Close exactly the
+' handed-off document - the run-bound title from the macro's report, never
+' whatever is active - and verify the close by a live enumeration. An
+' empty or ambiguous title is refused; every enumeration call is checked
+' immediately and any failure leaves the close unverified.
+Dim closeTitle, d, t2, cnt, isOurs
+closeTitle = ownedTitle
+If Trim(closeTitle) = "" Then
   outFile.WriteLine "check:close:=fail"
-  outFile.WriteLine "detail:close:=title lookup failed; nothing closed"
+  outFile.WriteLine "detail:close:=empty handoff; nothing closed"
   outFile.Close
   WScript.Quit 1
 End If
@@ -184,27 +197,34 @@ cnt = 0
 isOurs = False
 Err.Clear
 Set d = swApp.GetFirstDocument
-Do While Not d Is Nothing
-  If Err.Number <> 0 Then
-    outFile.WriteLine "check:close:=fail"
-    outFile.Close
-    WScript.Quit 1
-  End If
-  If d.GetTitle = closeTitle Then
-    cnt = cnt + 1
-    If d Is swDoc Then isOurs = True
-  End If
-  Err.Clear
-  Set d = d.GetNext
-Loop
 If Err.Number <> 0 Then
   outFile.WriteLine "check:close:=fail"
   outFile.Close
   WScript.Quit 1
 End If
+Do While Not d Is Nothing
+  Err.Clear
+  t2 = d.GetTitle
+  If Err.Number <> 0 Then
+    outFile.WriteLine "check:close:=fail"
+    outFile.Close
+    WScript.Quit 1
+  End If
+  If t2 = closeTitle Then
+    cnt = cnt + 1
+    If d Is swDoc Then isOurs = True
+  End If
+  Err.Clear
+  Set d = d.GetNext
+  If Err.Number <> 0 Then
+    outFile.WriteLine "check:close:=fail"
+    outFile.Close
+    WScript.Quit 1
+  End If
+Loop
 If cnt <> 1 Or Not isOurs Then
   outFile.WriteLine "check:close:=fail"
-  outFile.WriteLine "detail:close:=the title does not identify exactly the checked document"
+  outFile.WriteLine "detail:close:=the handoff does not identify exactly the checked document"
   outFile.Close
   WScript.Quit 1
 End If
@@ -218,12 +238,29 @@ End If
 cnt = 0
 Err.Clear
 Set d = swApp.GetFirstDocument
+If Err.Number <> 0 Then
+  outFile.WriteLine "check:close:=fail"
+  outFile.Close
+  WScript.Quit 1
+End If
 Do While Not d Is Nothing
-  If d.GetTitle = closeTitle Then cnt = cnt + 1
+  Err.Clear
+  t2 = d.GetTitle
+  If Err.Number <> 0 Then
+    outFile.WriteLine "check:close:=fail"
+    outFile.Close
+    WScript.Quit 1
+  End If
+  If t2 = closeTitle Then cnt = cnt + 1
   Err.Clear
   Set d = d.GetNext
+  If Err.Number <> 0 Then
+    outFile.WriteLine "check:close:=fail"
+    outFile.Close
+    WScript.Quit 1
+  End If
 Loop
-If Err.Number <> 0 Or cnt <> 0 Then
+If cnt <> 0 Then
   outFile.WriteLine "check:close:=fail"
   outFile.Close
   WScript.Quit 1

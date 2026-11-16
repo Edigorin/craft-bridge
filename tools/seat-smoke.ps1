@@ -104,8 +104,10 @@ if (-not $complete) {
     Get-ChildItem $reportDirFull | Out-String | Add-Content (Join-Path $reportDirFull "smoke-log.txt")
     throw "the runtime report is truncated: no summary line (macro crashed or is still running)"
 }
-# The path file is left in place: the seat runs no delete commands, and
-# every run overwrites it before use.
+# The close-after-run authorization is consumed here: the path file is
+# rewritten with only its two stable lines, so a later manual replay can
+# never inherit this run's close instruction. No deletion, only rewrite.
+Set-Content -Path $pathFile -Value @($reportPath, $macroDir)
 
 # ---- check the report ----
 $created = 0; $degraded = 0; $failed = 0; $notExecuted = 0; $steps = 0; $summaryStatus = "?"

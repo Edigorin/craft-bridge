@@ -283,14 +283,23 @@ explicit message rather than guessing a conversion.
 
 **Document cleanup (runtime):** the owner rule (2026-11-16) is that test
 runs leave no documents open - by coordinated sequencing, never a
-close-all. Smoke runs carry `close-after-run` on the third line of the
-host path file and the macro closes its own document at the end. Harness
-runs leave the flag absent: acceptance checking needs the part open, and
-`tools/check-part.vbs` closes exactly the document it checked after the
-last check. Either closer refuses an empty or ambiguous title before the
-name-based close (a live enumeration must find exactly one open document
-answering to the captured title and it must be the macro's own object),
-uses the exact returned title, verifies the close by the same enumeration
-showing absence, and treats every query failure as an unverified failure.
-An unverified close fails the run.
+close-all, and the authorization to close is bound to the current
+invocation. Smoke runs write `close-after-run` on the third line of the
+host path file and the macro closes its own document at the end; the
+authorization is consumed when the run rewrites the path file back to its
+two stable lines, so a later manual replay can never inherit it. Harness
+runs leave the flag absent: acceptance checking needs the part open. The
+macro always reports its owned title, and the harness hands exactly that
+run-bound title to `tools/check-part.vbs`, which closes it after the last
+check and refuses to close anything else - never falling back to whatever
+is active. The macro's close mode is tri-state: `close`, `keep`, or
+`unknown`; an unknown mode (an unreadable path file) reports a failed
+close-mode step and a failed summary rather than silently keeping open.
+Every closer refuses an empty or ambiguous title before the name-based
+close (a live enumeration must find exactly one open document answering to
+the captured title and it must be the macro's own object), uses the exact
+returned title, checks every enumeration call immediately and stops as
+unverified on any failure, verifies the close by the same enumeration
+showing absence, and reports refusals as failures. An unverified close
+fails the run.
 

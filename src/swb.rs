@@ -240,7 +240,7 @@ pub fn emit(
 
     // ---- main ----
     out.push_str("Sub main()\n");
-    out.push_str("    Dim template As String\n    Dim ok As Boolean\n    Dim st As String\n    Dim stopModel As Boolean\n    Dim stepIdx As Long\n    Dim closedOk As Boolean\n");
+    out.push_str("    Dim template As String\n    Dim ok As Boolean\n    Dim st As String\n    Dim stopModel As Boolean\n    Dim stepIdx As Long\n    Dim closedOk As Boolean\n    Dim closeMode As String\n");
     out.push_str("    stepIdx = -1\n    On Error GoTo Fail\n\n");
     out.push_str("    ' ---- report setup (before any model mutation) ----\n");
     out.push_str("    reportPath = ReportPathFromHost()\n");
@@ -398,7 +398,7 @@ pub fn emit(
         }
     }
 
-    out.push_str("    If CloseAfterRun() Then\n    CloseOwnedDoc closedOk\n    If closedOk Then\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"ok\"\"}\"\n    Else\n    WriteStep stepIdx, \"close\", \"failed\", \"the owned document could not be confirmed closed\"\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"failed\"\"}\"\n    End If\n    Else\n    WriteStep stepIdx, \"owned-document\", \"kept-open\", OwnedDocTitle()\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"ok\"\"}\"\n    End If\n");
+    out.push_str("    closeMode = CloseMode()\n    If closeMode = \"close\" Then\n    CloseOwnedDoc closedOk\n    If closedOk Then\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"ok\"\"}\"\n    Else\n    WriteStep stepIdx, \"close\", \"failed\", \"the owned document could not be confirmed closed\"\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"failed\"\"}\"\n    End If\n    ElseIf closeMode = \"keep\" Then\n    WriteStep stepIdx, \"owned-document\", \"kept-open\", OwnedDocTitle()\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"ok\"\"}\"\n    Else\n    WriteStep stepIdx, \"close-mode\", \"failed\", \"the cleanup mode could not be established\"\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"failed\"\"}\"\n    End If\n");
     out.push_str("    Exit Sub\n\n");
     out.push_str("Fail:\n");
     out.push_str("    ' Capture the error FIRST: executing On Error resets Err.\n");
@@ -411,10 +411,7 @@ pub fn emit(
     out.push_str("    If reportPath <> \"\" Then\n");
     out.push_str("        WriteStep stepIdx, \"macro\", \"failed\", \"err \" & Trim(Str(errNum)) & \": \" & errMsg\n");
 
-    out.push_str(
-        "        WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"failed\"\"}\"\n",
-    );
-    out.push_str("    End If\n    If CloseAfterRun() Then\n    CloseOwnedDoc closedOk\n    End If\nEnd Sub\n\n");
+    out.push_str("    End If\n    closeMode = CloseMode()\n    If closeMode = \"close\" Then\n    CloseOwnedDoc closedOk\n    End If\n    If reportPath <> \"\" Then\n        WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"failed\"\"}\"\n    End If\nEnd Sub\n\n");
 
     // ---- per-sketch builders ----
     for (index, sk) in &sketches {
@@ -795,9 +792,10 @@ Loop
 If cnt = 0 Then closedOk = True
 End Sub
 
-Function CloseAfterRun() As Boolean
+Function CloseMode() As String
 Dim p As String, f As Integer, oneLine As String
-CloseAfterRun = False
+Dim ok As Boolean
+CloseMode = \"unknown\"
 On Error Resume Next
 p = Environ$(\"TEMP\")
 If p = \"\" Then Exit Function
@@ -808,13 +806,15 @@ Open p For Input As #f
 If Err.Number <> 0 Then Exit Function
 Err.Clear
 Line Input #f, oneLine
+ok = (Err.Number = 0)
 Err.Clear
-Line Input #f, oneLine
+If ok Then Line Input #f, oneLine
+ok = ok And (Err.Number = 0)
 Err.Clear
-Line Input #f, oneLine
+If ok Then Line Input #f, oneLine
 Close #f
-If Err.Number <> 0 Then Exit Function
-CloseAfterRun = (Trim(oneLine) = \"close-after-run\")
+If Not ok Then Exit Function
+If Trim(oneLine) = \"close-after-run\" Then CloseMode = \"close\" Else CloseMode = \"keep\"
 End Function
 
 Function OwnedDocTitle() As String

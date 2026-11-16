@@ -24,6 +24,7 @@ Sub main()
     Dim stopModel As Boolean
     Dim stepIdx As Long
     Dim closedOk As Boolean
+    Dim closeMode As String
     stepIdx = -1
     On Error GoTo Fail
 
@@ -83,7 +84,8 @@ WriteStep stepIdx, "document.new", "created", "fresh part from the default templ
     WriteStep stepIdx, "timeline.add", st, gMsg
     If st = "failed" Then stopModel = True
 
-    If CloseAfterRun() Then
+    closeMode = CloseMode()
+    If closeMode = "close" Then
     CloseOwnedDoc closedOk
     If closedOk Then
     WriteLine "{""type"":""summary"",""status"":""ok""}"
@@ -91,9 +93,12 @@ WriteStep stepIdx, "document.new", "created", "fresh part from the default templ
     WriteStep stepIdx, "close", "failed", "the owned document could not be confirmed closed"
     WriteLine "{""type"":""summary"",""status"":""failed""}"
     End If
-    Else
+    ElseIf closeMode = "keep" Then
     WriteStep stepIdx, "owned-document", "kept-open", OwnedDocTitle()
     WriteLine "{""type"":""summary"",""status"":""ok""}"
+    Else
+    WriteStep stepIdx, "close-mode", "failed", "the cleanup mode could not be established"
+    WriteLine "{""type"":""summary"",""status"":""failed""}"
     End If
     Exit Sub
 
@@ -108,10 +113,13 @@ Fail:
     If reportPath = "" Then reportPath = ReportPathFromHost()
     If reportPath <> "" Then
         WriteStep stepIdx, "macro", "failed", "err " & Trim(Str(errNum)) & ": " & errMsg
-        WriteLine "{""type"":""summary"",""status"":""failed""}"
     End If
-    If CloseAfterRun() Then
+    closeMode = CloseMode()
+    If closeMode = "close" Then
     CloseOwnedDoc closedOk
+    End If
+    If reportPath <> "" Then
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
     End If
 End Sub
 
@@ -609,9 +617,10 @@ Loop
 If cnt = 0 Then closedOk = True
 End Sub
 
-Function CloseAfterRun() As Boolean
+Function CloseMode() As String
 Dim p As String, f As Integer, oneLine As String
-CloseAfterRun = False
+Dim ok As Boolean
+CloseMode = "unknown"
 On Error Resume Next
 p = Environ$("TEMP")
 If p = "" Then Exit Function
@@ -622,13 +631,15 @@ Open p For Input As #f
 If Err.Number <> 0 Then Exit Function
 Err.Clear
 Line Input #f, oneLine
+ok = (Err.Number = 0)
 Err.Clear
-Line Input #f, oneLine
+If ok Then Line Input #f, oneLine
+ok = ok And (Err.Number = 0)
 Err.Clear
-Line Input #f, oneLine
+If ok Then Line Input #f, oneLine
 Close #f
-If Err.Number <> 0 Then Exit Function
-CloseAfterRun = (Trim(oneLine) = "close-after-run")
+If Not ok Then Exit Function
+If Trim(oneLine) = "close-after-run" Then CloseMode = "close" Else CloseMode = "keep"
 End Function
 
 Function OwnedDocTitle() As String
