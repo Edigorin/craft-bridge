@@ -240,7 +240,7 @@ pub fn emit(
 
     // ---- main ----
     out.push_str("Sub main()\n");
-    out.push_str("    Dim template As String\n    Dim ok As Boolean\n    Dim st As String\n    Dim stopModel As Boolean\n    Dim stepIdx As Long\n");
+    out.push_str("    Dim template As String\n    Dim ok As Boolean\n    Dim st As String\n    Dim stopModel As Boolean\n    Dim stepIdx As Long\n    Dim closedOk As Boolean\n");
     out.push_str("    stepIdx = -1\n    On Error GoTo Fail\n\n");
     out.push_str("    ' ---- report setup (before any model mutation) ----\n");
     out.push_str("    reportPath = ReportPathFromHost()\n");
@@ -292,14 +292,21 @@ pub fn emit(
                 name,
                 equation_rhs,
                 expect_si,
+                dim,
                 ..
             } => {
                 out.push_str("    If Not stopModel Then\n");
+                let eval_scale = match dim {
+                    crate::replay::expr::Dim::Length => "1000#",
+                    crate::replay::expr::Dim::Angle => "0#",
+                    crate::replay::expr::Dim::Count => "1#",
+                };
                 out.push_str(&format!(
-                    "        st = AddGlobalEquation({}, {}, {})\n",
+                    "        st = AddGlobalEquation({}, {}, {}, {})\n",
                     vb_lit(name),
                     vb_lit(equation_rhs),
-                    vba_num(*expect_si)
+                    vba_num(*expect_si),
+                    eval_scale
                 ));
                 out.push_str("    Else\n        st = \"not-executed\"\n        gMsg = \"after the first stopped step\"\n    End If\n");
                 out.push_str(&format!(
@@ -391,9 +398,7 @@ pub fn emit(
         }
     }
 
-    out.push_str("    Dim closedOk As Boolean\n    CloseOwnedDoc closedOk\n    If closedOk Then");
-    out.push_str("    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"ok\"\"}\"\n");
-    out.push_str("    Else\n    WriteStep stepIdx, \"close\", \"failed\", \"the owned document could not be confirmed closed\"\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"failed\"\"}\"\n    End If");
+    out.push_str("    If CloseAfterRun() Then\n    CloseOwnedDoc closedOk\n    If closedOk Then\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"ok\"\"}\"\n    Else\n    WriteStep stepIdx, \"close\", \"failed\", \"the owned document could not be confirmed closed\"\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"failed\"\"}\"\n    End If\n    Else\n    WriteStep stepIdx, \"owned-document\", \"kept-open\", OwnedDocTitle()\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"ok\"\"}\"\n    End If\n");
     out.push_str("    Exit Sub\n\n");
     out.push_str("Fail:\n");
     out.push_str("    ' Capture the error FIRST: executing On Error resets Err.\n");
@@ -409,8 +414,7 @@ pub fn emit(
     out.push_str(
         "        WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"failed\"\"}\"\n",
     );
-    out.push_str("    Dim closedOk As Boolean\n    CloseOwnedDoc closedOk");
-    out.push_str("    End If\nEnd Sub\n\n");
+    out.push_str("    End If\n    If CloseAfterRun() Then\n    CloseOwnedDoc closedOk\n    End If\nEnd Sub\n\n");
 
     // ---- per-sketch builders ----
     for (index, sk) in &sketches {
@@ -742,47 +746,83 @@ pub fn emit(
         ' title is refused); after it, no open document may answer to the title.\n\
         ' A failed query proves nothing and leaves the run failed. The owner rule:\n\
         ' runs leave no documents open.\n\
-        Sub CloseOwnedDoc(ByRef closedOk As Boolean)\n\
-        Dim exact As String\n\
-        Dim d As Object\n\
-        Dim cnt As Long\n\
-        Dim isOurs As Boolean\n\
-        On Error Resume Next\n\
-        closedOk = False\n\
-        If swDoc Is Nothing Then\n\
-        closedOk = True\n\
-        Exit Sub\n\
-        End If\n\
-        Err.Clear\n\
-        exact = swDoc.GetTitle\n\
-        If Err.Number <> 0 Then Exit Sub\n\
-        If Trim(exact) = \"\" Then Exit Sub\n\
-        Err.Clear\n\
-        cnt = 0\n\
-        isOurs = False\n\
-        Set d = swApp.GetFirstDocument\n\
-        Do While Not d Is Nothing\n\
-        If d.GetTitle = exact Then\n\
-        cnt = cnt + 1\n\
-        If d Is swDoc Then isOurs = True\n\
-        End If\n\
-        Set d = d.GetNext\n\
-        Loop\n\
-        If Err.Number <> 0 Then Exit Sub\n\
-        If cnt <> 1 Or Not isOurs Then Exit Sub\n\
-        Err.Clear\n\
-        swApp.CloseDoc exact\n\
-        If Err.Number <> 0 Then Exit Sub\n\
-        Err.Clear\n\
-        cnt = 0\n\
-        Set d = swApp.GetFirstDocument\n\
-        Do While Not d Is Nothing\n\
-        If d.GetTitle = exact Then cnt = cnt + 1\n\
-        Set d = d.GetNext\n\
-        Loop\n\
-        If Err.Number <> 0 Then Exit Sub\n\
-        If cnt = 0 Then closedOk = True\n\
-        End Sub\n\
+        Sub CloseOwnedDoc(ByRef closedOk As Boolean)
+Dim exact As String
+Dim d As Object
+Dim t2 As String
+Dim cnt As Long
+Dim isOurs As Boolean
+On Error Resume Next
+closedOk = False
+If swDoc Is Nothing Then
+closedOk = True
+Exit Sub
+End If
+Err.Clear
+exact = swDoc.GetTitle
+If Err.Number <> 0 Then Exit Sub
+If Trim(exact) = \"\" Then Exit Sub
+Err.Clear
+Set d = swApp.GetFirstDocument
+If Err.Number <> 0 Then Exit Sub
+Do While Not d Is Nothing
+t2 = d.GetTitle
+If Err.Number <> 0 Then Exit Sub
+If t2 = exact Then
+cnt = cnt + 1
+If d Is swDoc Then isOurs = True
+End If
+Err.Clear
+Set d = d.GetNext
+If Err.Number <> 0 Then Exit Sub
+Loop
+If cnt <> 1 Or Not isOurs Then Exit Sub
+Err.Clear
+swApp.CloseDoc exact
+If Err.Number <> 0 Then Exit Sub
+Err.Clear
+Set d = swApp.GetFirstDocument
+If Err.Number <> 0 Then Exit Sub
+cnt = 0
+Do While Not d Is Nothing
+t2 = d.GetTitle
+If Err.Number <> 0 Then Exit Sub
+If t2 = exact Then cnt = cnt + 1
+Err.Clear
+Set d = d.GetNext
+If Err.Number <> 0 Then Exit Sub
+Loop
+If cnt = 0 Then closedOk = True
+End Sub
+
+Function CloseAfterRun() As Boolean
+Dim p As String, f As Integer, oneLine As String
+CloseAfterRun = False
+On Error Resume Next
+p = Environ$(\"TEMP\")
+If p = \"\" Then Exit Function
+p = p & \"\\craft-bridge-report-path.txt\"
+Err.Clear
+f = FreeFile
+Open p For Input As #f
+If Err.Number <> 0 Then Exit Function
+Err.Clear
+Line Input #f, oneLine
+Err.Clear
+Line Input #f, oneLine
+Err.Clear
+Line Input #f, oneLine
+Close #f
+If Err.Number <> 0 Then Exit Function
+CloseAfterRun = (Trim(oneLine) = \"close-after-run\")
+End Function
+
+Function OwnedDocTitle() As String
+On Error Resume Next
+OwnedDocTitle = \"\"
+If swDoc Is Nothing Then Exit Function
+OwnedDocTitle = \"\" & swDoc.GetTitle
+End Function\n\
 
 ' The report path travels in a one-line file under the TEMP directory that
 ' the host rewrites before every run: preferred over CRAFT_BRIDGE_REPORT,
@@ -852,7 +892,7 @@ End Function\n\
          ' Add a global-variable equation and rebuild. The name is a global, the\n\
          ' right-hand side is equation syntax. Globals are verified through the\n\
          ' dimensions that reference them.\n\
-         Function AddGlobalEquation(ByVal nm As String, ByVal rhs As String, ByVal expect As Double) As String
+         Function AddGlobalEquation(ByVal nm As String, ByVal rhs As String, ByVal expect As Double, ByVal evalScale As Double) As String
 On Error GoTo EqFail
 Dim eqMgr As Object
 Dim eqText As String
@@ -865,7 +905,8 @@ If idx < 0 Then gMsg = \"equation failed: the equation was not accepted\": GoTo 
 swDoc.EditRebuild3
 
 If eqMgr.Equation(idx) <> eqText Then gMsg = \"equation failed: the stored equation reads back differently\": GoTo EqFail
-If Abs(eqMgr.Value(idx) - expect * 1000#) > 0.001 Then gMsg = \"equation failed: the equation value does not match\": GoTo EqFail
+If evalScale <= 0 Then gMsg = \"equation failed: the evaluator unit semantics are not established for this parameter\": GoTo EqFail\n\
+If Abs(eqMgr.Value(idx) - expect * evalScale) > 0.001 Then gMsg = \"equation failed: the equation value does not match its written right-hand side\": GoTo EqFail
 gMsg = \"equation \" & eqText
 AddGlobalEquation = \"created\"
 Exit Function

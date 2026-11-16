@@ -165,5 +165,69 @@ Do Until f.AtEndOfStream
   End If
 Loop
 f.Close
+
+' The owner rule: runs leave no documents open. This checker's document is
+' the item's rebuilt part: close exactly it, after every check, and verify
+' the close by a live enumeration. An empty title or an ambiguous title is
+' refused: a name-based close would hit whatever is active.
+Dim closeTitle, d, cnt, isOurs
+closeTitle = ""
+Err.Clear
+closeTitle = swDoc.GetTitle
+If Err.Number <> 0 Or Trim(closeTitle) = "" Then
+  outFile.WriteLine "check:close:=fail"
+  outFile.WriteLine "detail:close:=title lookup failed; nothing closed"
+  outFile.Close
+  WScript.Quit 1
+End If
+cnt = 0
+isOurs = False
+Err.Clear
+Set d = swApp.GetFirstDocument
+Do While Not d Is Nothing
+  If Err.Number <> 0 Then
+    outFile.WriteLine "check:close:=fail"
+    outFile.Close
+    WScript.Quit 1
+  End If
+  If d.GetTitle = closeTitle Then
+    cnt = cnt + 1
+    If d Is swDoc Then isOurs = True
+  End If
+  Err.Clear
+  Set d = d.GetNext
+Loop
+If Err.Number <> 0 Then
+  outFile.WriteLine "check:close:=fail"
+  outFile.Close
+  WScript.Quit 1
+End If
+If cnt <> 1 Or Not isOurs Then
+  outFile.WriteLine "check:close:=fail"
+  outFile.WriteLine "detail:close:=the title does not identify exactly the checked document"
+  outFile.Close
+  WScript.Quit 1
+End If
+Err.Clear
+swApp.CloseDoc closeTitle
+If Err.Number <> 0 Then
+  outFile.WriteLine "check:close:=fail"
+  outFile.Close
+  WScript.Quit 1
+End If
+cnt = 0
+Err.Clear
+Set d = swApp.GetFirstDocument
+Do While Not d Is Nothing
+  If d.GetTitle = closeTitle Then cnt = cnt + 1
+  Err.Clear
+  Set d = d.GetNext
+Loop
+If Err.Number <> 0 Or cnt <> 0 Then
+  outFile.WriteLine "check:close:=fail"
+  outFile.Close
+  WScript.Quit 1
+End If
+outFile.WriteLine "check:close:=pass"
 outFile.Close
 WScript.Quit 0

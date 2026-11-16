@@ -54,7 +54,7 @@ $pathFile = Join-Path $env:TEMP "craft-bridge-report-path.txt"
 # Line 1: the runtime report path. Line 2: the macro's directory, where the
 # build publishes the fallback snapshot sidecars.
 $macroDir = Split-Path -Parent $macroFull
-Set-Content -Path $pathFile -Value @($reportPath, $macroDir)
+Set-Content -Path $pathFile -Value @($reportPath, $macroDir, "close-after-run")
 
 # ---- run: all SolidWorks COM goes through tools/run-macro.vbs (VBScript is
 # IDispatch-native; PowerShell's late binder has failed on this seat) ----

@@ -273,17 +273,24 @@ confirmed by the eqdiag probe alongside working `Equation(i)`, `Value(i)`
 and `EditRebuild3`): the insert-index upper bound is checked through the
 `Equation(idx)` readback, which raises on an out-of-range index and fails
 closed while also proving the stored text.
-The evaluated value the manager reports is the millimetre magnitude for a
-millimetre-form right-hand side (eqdiag on 34.3.2: `"W1"=40mm` -> `40`;
-a unitless right-hand side reads back as written), so the global-equation
-value check compares against `expect * 1000` and fails closed loudly if
-that convention ever changes.
+The equation manager reports evaluated values in the units the right-hand
+side writes (eqdiag on 34.3.2: `"W1"=40mm` -> `40`; a unitless right-hand
+side reads back as written). The global-equation check therefore compares
+against `expect * evalScale` with the scale carried per dimension from the
+planner: lengths `1000` (millimetres, demonstrated), counts `1`
+(demonstrated), angles `0` = unestablished, which fails closed with an
+explicit message rather than guessing a conversion.
 
-**Document cleanup (runtime):** every generated macro and the checkpoint
-close exactly the document they created, and never any other: before the
-name-based close, a live enumeration of open documents must find exactly
-one match for the captured title and it must be the macro's own object
-(an empty title is refused outright); after the close, no open document
-may answer to the title. An unverified closure fails the run. Owner rule
-(2026-11-16): test runs leave no documents open.
+**Document cleanup (runtime):** the owner rule (2026-11-16) is that test
+runs leave no documents open - by coordinated sequencing, never a
+close-all. Smoke runs carry `close-after-run` on the third line of the
+host path file and the macro closes its own document at the end. Harness
+runs leave the flag absent: acceptance checking needs the part open, and
+`tools/check-part.vbs` closes exactly the document it checked after the
+last check. Either closer refuses an empty or ambiguous title before the
+name-based close (a live enumeration must find exactly one open document
+answering to the captured title and it must be the macro's own object),
+uses the exact returned title, verifies the close by the same enumeration
+showing absence, and treats every query failure as an unverified failure.
+An unverified close fails the run.
 

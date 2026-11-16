@@ -113,6 +113,8 @@ pub enum Work {
         equation_rhs: String,
         /// The evaluated SI value the equation must produce (verification).
         expect_si: f64,
+        /// The evaluated dimension (verification lives in evaluator space).
+        dim: expr::Dim,
     },
     Sketch(SketchStep),
     Extrude(ExtrudeStep),
@@ -486,6 +488,7 @@ pub fn plan(
                                 expression,
                                 equation_rhs,
                                 expect_si: q.value,
+                                dim: q.dim,
                             },
                         }
                     }

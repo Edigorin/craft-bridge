@@ -1086,8 +1086,12 @@ fn equations_use_the_seat_proven_add_shape_and_read_back() {
         "the global equation value is not checked"
     );
     assert!(
-        gbody.contains("eqMgr.Value(idx) - expect * 1000#"),
-        "the global value check does not use the evaluator's millimetre space"
+        gbody.contains("eqMgr.Value(idx) - expect * evalScale"),
+        "the global value check does not use the carried evaluator scale"
+    );
+    assert!(
+        gbody.contains("If evalScale <= 0 Then"),
+        "an unestablished evaluator scale is not refused"
     );
     let dstart = macro_text.find("Function AddDimEquation(").unwrap();
     let dbody = &macro_text[dstart..macro_text[dstart..].find("End Function").unwrap() + dstart];
@@ -1134,9 +1138,11 @@ fn report_path_prefers_the_fresh_path_file_over_the_environment() {
 }
 
 #[test]
-fn runs_close_their_own_document() {
-    // The owner rule: test runs leave no documents open - each macro closes
-    // exactly the document it created, with ownership checked first.
+fn runs_close_their_own_document_by_coordinated_sequencing() {
+    // The owner rule: runs leave no documents open. Smoke runs carry a
+    // close-after-run flag and the macro closes its own document; harness
+    // runs keep it open for acceptance checking and check-part.vbs closes
+    // it after the checks. Never a close-all.
     let case = Case::new(TRACER);
     case.build_to("closecheck.swb", false).unwrap();
     let generated = fs::read_to_string(case.dir.path().join("closecheck.swb")).unwrap();
@@ -1152,12 +1158,115 @@ fn runs_close_their_own_document() {
             "{name}: no owned-document closer"
         );
         assert!(
-            text.contains("CloseOwnedDoc closedOk"),
-            "{name}: the closer is never called"
+            text.contains("CloseAfterRun()"),
+            "{name}: the close is not flag-scoped"
         );
         assert!(
             text.contains("If cnt <> 1 Or Not isOurs Then Exit Sub"),
             "{name}: no pre-close ownership check"
         );
     }
+    let smoke = include_str!("../tools/seat-smoke.ps1");
+    assert!(
+        smoke.contains("\"close-after-run\""),
+        "the smoke run does not carry the close flag"
+    );
+    let checker = include_str!("../tools/check-part.vbs");
+    assert!(
+        checker.contains("check:close:=pass"),
+        "the checker does not close the checked document"
+    );
+}
+
+/// Structural scan over emitted VBA: the substring tests cannot catch a
+/// fused statement line (a lost newline turns a block If into a single-line
+/// one and orphans the later End If) or a duplicate declaration in a scope.
+fn assert_vba_structure(text: &str, what: &str) {
+    let mut block_ifs = 0i32;
+    let mut end_ifs = 0i32;
+    let mut procs = 0i32;
+    let mut end_procs = 0i32;
+    let mut current: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for line in text.lines() {
+        let mut code = String::new();
+        let mut in_string = false;
+        let mut chars = line.chars().peekable();
+        while let Some(c) = chars.next() {
+            if in_string {
+                if c == '"' {
+                    if chars.peek() == Some(&'"') {
+                        chars.next();
+                    } else {
+                        in_string = false;
+                    }
+                }
+            } else if c == '"' {
+                in_string = true;
+            } else if c == '\'' {
+                break;
+            } else {
+                code.push(c);
+            }
+        }
+        let t = code.trim();
+        let up = t.to_uppercase();
+        // scope bookkeeping
+        if up.starts_with("FUNCTION ") || up.starts_with("SUB ") {
+            procs += 1;
+            seen.clear();
+            for name in current.drain(..) {
+                let _ = name;
+            }
+        }
+        if up.starts_with("END FUNCTION") || up.starts_with("END SUB") {
+            end_procs += 1;
+            seen.clear();
+        }
+        for decl in ["DIM ", "CONST "] {
+            if up.starts_with(decl) {
+                for part in t[decl.len()..].split(',') {
+                    let name = part.split_whitespace().next().unwrap_or("").to_lowercase();
+                    if !name.is_empty() && !seen.insert(name.clone()) {
+                        panic!("{what}: duplicate declaration of {name}");
+                    }
+                }
+            }
+        }
+        // block-If accounting: a line whose code ends with THEN opens a
+        // block; a fused line (statements after Then) does not - and then
+        // its later End If is orphaned, which this count exposes.
+        if up.starts_with("IF ") && up.ends_with("THEN") {
+            block_ifs += 1;
+        }
+        if up.starts_with("END IF") {
+            end_ifs += 1;
+        }
+    }
+    assert_eq!(procs, end_procs, "{what}: unbalanced Function/Sub blocks");
+    assert_eq!(
+        block_ifs, end_ifs,
+        "{what}: block-If/End-If imbalance - fused or orphaned statements"
+    );
+}
+
+#[test]
+fn emitted_modules_are_structurally_sound() {
+    for recipe in [
+        TRACER,
+        TRACER_STOP,
+        TRACER_REVOLVE,
+        TRACER_PRIM,
+        TRACER_MOD,
+        TRACER_PAT,
+    ] {
+        let case = Case::new(recipe);
+        case.build_to("struct.swb", false).unwrap();
+        let text = fs::read_to_string(case.dir.path().join("struct.swb")).unwrap();
+        assert_vba_structure(&text, "generated family");
+    }
+    assert_vba_structure(
+        include_str!("../corpus/compat-check/minimal.swb"),
+        "checkpoint",
+    );
 }

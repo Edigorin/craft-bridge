@@ -26,6 +26,7 @@ Dim gProbeLog As String
 
 Sub main()
     Dim template As String
+    Dim closedOk As Boolean
     Dim ok As Boolean
     Dim ln As SketchSegment
     Dim dp As SldWorks.Dimension
@@ -81,13 +82,17 @@ Sub main()
 
     ' ---- done ----
     swSketchMgr.InsertSketch True
-    Dim closedOk As Boolean
-    CloseOwnedDoc closedOk
-    If closedOk Then
-        WriteLine "{""type"":""summary"",""status"":""ok""}"
+    If CloseAfterRun() Then
+        CloseOwnedDoc closedOk
+        If closedOk Then
+            WriteLine "{""type"":""summary"",""status"":""ok""}"
+        Else
+            WriteStep stepIdx, "close", "failed", "the owned document could not be confirmed closed"
+            WriteLine "{""type"":""summary"",""status"":""failed""}"
+        End If
     Else
-        WriteStep stepIdx, "close", "failed", "the owned document could not be confirmed closed"
-        WriteLine "{""type"":""summary"",""status"":""failed""}"
+        WriteStep stepIdx, "owned-document", "kept-open", OwnedDocTitle()
+        WriteLine "{""type"":""summary"",""status"":""ok""}"
     End If
     Exit Sub
 
@@ -102,8 +107,9 @@ Fail:
         WriteStep stepIdx, "macro", "failed", "err " & Trim(Str(errNum)) & ": " & errMsg
         WriteLine "{""type"":""summary"",""status"":""failed""}"
     End If
-    Dim closedOk As Boolean
-    CloseOwnedDoc closedOk
+    If CloseAfterRun() Then
+        CloseOwnedDoc closedOk
+    End If
 End Sub
 
 ' Truncate the report so this run never inherits a previous run's lines.
