@@ -116,7 +116,7 @@ Sub main()
     Set cph = ci.GetCenterPoint2
     If cph Is Nothing Then Err.Raise vbObjectError + 522, "minimal.swb", "the circle centre handle is missing"
     If Abs(cph.X - MapU(0.02, 0.02)) > 0.000001 Or Abs(cph.Y - MapV(0.02, 0.02)) > 0.000001 Or Abs(cph.Z) > 0.000001 Then Err.Raise vbObjectError + 522, "minimal.swb", "the circle centre did not follow the map: " & Vec3Text(cph.X, cph.Y, cph.Z)
-    If Abs(ci.Radius - 0.005) > 0.000001 Then Err.Raise vbObjectError + 522, "minimal.swb", "the circle radius is " & Trim(Str(ci.Radius))
+    If Abs(ci.GetRadius - 0.005) > 0.000001 Then Err.Raise vbObjectError + 522, "minimal.swb", "the circle radius is " & Trim(Str(ci.GetRadius))
     WriteStep stepIdx, "sketch.geometry", "created", "1 diagonal line, 1 circle mapped through the adaptation map; positions verified (metres)"
 
     ' ---- step 2: one driving dimension, kind and sign verified ----
@@ -218,7 +218,7 @@ Sub main()
     Set cph = ci.GetCenterPoint2
     If cph Is Nothing Then Err.Raise vbObjectError + 531, "minimal.swb", "closed-context verification failed: no circle centre handle"
     If Abs(cph.X - MapU(0.02, 0.02)) > 0.000001 Or Abs(cph.Y - MapV(0.02, 0.02)) > 0.000001 Then Err.Raise vbObjectError + 531, "minimal.swb", "closed-context verification failed: the circle centre reads " & Vec3Text(cph.X, cph.Y, cph.Z)
-    If Abs(ci.Radius - 0.005) > 0.000001 Then Err.Raise vbObjectError + 531, "minimal.swb", "closed-context verification failed: the radius reads " & Trim(Str(ci.Radius))
+    If Abs(ci.GetRadius - 0.005) > 0.000001 Then Err.Raise vbObjectError + 531, "minimal.swb", "closed-context verification failed: the radius reads " & Trim(Str(ci.GetRadius))
     If gDimToggleSaved And Not swApp Is Nothing Then swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle
     If gDimToggleSaved And Not swApp Is Nothing Then If swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate) <> gDimToggle Then WriteStep stepIdx, "toggle-restore", "failed", "the input-dimension-value preference did not restore"
     cleanupMode = CloseMode()

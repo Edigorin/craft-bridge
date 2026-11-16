@@ -267,7 +267,7 @@ Function VerifySketch0() As Boolean
     If Abs(cph.X - MapU(0, 0.0, 0.0)) > TOL Then GoTo VerifyFail
     If Abs(cph.Y - MapV(0, 0.0, 0.0)) > TOL Then GoTo VerifyFail
     If Abs(cph.Z) > TOL Then GoTo VerifyFail
-    If Abs(ci0(0).Radius - 0.005) > TOL Then GoTo VerifyFail
+    If Abs(ci0(0).GetRadius - 0.005) > TOL Then GoTo VerifyFail
     VerifySketch0 = True
     Exit Function
 VerifyFail:

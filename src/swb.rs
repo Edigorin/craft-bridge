@@ -1505,7 +1505,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
             vv = vba_num(mm(ctr[1])),
         ));
         out.push_str(&format!(
-            "    If Abs(ci{index}({j}).Radius - {}) > TOL Then GoTo VerifyFail\n",
+            "    If Abs(ci{index}({j}).GetRadius - {}) > TOL Then GoTo VerifyFail\n",
             vba_num(mm(c.r))
         ));
     }
@@ -1757,15 +1757,18 @@ fn emit_dimension(
                 dim.a, dim.a
             );
             placement = format!(
-                "    sT = ax + 0.75 * ci{index}({}).Radius\n    tT = ay + 0.75 * ci{index}({}).Radius\n",
+                "    sT = ax + 0.75 * ci{index}({}).GetRadius\n    tT = ay + 0.75 * ci{index}({}).GetRadius\n",
                 dim.a, dim.a
             );
             let (what, expr) = if matches!(dim.kind, DimKind::Radius) {
-                ("the circle radius", format!("ci{index}({}).Radius", dim.a))
+                (
+                    "the circle radius",
+                    format!("ci{index}({}).GetRadius", dim.a),
+                )
             } else {
                 (
                     "twice the circle radius",
-                    format!("2# * ci{index}({}).Radius", dim.a),
+                    format!("2# * ci{index}({}).GetRadius", dim.a),
                 )
             };
             kindcheck = format!(
@@ -1850,9 +1853,9 @@ fn emit_dimension(
         DimKind::Radius | DimKind::Diameter => {
             let j = dim.a;
             let measure = if matches!(dim.kind, DimKind::Radius) {
-                format!("ci{index}({j}).Radius")
+                format!("ci{index}({j}).GetRadius")
             } else {
-                format!("2# * ci{index}({j}).Radius")
+                format!("2# * ci{index}({j}).GetRadius")
             };
             format!(
                 "    chk = {measure}\n    If Abs(chk - Abs({si})) > TOL Then gMsg = \"the value edit did not carry the {label} geometry (measure \" & Trim(Str(chk)) & \" after driving \" & Trim(Str(Abs({si}))) & \")\": GoTo DimFail\n",

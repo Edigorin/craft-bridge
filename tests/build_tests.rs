@@ -919,10 +919,16 @@ fn checkpoint_carries_the_map_and_classification_treatment() {
         checkpoint.contains("the value edit did not carry the geometry"),
         "the checkpoint has no behavioural kind evidence"
     );
-    // Circle readback through the pinned centre handle.
+    // Circle readback through the pinned centre handle and the pinned
+    // radius member (ci.Radius raises 438; GetRadius is seat-proven,
+    // probe-circlerad).
     assert!(
         checkpoint.contains("ci.GetCenterPoint2"),
         "the checkpoint does not read the circle back through the centre handle"
+    );
+    assert!(
+        checkpoint.contains("ci.GetRadius"),
+        "the checkpoint does not use the pinned GetRadius member"
     );
     // Closed-context verification before any success report.
     assert!(
