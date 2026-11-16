@@ -1,0 +1,154 @@
+' craft-bridge eqdiag - diagnostic probe: which EquationMgr and ModelDoc
+' members does this seat's SolidWorks actually support at runtime? One
+' report line per member attempt. It creates nothing beyond a fresh part
+' and the runtime report. Diagnostic instrument, not a fidelity golden.
+Option Explicit
+
+Dim swApp As SldWorks.SldWorks
+Dim swDoc As SldWorks.ModelDoc2
+Dim reportPath As String
+
+Sub main()
+    Dim template As String
+    On Error GoTo Fail
+    reportPath = ReportPathFromHost()
+    If reportPath = "" Then Err.Raise vbObjectError + 513, "eqdiag", "no report path"
+    StartReport
+    WriteLine "{""type"":""header"",""macro"":""eqdiag"",""bridge_version"":""0.1.0""}"
+    Set swApp = Application.SldWorks
+    template = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
+    If template = "" Then Err.Raise vbObjectError + 514, "eqdiag", "no default part template"
+    Set swDoc = swApp.NewDocument(template, 0, 0, 0)
+    If swDoc Is Nothing Then Err.Raise vbObjectError + 515, "eqdiag", "no document"
+    WriteLine ProbeLine("GetEquationMgr")
+    WriteLine ProbeLine("Add")
+    WriteLine ProbeLine("Count")
+    WriteLine ProbeLine("Equation")
+    WriteLine ProbeLine("Value")
+    WriteLine ProbeLine("EditRebuild3")
+    WriteLine ProbeLine("Add2-3arg")
+    WriteLine "{""type"":""summary"",""status"":""ok""}"
+    Exit Sub
+Fail:
+    Dim errNum As Long, errMsg As String
+    errNum = Err.Number
+    errMsg = Err.Description
+    On Error Resume Next
+    WriteLine "{""type"":""step"",""index"":-1,""command"":""eqdiag"",""status"":""failed"",""message"":""" & JsonStr("err " & Trim(Str(errNum)) & ": " & errMsg) & """}"
+    WriteLine "{""type"":""summary"",""status"":""failed""}"
+End Sub
+
+' Try exactly one member and return a report line naming the outcome.
+Function ProbeLine(ByVal which As String) As String
+    Dim eqMgr As Object
+    Dim v As Variant
+    Dim idx As Long
+    Dim msg As String
+    On Error Resume Next
+    Err.Clear
+    Set eqMgr = swDoc.GetEquationMgr
+    If Err.Number <> 0 Then
+        ProbeLine = LineFor(which, "GetEquationMgr raised: " & Err.Description)
+        Exit Function
+    End If
+    Err.Clear
+    Select Case which
+        Case "GetEquationMgr"
+            msg = "ok"
+        Case "Add"
+            idx = eqMgr.Add(-1, """G1""=0.001")
+            If Err.Number = 0 Then msg = "ok idx=" & Trim(Str(idx)) Else msg = "raised: " & Err.Description
+        Case "Count"
+            v = eqMgr.Count
+            If Err.Number = 0 Then msg = "ok count=" & Trim(Str(v)) Else msg = "raised: " & Err.Description
+        Case "Equation"
+            v = eqMgr.Equation(0)
+            If Err.Number = 0 Then msg = "ok text=" & CStr(v) Else msg = "raised: " & Err.Description
+        Case "Value"
+            v = eqMgr.Value(0)
+            If Err.Number = 0 Then msg = "ok value=" & Trim(Str(v)) Else msg = "raised: " & Err.Description
+        Case "EditRebuild3"
+            v = swDoc.EditRebuild3
+            If Err.Number = 0 Then msg = "ok" Else msg = "raised: " & Err.Description
+        Case "Add2-3arg"
+            idx = eqMgr.Add2(-1, """G2""=0.002", False)
+            If Err.Number = 0 Then msg = "ok idx=" & Trim(Str(idx)) Else msg = "raised: " & Err.Description
+    End Select
+    ProbeLine = LineFor(which, msg)
+End Function
+
+Function LineFor(ByVal which As String, ByVal msg As String) As String
+    LineFor = "{""type"":""probe"",""member"":""" & JsonStr(which) & """,""result"":""" & JsonStr(msg) & """}"
+End Function
+
+' The report path travels in a one-line file under the TEMP directory that
+    ' the host rewrites before every run: preferred over CRAFT_BRIDGE_REPORT,
+    ' because the macro runs inside the SolidWorks process, which may be an
+    ' instance that started long ago with a stale environment. The environment
+    ' variable is only the fallback for when the path file is missing or blank.
+    Function ReportPathFromHost() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim got As Boolean
+    ReportPathFromHost = ""
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p <> "" Then
+    p = p & "\craft-bridge-report-path.txt"
+    Err.Clear
+    f = FreeFile
+    Open p For Input As #f
+    If Err.Number = 0 Then
+    Err.Clear
+    Line Input #f, oneLine
+    got = (Err.Number = 0)
+    Err.Clear
+    Close #f
+    If got Then
+    oneLine = Trim(oneLine)
+    If oneLine <> "" Then
+    ReportPathFromHost = oneLine
+    Exit Function
+    End If
+    End If
+    End If
+    Err.Clear
+    End If
+    ReportPathFromHost = Trim(Environ$("CRAFT_BRIDGE_REPORT"))
+    End Function
+
+' Truncate the report so this run never inherits a previous run's lines.
+Sub StartReport()
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Output As #f
+    Close #f
+End Sub
+
+' One line, one fresh handle: open, print, close. Nothing to leak, nothing
+' to collide with.
+Sub WriteLine(ByVal text As String)
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Append As #f
+    Print #f, text
+    Close #f
+End Sub
+
+Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)
+    WriteLine "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
+End Sub
+
+' JSON string escaping. This is not VBA-literal escaping: it is only for the
+' report file. Generated code strings are escaped separately by the generator.
+Function JsonStr(ByVal s As String) As String
+    Dim t As String
+    t = Replace(s, "\", "\\")
+    t = Replace(t, """", "\""")
+    t = Replace(t, vbCrLf, "\n")
+    t = Replace(t, vbCr, "\n")
+    t = Replace(t, vbLf, "\n")
+    t = Replace(t, vbTab, "\t")
+    JsonStr = t
+End Function
