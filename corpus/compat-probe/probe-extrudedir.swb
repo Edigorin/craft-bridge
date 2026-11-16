@@ -26,6 +26,10 @@
 ' before the named measurements and re-verified after the mutating
 ' feature call (with selections cleared and checked); missing setup
 ' geometry fails the run with a failed step while cleanup still runs.
+' Procedure bodies run under captured-error discipline: a raised call
+' error is captured at its own named stage before any failure path, and
+' every numeric value is rejected if Empty/Null/nonnumeric before
+' conversion - nothing is silently coerced or defaulted.
 ' The frame check is fully fail-closed: the 16-entry zero-based
 ' one-dimensional numeric form, zero translation and unit scale at index
 ' 12 are decoded with their own captured errors and nothing is accepted
@@ -70,16 +74,20 @@ Sub main()
         gRunFailed = True
         GoTo WrapUp
     End If
+    On Error Resume Next
     Err.Clear
     Set swApp = Application.SldWorks
     n = Err.Number
     d = Err.Description
+    On Error GoTo Fail
     WriteLine LineFor("application", n, d, "stage=acquire")
     If n <> 0 Or swApp Is Nothing Then Err.Raise vbObjectError + 516, "probe-extrudedir", "the SolidWorks application could not be acquired"
+    On Error Resume Next
     Err.Clear
     gTemplate = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
     n = Err.Number
     d = Err.Description
+    On Error GoTo Fail
     WriteLine LineFor("template", n, d, "stage=default-part-template value=" & gTemplate)
     If n <> 0 Then Err.Raise vbObjectError + 514, "probe-extrudedir", "the default part template could not be read"
     If gTemplate = "" Then Err.Raise vbObjectError + 514, "probe-extrudedir", "no default part template is configured"
@@ -131,15 +139,18 @@ Function RunBlindCase(ByVal tag As String, ByVal dirFlag As Boolean, ByVal isFin
     Dim verified As Boolean
     Dim measOk As Boolean
     Dim feat As Object
+    Dim extSel As Object
     Dim featName As String
     Dim skName As String
     Dim handoffTitle As String
     Dim closedOk As Boolean
-    Dim errNum As Long
-    Dim errMsg As String
     Dim n As Long
     Dim d As String
-    On Error GoTo CaseHardFail
+    ' The body runs under captured-error discipline (as the helpers do):
+    ' a raised call error is captured at the call's own named stage by the
+    ' capture lines that immediately follow it, before any failure path -
+    ' no raise can bypass a named outcome record.
+    On Error Resume Next
     result = 2
     WriteLine LineFor("case-" & tag, 0, "", "entering: blind 0.012 m, Dir=" & CStr(dirFlag) & ", profile u 0.010..0.050 v 0.020..0.035")
     Err.Clear
@@ -216,7 +227,16 @@ Function RunBlindCase(ByVal tag As String, ByVal dirFlag As Boolean, ByVal isFin
         GoTo CaseCleanup
     End If
     Err.Clear
-    ok = swDoc.Extension.SelectByID2(skName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    Set extSel = swDoc.Extension
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("selectsketch-" & tag, n, d, "stage=extension-acquire")
+    If n <> 0 Or extSel Is Nothing Then
+        WriteStep 3, "extrude", "failed", "the Extension could not be acquired; the profile sketch cannot be selected"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    ok = extSel.SelectByID2(skName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     n = Err.Number
     d = Err.Description
     WriteLine LineFor("selectsketch-" & tag, n, d, "stage=selectbyname name=" & skName & " result=" & CStr(ok))
@@ -276,7 +296,7 @@ CaseCleanup:
     If isFinal And mode = "keep" Then
         ok = OwnedHandoffVerified(tag, handoffTitle)
         If ok Then
-            WriteStep 5, "owned-document", "kept-open", OwnedDocTitle()
+            WriteStep 5, "owned-document", "kept-open", handoffTitle
         Else
             WriteStep 5, "owned-document", "failed", "the keep-mode handoff is unverified; the document is not reported as retained"
             result = 3
@@ -294,15 +314,6 @@ CaseCleanup:
     Set swSketchMgr = Nothing
     Set gFeatMgr = Nothing
     RunBlindCase = result
-    Exit Function
-CaseHardFail:
-    errNum = Err.Number
-    errMsg = Err.Description
-    On Error Resume Next
-    WriteLine LineFor("case-" & tag, errNum, errMsg, "hard failure; result so far=" & Trim(Str(result)))
-    WriteStep -1, "case-" & tag, "failed", "hard failure err " & Trim(Str(errNum)) & ": " & errMsg
-    If result < 1 Then result = 1
-    GoTo CaseCleanup
 End Function
 
 ' The body's bounding box: the exact returned form (zero-based
@@ -373,17 +384,11 @@ Sub BoxEvidence(ByVal tag As String, ByRef ok As Boolean)
     End If
     comps = ""
     For i = 0 To 5
-        Err.Clear
-        x = CDbl(v(i))
-        n = Err.Number
-        d = Err.Description
-        If n <> 0 Then
-            WriteLine LineFor("getpartbox-" & tag, n, d, "stage=component" & Trim(Str(i)) & " decode")
-            bad = True
-        Else
+        If NumDecode("getpartbox-" & tag, "component" & Trim(Str(i)), v(i), x) Then
             tmp = Trim(Str(x))
-            WriteLine LineFor("getpartbox-" & tag, 0, "", "stage=component" & Trim(Str(i)) & " value=" & tmp)
             comps = comps & " c" & Trim(Str(i)) & "=" & tmp
+        Else
+            bad = True
         End If
     Next i
     If bad Then Exit Sub
@@ -442,13 +447,14 @@ Sub DimEvidence(ByVal tag As String, ByVal key As String, ByVal required As Bool
     End If
     WriteLine LineFor(tag, 0, "", "stage=name " & key & " -> " & tmp)
     Err.Clear
-    sv = CDbl(dm.SystemValue)
+    v = dm.SystemValue
     n = Err.Number
     d = Err.Description
     If n <> 0 Then
         WriteLine LineFor(tag, n, d, "stage=systemvalue " & key)
         Exit Sub
     End If
+    If Not NumDecode(tag, "systemvalue " & key, v, sv) Then Exit Sub
     WriteLine LineFor(tag, 0, "", "stage=systemvalue " & key & " = " & Trim(Str(sv)) & " (SI)")
     ok = True
 End Sub
@@ -477,6 +483,36 @@ Function ProfileLine(ByVal tag As String, ByVal idx As Long, ByVal x1 As Double,
     ProfileLine = True
 End Function
 
+' One numeric component: Empty/Null/nonnumeric values are rejected
+' BEFORE any coercion (CDbl(Empty) would silently become zero), and the
+' conversion is captured at its own named stage. True = x holds the
+' decoded value; nothing is ever substituted with a default.
+Function NumDecode(ByVal tag As String, ByVal stage As String, ByVal v As Variant, ByRef x As Double) As Boolean
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    NumDecode = False
+    x = 0#
+    If IsEmpty(v) Or IsNull(v) Then
+        WriteLine LineFor(tag, -1, "Empty/Null value", "stage=" & stage & " decode refused")
+        Exit Function
+    End If
+    If Not IsNumeric(v) Then
+        WriteLine LineFor(tag, -1, "nonnumeric value", "stage=" & stage & " decode refused (type=" & TypeName(v) & ")")
+        Exit Function
+    End If
+    Err.Clear
+    x = CDbl(v)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor(tag, n, d, "stage=" & stage & " decode")
+        Exit Function
+    End If
+    WriteLine LineFor(tag, 0, "", "stage=" & stage & " value=" & Trim(Str(x)))
+    NumDecode = True
+End Function
+
 Function LineFor(ByVal which As String, ByVal n As Long, ByVal d As String, ByVal detail As String) As String
     LineFor = "{""type"":""probe"",""member"":""" & JsonStr(which) & """,""err"":" & Trim(Str(n)) & ",""errdesc"":""" & JsonStr(d) & """,""detail"":""" & JsonStr(detail) & """}"
 End Function
@@ -488,8 +524,9 @@ End Function
 ' normalized-direction match alone is not accepted. The sketch's feature
 ' identity is acquired at its own captured, Nothing-checked stage (the
 ' documented Sketch->Feature assignment; ISketch exposes no GetFeature)
-' and its name is returned for the later explicit selection. Every probe
-' attempt is recorded in gProbeLog with its captured error. A
+' and its name is returned for the later explicit selection. Every call
+' emits its own named capture record (success and failure) and every
+' failure is recorded in gProbeLog with its captured error. A
 ' mismatched frame's probe sketch is deleted by the verified
 ' DiscardProbeSketch algorithm; if that deletion cannot be confirmed,
 ' the run is failed (recorded here, escalated by the caller's
@@ -512,6 +549,7 @@ Function OpenSketchOnPlane(ByVal which As String, ByRef skNameOut As String) As 
     Set feat = swDoc.FirstFeature
     n = Err.Number
     d = Err.Description
+    WriteLine LineFor("plane-probe", n, d, "stage=firstfeature")
     If n <> 0 Then
         gProbeLog = gProbeLog & "stage=firstfeature err=" & Trim(Str(n)) & " " & d & "; "
         Exit Function
@@ -521,6 +559,7 @@ Function OpenSketchOnPlane(ByVal which As String, ByRef skNameOut As String) As 
         nm = feat.GetTypeName2()
         n = Err.Number
         d = Err.Description
+        WriteLine LineFor("plane-probe", n, d, "stage=typename")
         If n <> 0 Then
             gProbeLog = gProbeLog & "stage=typename err=" & Trim(Str(n)) & " " & d & "; "
             Exit Function
@@ -530,6 +569,7 @@ Function OpenSketchOnPlane(ByVal which As String, ByRef skNameOut As String) As 
             fn = feat.Name
             n = Err.Number
             d = Err.Description
+            WriteLine LineFor("plane-probe", n, d, "stage=name")
             If n <> 0 Then
                 gProbeLog = gProbeLog & "stage=name err=" & Trim(Str(n)) & " " & d & "; "
                 Exit Function
@@ -538,6 +578,7 @@ Function OpenSketchOnPlane(ByVal which As String, ByRef skNameOut As String) As 
             ok = feat.Select(False)
             n = Err.Number
             d = Err.Description
+            WriteLine LineFor("plane-probe", n, d, "stage=select plane=" & fn & " result=" & CStr(ok))
             If n <> 0 Then
                 gProbeLog = gProbeLog & fn & ": select err=" & Trim(Str(n)) & " " & d & "; "
             ElseIf Not ok Then
@@ -547,6 +588,7 @@ Function OpenSketchOnPlane(ByVal which As String, ByRef skNameOut As String) As 
                 swSketchMgr.InsertSketch True
                 n = Err.Number
                 d = Err.Description
+                WriteLine LineFor("plane-probe", n, d, "stage=insertsketch plane=" & fn)
                 If n <> 0 Then
                     gProbeLog = gProbeLog & fn & ": insertsketch err=" & Trim(Str(n)) & " " & d & "; "
                     Exit Function
@@ -555,6 +597,7 @@ Function OpenSketchOnPlane(ByVal which As String, ByRef skNameOut As String) As 
                 Set skObj = swSketchMgr.ActiveSketch
                 n = Err.Number
                 d = Err.Description
+                WriteLine LineFor("plane-probe", n, d, "stage=activesketch plane=" & fn)
                 If n <> 0 Then
                     gProbeLog = gProbeLog & fn & ": activesketch err=" & Trim(Str(n)) & " " & d & "; "
                     Exit Function
@@ -569,6 +612,7 @@ Function OpenSketchOnPlane(ByVal which As String, ByRef skNameOut As String) As 
                     Set skFeat = skObj
                     n = Err.Number
                     d = Err.Description
+                    WriteLine LineFor("plane-probe", n, d, "stage=sketch-feature-acquire plane=" & fn)
                     If n <> 0 Then
                         gProbeLog = gProbeLog & fn & ": sketch-feature acquire err=" & Trim(Str(n)) & " " & d & "; "
                         Exit Function
@@ -582,6 +626,7 @@ Function OpenSketchOnPlane(ByVal which As String, ByRef skNameOut As String) As 
                         skNameOut = skFeat.Name
                         n = Err.Number
                         d = Err.Description
+                        WriteLine LineFor("plane-probe", n, d, "stage=sketch-feature-name plane=" & fn & " name=" & skNameOut)
                         If n <> 0 Or Trim(skNameOut) = "" Then
                             gProbeLog = gProbeLog & fn & ": sketch-feature name err=" & Trim(Str(n)) & " " & d & "; "
                             Exit Function
@@ -603,6 +648,7 @@ Function OpenSketchOnPlane(ByVal which As String, ByRef skNameOut As String) As 
         Set feat = feat.GetNextFeature
         n = Err.Number
         d = Err.Description
+        WriteLine LineFor("plane-probe", n, d, "stage=nextfeature")
         If n <> 0 Then
             gProbeLog = gProbeLog & "stage=nextfeature err=" & Trim(Str(n)) & " " & d & "; "
             Exit Function
@@ -612,10 +658,12 @@ End Function
 
 ' The full frame check: transform form (zero-based, one-dimensional,
 ' 16 entries), zero translation and unit scale at ArrayData index 12,
-' decoded with their own captured errors, then sign-exact axis
-' directions. Nothing is accepted after a decoding error; every failure
-' is recorded in gProbeLog with the exact reason; nothing is silently
-' reinterpreted.
+' then sign-exact axis directions. Every stage emits its own named
+' capture record on success AND on failure; every numeric read goes
+' through NumDecode (Empty/Null/nonnumeric rejected before conversion,
+' never a default); nothing is accepted after a decoding error; every
+' failure is also recorded in gProbeLog with the exact reason - nothing
+' is silently reinterpreted.
 Function SketchFrameIs(ByVal which As String) As Boolean
     Dim skObj As Object
     Dim tr As Object
@@ -625,6 +673,15 @@ Function SketchFrameIs(ByVal which As String) As Boolean
     Dim ok As Boolean
     Dim lb As Long
     Dim ub As Long
+    Dim ux As Double
+    Dim uy As Double
+    Dim uz As Double
+    Dim vx As Double
+    Dim vy As Double
+    Dim vz As Double
+    Dim nx As Double
+    Dim ny As Double
+    Dim nz As Double
     Dim x9 As Double
     Dim x10 As Double
     Dim x11 As Double
@@ -635,6 +692,7 @@ Function SketchFrameIs(ByVal which As String) As Boolean
     Set skObj = swSketchMgr.ActiveSketch
     n = Err.Number
     d = Err.Description
+    WriteLine LineFor("framecheck", n, d, "stage=activesketch")
     If n <> 0 Then
         gProbeLog = gProbeLog & "frame: activesketch err=" & Trim(Str(n)) & " " & d & "; "
         Exit Function
@@ -647,6 +705,7 @@ Function SketchFrameIs(ByVal which As String) As Boolean
     Set tr = skObj.ModelToSketchTransform
     n = Err.Number
     d = Err.Description
+    WriteLine LineFor("framecheck", n, d, "stage=transform")
     If n <> 0 Then
         gProbeLog = gProbeLog & "frame: transform err=" & Trim(Str(n)) & " " & d & "; "
         Exit Function
@@ -659,6 +718,7 @@ Function SketchFrameIs(ByVal which As String) As Boolean
     a = tr.ArrayData
     n = Err.Number
     d = Err.Description
+    WriteLine LineFor("framecheck", n, d, "stage=arraydata")
     If n <> 0 Then
         gProbeLog = gProbeLog & "frame: arraydata err=" & Trim(Str(n)) & " " & d & "; "
         Exit Function
@@ -667,6 +727,7 @@ Function SketchFrameIs(ByVal which As String) As Boolean
     lb = LBound(a)
     n = Err.Number
     d = Err.Description
+    WriteLine LineFor("framecheck", n, d, "stage=lbound")
     If n <> 0 Then
         gProbeLog = gProbeLog & "frame: lbound err=" & Trim(Str(n)) & " " & d & "; "
         Exit Function
@@ -675,6 +736,7 @@ Function SketchFrameIs(ByVal which As String) As Boolean
     ub = UBound(a)
     n = Err.Number
     d = Err.Description
+    WriteLine LineFor("framecheck", n, d, "stage=ubound")
     If n <> 0 Then
         gProbeLog = gProbeLog & "frame: ubound err=" & Trim(Str(n)) & " " & d & "; "
         Exit Function
@@ -688,43 +750,65 @@ Function SketchFrameIs(ByVal which As String) As Boolean
     n = Err.Number
     d = Err.Description
     If n = 0 Then
+        WriteLine LineFor("framecheck", -1, "a second dimension exists", "stage=rank-probe")
         gProbeLog = gProbeLog & "frame: form has a second dimension; "
         Exit Function
     End If
+    WriteLine LineFor("framecheck", n, d, "stage=rank-probe (error 9 = one-dimensional, expected)")
     If n <> 9 Then
         gProbeLog = gProbeLog & "frame: rank probe err=" & Trim(Str(n)) & " " & d & "; "
         Exit Function
     End If
-    Err.Clear
-    x9 = CDbl(a(9))
-    n = Err.Number
-    d = Err.Description
-    If n <> 0 Then
-        gProbeLog = gProbeLog & "frame: translation decode err=" & Trim(Str(n)) & " " & d & "; "
+    If Not NumDecode("framecheck", "translation-x", a(9), x9) Then
+        gProbeLog = gProbeLog & "frame: translation-x decode refused; "
         Exit Function
     End If
-    Err.Clear
-    x10 = CDbl(a(10))
-    n = Err.Number
-    d = Err.Description
-    If n <> 0 Then
-        gProbeLog = gProbeLog & "frame: translation decode err=" & Trim(Str(n)) & " " & d & "; "
+    If Not NumDecode("framecheck", "translation-y", a(10), x10) Then
+        gProbeLog = gProbeLog & "frame: translation-y decode refused; "
         Exit Function
     End If
-    Err.Clear
-    x11 = CDbl(a(11))
-    n = Err.Number
-    d = Err.Description
-    If n <> 0 Then
-        gProbeLog = gProbeLog & "frame: translation decode err=" & Trim(Str(n)) & " " & d & "; "
+    If Not NumDecode("framecheck", "translation-z", a(11), x11) Then
+        gProbeLog = gProbeLog & "frame: translation-z decode refused; "
         Exit Function
     End If
-    Err.Clear
-    sc = CDbl(a(12))
-    n = Err.Number
-    d = Err.Description
-    If n <> 0 Then
-        gProbeLog = gProbeLog & "frame: scale decode err=" & Trim(Str(n)) & " " & d & "; "
+    If Not NumDecode("framecheck", "scale", a(12), sc) Then
+        gProbeLog = gProbeLog & "frame: scale decode refused; "
+        Exit Function
+    End If
+    If Not NumDecode("framecheck", "axis-ux", a(0), ux) Then
+        gProbeLog = gProbeLog & "frame: axis-ux decode refused; "
+        Exit Function
+    End If
+    If Not NumDecode("framecheck", "axis-uy", a(3), uy) Then
+        gProbeLog = gProbeLog & "frame: axis-uy decode refused; "
+        Exit Function
+    End If
+    If Not NumDecode("framecheck", "axis-uz", a(6), uz) Then
+        gProbeLog = gProbeLog & "frame: axis-uz decode refused; "
+        Exit Function
+    End If
+    If Not NumDecode("framecheck", "axis-vx", a(1), vx) Then
+        gProbeLog = gProbeLog & "frame: axis-vx decode refused; "
+        Exit Function
+    End If
+    If Not NumDecode("framecheck", "axis-vy", a(4), vy) Then
+        gProbeLog = gProbeLog & "frame: axis-vy decode refused; "
+        Exit Function
+    End If
+    If Not NumDecode("framecheck", "axis-vz", a(7), vz) Then
+        gProbeLog = gProbeLog & "frame: axis-vz decode refused; "
+        Exit Function
+    End If
+    If Not NumDecode("framecheck", "axis-nx", a(2), nx) Then
+        gProbeLog = gProbeLog & "frame: axis-nx decode refused; "
+        Exit Function
+    End If
+    If Not NumDecode("framecheck", "axis-ny", a(5), ny) Then
+        gProbeLog = gProbeLog & "frame: axis-ny decode refused; "
+        Exit Function
+    End If
+    If Not NumDecode("framecheck", "axis-nz", a(8), nz) Then
+        gProbeLog = gProbeLog & "frame: axis-nz decode refused; "
         Exit Function
     End If
     If Abs(x9) > 0.000001 Or Abs(x10) > 0.000001 Or Abs(x11) > 0.000001 Then
@@ -737,12 +821,13 @@ Function SketchFrameIs(ByVal which As String) As Boolean
     End If
     Select Case which
         Case "YZ"
-            ok = VecIs(a(0), a(3), a(6), 0#, 1#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, 1#) And VecIs(a(2), a(5), a(8), 1#, 0#, 0#)
+            ok = VecIs(ux, uy, uz, 0#, 1#, 0#) And VecIs(vx, vy, vz, 0#, 0#, 1#) And VecIs(nx, ny, nz, 1#, 0#, 0#)
     End Select
     If Not ok Then
         gProbeLog = gProbeLog & "frame: directions " & FrameTextEx() & " (expected u=(0,1,0) v=(0,0,1) n=(1,0,0)); "
         Exit Function
     End If
+    WriteLine LineFor("framecheck", 0, "", "verified " & which & ": " & FrameTextEx())
     SketchFrameIs = True
 End Function
 
@@ -1094,11 +1179,20 @@ Function OwnedHandoffVerified(ByVal tag As String, ByRef titleOut As String) As 
     End If
 End Function
 
+' The proven minimal.swb helper, retained at the task's helper list; the
+' keep report uses the VERIFIED handoffTitle instead of this second
+' query. Its own API call is captured and recorded.
 Function OwnedDocTitle() As String
+    Dim n As Long
+    Dim d As String
     On Error Resume Next
     OwnedDocTitle = ""
     If swDoc Is Nothing Then Exit Function
+    Err.Clear
     OwnedDocTitle = "" & swDoc.GetTitle
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("owned-doc-title", n, d, "title=" & OwnedDocTitle)
 End Function
 
 ' The first feature type names in the tree, with any captured walk error
@@ -1110,9 +1204,12 @@ Function TreeSummary() As String
     Dim planes As String
     Dim errs As String
     Dim nm As String
+    Dim fn As String
     Dim i As Long
     Dim n As Long
     Dim d As String
+    Dim n2 As Long
+    Dim d2 As String
     On Error Resume Next
     Err.Clear
     Set feat = swDoc.FirstFeature
@@ -1127,7 +1224,15 @@ Function TreeSummary() As String
         If n <> 0 Then errs = errs & "typename err=" & Trim(Str(n)) & " " & d & "; "
         If n = 0 Then
             If InStr(1, nm, "lane", vbTextCompare) > 0 Then
-                planes = planes & nm & "/" & feat.Name & " "
+                Err.Clear
+                fn = feat.Name
+                n2 = Err.Number
+                d2 = Err.Description
+                If n2 <> 0 Then
+                    errs = errs & "name err=" & Trim(Str(n2)) & " " & d2 & "; "
+                Else
+                    planes = planes & nm & "/" & fn & " "
+                End If
             End If
             If i < 10 Then s = s & nm & " "
         End If
