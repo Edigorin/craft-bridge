@@ -1,0 +1,392 @@
+\' craft-bridge probe-sketchspace - Phase 0 diagnostic: in which space do
+' SolidWorks sketch-point readbacks and dimension text placements live?
+' An asymmetric off-origin line at known sketch coordinates, read back in
+' BOTH contexts (active sketch and after closing it), with the model-to-
+' sketch transform reported alongside - the space is decided by data.
+' Diagnostic instrument, not a fidelity golden.
+Option Explicit
+
+Dim swApp As SldWorks.SldWorks
+Dim swDoc As SldWorks.ModelDoc2
+Dim swSketchMgr As SketchManager
+Dim reportPath As String
+
+Sub main()
+    Dim template As String
+    Dim ln As SketchSegment
+    Dim dd As DisplayDimension
+    Dim closedOk As Boolean
+    Dim cleanupMode As String
+    On Error GoTo Fail
+    reportPath = ReportPathFromHost()
+    If reportPath = "" Then Err.Raise vbObjectError + 513, "probe-sketchspace", "no report path"
+    StartReport
+    WriteLine "{""type"":""header"",""macro"":""probe-sketchspace"",""bridge_version"":""0.1.0""}"
+    Set swApp = Application.SldWorks
+    template = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
+    If template = "" Then Err.Raise vbObjectError + 514, "probe-sketchspace", "no default part template"
+    Set swDoc = swApp.NewDocument(template, 0, 0, 0)
+    If swDoc Is Nothing Then Err.Raise vbObjectError + 515, "probe-sketchspace", "no document"
+    Set swSketchMgr = swDoc.SketchManager
+    WriteLine "{""type"":""step"",""index"":-1,""command"":""document.new"",""status"":""created"",""message"":""fresh part from the default template""}"
+    If Not OpenFirstPlane() Then
+        WriteLine "{""type"":""step"",""index"":0,""command"":""sketch.open"",""status"":""failed"",""message"":""" & JsonStr("no plane-like feature accepted; probed: " & gProbeLog) & """}"
+        GoTo WrapUp
+    End If
+    WriteLine "{""type"":""step"",""index"":0,""command"":""sketch.open"",""status"":""created"",""message"":""" & JsonStr(gProbeLog) & """}"
+    ' Asymmetric and off-origin on purpose: any axis swap or reflection
+    ' moves these points, so the readback space cannot hide.
+    Set ln = swSketchMgr.CreateLine(0.013, 0.027, 0#, 0.041, -0.009, 0#)
+    WriteLine PointLine("active", ln)
+    WriteLine TransformLine()
+    Err.Clear
+    ln.Select False
+    Set dd = swDoc.AddDimension2(0.055, -0.035, 0#)
+    WriteLine DimLine(dd)
+    swSketchMgr.InsertSketch True
+    WriteLine PointLine("closed", ln)
+WrapUp:
+    cleanupMode = CloseMode()
+    If cleanupMode = "close" Then
+        CloseOwnedDoc closedOk
+        If closedOk Then
+            WriteLine "{""type"":""summary"",""status"":""ok""}"
+        Else
+            WriteStep 1, "close", "failed", "the owned document could not be confirmed closed"
+            WriteLine "{""type"":""summary"",""status"":""failed""}"
+        End If
+    ElseIf cleanupMode = "keep" Then
+        WriteStep 1, "owned-document", "kept-open", OwnedDocTitle()
+        WriteLine "{""type"":""summary"",""status"":""ok""}"
+    Else
+        WriteStep 1, "close-mode", "failed", "the cleanup mode could not be established"
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
+    End If
+    Exit Sub
+Fail:
+    Dim errNum As Long, errMsg As String
+    errNum = Err.Number
+    errMsg = Err.Description
+    On Error Resume Next
+    WriteLine "{""type"":""step"",""index"":-1,""command"":""probe"",""status"":""failed"",""message"":""" & JsonStr("err " & Trim(Str(errNum)) & ": " & errMsg) & """}"
+    cleanupMode = CloseMode()
+    If cleanupMode = "close" Then CloseOwnedDoc closedOk
+    WriteLine "{""type"":""summary"",""status"":""failed""}"
+End Sub
+
+' Read all three point components in the named context; the numeric error is
+' captured immediately and any failure is reported, never guessed around.
+Function PointLine(ByVal ctx As String, ByVal ln As Object) As String
+    Dim sp As Object
+    Dim n As Long
+    Dim d As String
+    Dim sx, sy, sz As Double
+    On Error Resume Next
+    Err.Clear
+    Set sp = ln.GetStartPoint
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        sx = sp.X
+        sy = sp.Y
+        sz = sp.Z
+        n = Err.Number
+        d = Err.Description
+    End If
+    If n <> 0 Then
+        PointLine = LineFor("point-" & ctx, n, d, "start")
+        Exit Function
+    End If
+    Dim detail As String
+    detail = "start x=" & Trim(Str(sx)) & " y=" & Trim(Str(sy)) & " z=" & Trim(Str(sz))
+    Err.Clear
+    Set sp = ln.GetEndPoint
+    If Err.Number = 0 Then
+        sx = sp.X
+        sy = sp.Y
+        sz = sp.Z
+    End If
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        PointLine = LineFor("point-" & ctx, n, d, detail & " | end")
+        Exit Function
+    End If
+    detail = detail & " | end x=" & Trim(Str(sx)) & " y=" & Trim(Str(sy)) & " z=" & Trim(Str(sz))
+    PointLine = LineFor("point-" & ctx, 0, "", detail)
+End Function
+
+' The full model-to-sketch transform, all twelve ArrayData entries.
+Function TransformLine() As String
+    Dim tr As Object
+    Dim a As Variant
+    Dim n As Long
+    Dim d As String
+    Dim detail As String
+    Dim i As Long
+    On Error Resume Next
+    Err.Clear
+    Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        TransformLine = LineFor("transform", n, d, "")
+        Exit Function
+    End If
+    a = tr.ArrayData
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        TransformLine = LineFor("transform", n, d, "")
+        Exit Function
+    End If
+    detail = ""
+    For i = 0 To 11
+        detail = detail & Trim(Str(a(i)))
+        If i < 11 Then detail = detail & ","
+    Next i
+    TransformLine = LineFor("transform", 0, "", detail)
+End Function
+
+' The dimension: its value and whatever text-position readback the API
+' offers (each candidate captured - absence is data too).
+Function DimLine(ByVal dd As Object) As String
+    Dim n As Long
+    Dim d As String
+    Dim detail As String
+    Dim v As Variant
+    On Error Resume Next
+    detail = ""
+    Err.Clear
+    v = dd.GetDimension2(0).SystemValue
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then detail = "value=" & Trim(Str(v)) Else detail = "value err=" & Trim(Str(n))
+    Err.Clear
+    v = dd.GetTextPosition
+    If Err.Number = 0 Then
+        detail = detail & " | textpos=" & Trim(Str(v(0))) & "," & Trim(Str(v(1))) & "," & Trim(Str(v(2)))
+    Else
+        detail = detail & " | textpos unsupported err=" & Trim(Str(Err.Number))
+    End If
+    Err.Clear
+    v = dd.GetDimension2(0).Name
+    If Err.Number = 0 Then detail = detail & " | name=" & CStr(v)
+    DimLine = LineFor("dimension", 0, "", detail)
+End Function
+
+Function LineFor(ByVal which As String, ByVal n As Long, ByVal d As String, ByVal detail As String) As String
+    LineFor = "{""type"":""probe"",""member"":""" & JsonStr(which) & """,""err"":" & Trim(Str(n)) & ",""errdesc"":""" & JsonStr(d) & """,""detail"":""" & JsonStr(detail) & """}"
+End Function
+
+' Open the first plane-like feature in the tree and report which one and
+' its frame. No frame acceptance here: this probe pins API semantics.
+Dim gProbeLog As String
+Function OpenFirstPlane() As Boolean
+    Dim feat As Object
+    Dim nm As String
+    On Error Resume Next
+    OpenFirstPlane = False
+    gProbeLog = ""
+    Err.Clear
+    Set feat = swDoc.FirstFeature
+    Do While Not feat Is Nothing
+        nm = feat.GetTypeName2()
+        If Err.Number <> 0 Then Exit Function
+        If InStr(1, nm, "lane", vbTextCompare) > 0 Then
+            Err.Clear
+            If feat.Select(False) Then
+                swSketchMgr.InsertSketch True
+                gProbeLog = gProbeLog & feat.Name & ": " & FrameText() & "; "
+                OpenFirstPlane = True
+                Exit Function
+            End If
+        End If
+        Err.Clear
+        Set feat = feat.GetNextFeature
+        If Err.Number <> 0 Then Exit Function
+    Loop
+End Function
+
+' The active sketch's frame as report text: the fail-closed messages name
+' exactly what each probed plane offered.
+Function FrameText() As String
+    Dim tr As Variant, a As Variant
+    On Error Resume Next
+    Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
+    If Err.Number <> 0 Then FrameText = "(no frame)": Exit Function
+    a = tr.ArrayData
+    FrameText = "u=(" & Vec3Text(a(0), a(3), a(6)) & ") v=(" & Vec3Text(a(1), a(4), a(7)) & ") n=(" & Vec3Text(a(2), a(5), a(8)) & ") o=(" & Vec3Text(a(9), a(10), a(11)) & ")"
+End Function
+
+Function Vec3Text(ByVal x As Double, ByVal y As Double, ByVal z As Double) As String
+    Vec3Text = Trim(Str(x)) & "," & Trim(Str(y)) & "," & Trim(Str(z))
+End Function
+
+' Direction equality with sign, on normalized vectors: the transform may
+' carry a uniform scale, the axes must still be exactly the expected ones.
+Function VecIs(ByVal ax As Double, ByVal ay As Double, ByVal az As Double, ByVal bx As Double, ByVal by As Double, ByVal bz As Double) As Boolean
+    Dim L As Double
+    L = Sqr(ax * ax + ay * ay + az * az)
+    If Abs(L) < 0.000001 Then Exit Function
+    VecIs = Abs(ax / L - bx) < 0.000001 And Abs(ay / L - by) < 0.000001 And Abs(az / L - bz) < 0.000001
+End Function
+
+' The report path travels in a one-line file under the TEMP directory that
+    ' the host rewrites before every run: preferred over CRAFT_BRIDGE_REPORT,
+    ' because the macro runs inside the SolidWorks process, which may be an
+    ' instance that started long ago with a stale environment. The environment
+    ' variable is only the fallback for when the path file is missing or blank.
+    Function ReportPathFromHost() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim got As Boolean
+    ReportPathFromHost = ""
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p <> "" Then
+    p = p & "\craft-bridge-report-path.txt"
+    Err.Clear
+    f = FreeFile
+    Open p For Input As #f
+    If Err.Number = 0 Then
+    Err.Clear
+    Line Input #f, oneLine
+    got = (Err.Number = 0)
+    Err.Clear
+    Close #f
+    If got Then
+    oneLine = Trim(oneLine)
+    If oneLine <> "" Then
+    ReportPathFromHost = oneLine
+    Exit Function
+    End If
+    End If
+    End If
+    Err.Clear
+    End If
+    ReportPathFromHost = Trim(Environ$("CRAFT_BRIDGE_REPORT"))
+    End Function
+
+' Truncate the report so this run never inherits a previous run's lines.
+Sub StartReport()
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Output As #f
+    Close #f
+End Sub
+
+' One line, one fresh handle: open, print, close. Nothing to leak, nothing
+' to collide with.
+Sub WriteLine(ByVal text As String)
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Append As #f
+    Print #f, text
+    Close #f
+End Sub
+
+Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)
+    WriteLine "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
+End Sub
+
+' JSON string escaping. This is not VBA-literal escaping: it is only for the
+' report file. Generated code strings are escaped separately by the generator.
+Function JsonStr(ByVal s As String) As String
+    Dim t As String
+    t = Replace(s, "\", "\\")
+    t = Replace(t, """", "\""")
+    t = Replace(t, vbCrLf, "\n")
+    t = Replace(t, vbCr, "\n")
+    t = Replace(t, vbLf, "\n")
+    t = Replace(t, vbTab, "\t")
+    JsonStr = t
+End Function
+
+Sub CloseOwnedDoc(ByRef closedOk As Boolean)
+    Dim exact As String
+    Dim d As Object
+    Dim t2 As String
+    Dim cnt As Long
+    Dim isOurs As Boolean
+    On Error Resume Next
+    closedOk = False
+    If swDoc Is Nothing Then
+        closedOk = True
+        Exit Sub
+    End If
+    Err.Clear
+    exact = swDoc.GetTitle
+    If Err.Number <> 0 Then Exit Sub
+    If Trim(exact) = "" Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then
+            cnt = cnt + 1
+            If d Is swDoc Then isOurs = True
+        End If
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt <> 1 Or Not isOurs Then Exit Sub
+    Err.Clear
+    swApp.CloseDoc exact
+    If Err.Number <> 0 Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    cnt = 0
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then cnt = cnt + 1
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt = 0 Then closedOk = True
+End Sub
+
+Function CloseMode() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim ok As Boolean
+    Dim e3 As Long
+    CloseMode = "unknown"
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p = "" Then Exit Function
+    p = p & "\craft-bridge-report-path.txt"
+    Err.Clear
+    f = FreeFile
+    Open p For Input As #f
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    Line Input #f, oneLine
+    ok = (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    ok = ok And (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    e3 = Err.Number
+    Close #f
+    If Not ok Then Exit Function
+    If e3 = 0 Then
+    If Trim(oneLine) = "close-after-run" Then CloseMode = "close" Else CloseMode = "unknown"
+    ElseIf e3 = 62 And ok Then
+    CloseMode = "keep"
+    End If
+End Function
+
+Function OwnedDocTitle() As String
+    On Error Resume Next
+    OwnedDocTitle = ""
+    If swDoc Is Nothing Then Exit Function
+    OwnedDocTitle = "" & swDoc.GetTitle
+End Function
