@@ -30,10 +30,8 @@ Sub main()
     WriteLine ProbeLine("Value")
     WriteLine ProbeLine("EditRebuild3")
     WriteLine ProbeLine("Add2-3arg")
-    WriteLine ProbeLine("Add40mm")
-    On Error Resume Next
-    swApp.CloseDoc swDoc.GetTitle
-    On Error GoTo Fail
+    WriteLine ProbeAdd40mm()
+    WriteLine CloseLine()
     WriteLine "{""type"":""summary"",""status"":""ok""}"
     Exit Sub
 Fail:
@@ -42,6 +40,7 @@ Fail:
     errMsg = Err.Description
     On Error Resume Next
     WriteLine "{""type"":""step"",""index"":-1,""command"":""eqdiag"",""status"":""failed"",""message"":""" & JsonStr("err " & Trim(Str(errNum)) & ": " & errMsg) & """}"
+    WriteLine CloseLine()
     WriteLine "{""type"":""summary"",""status"":""failed""}"
 End Sub
 
@@ -107,21 +106,100 @@ Function ProbeLine(ByVal which As String) As String
             n = Err.Number
             d = Err.Description
             If n = 0 Then detail = "returned index=" & Trim(Str(idx)) & " (call did not raise; insertion is unverified)"
-        Case "Add40mm"
-            idx = eqMgr.Add(-1, """W1""=40mm")
-            n = Err.Number
-            d = Err.Description
-            If n = 0 Then
-                detail = "idx=" & Trim(Str(idx))
-                Err.Clear
-                v = eqMgr.Equation(idx)
-                If Err.Number = 0 Then detail = detail & " text=" & CStr(v) Else detail = detail & " texterr=" & Err.Description
-                Err.Clear
-                v = eqMgr.Value(idx)
-                If Err.Number = 0 Then detail = detail & " value=" & Trim(Str(v)) Else detail = detail & " valerr=" & Err.Description
-            End If
+
     End Select
     ProbeLine = LineFor(which, n, d, detail)
+End Function
+
+' The unit-semantics experiment: insert a millimetre-form equation, rebuild
+' exactly as the generated helpers do, then read text and value back. Every
+' stage captures its own numeric error before any formatting.
+Function ProbeAdd40mm() As String
+    Dim eqMgr As Object
+    Dim v As Variant
+    Dim idx As Long
+    Dim n As Long
+    Dim d As String
+    Dim detail As String
+    On Error Resume Next
+    Err.Clear
+    Set eqMgr = swDoc.GetEquationMgr
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        ProbeAdd40mm = LineFor("Add40mm", n, d, "stage=acquire")
+        Exit Function
+    End If
+    Err.Clear
+    idx = eqMgr.Add(-1, """W1""=40mm")
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        ProbeAdd40mm = LineFor("Add40mm", n, d, "stage=add")
+        Exit Function
+    End If
+    detail = "stage=add idx=" & Trim(Str(idx))
+    Err.Clear
+    swDoc.EditRebuild3
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        ProbeAdd40mm = LineFor("Add40mm", n, d, detail & " | stage=rebuild")
+        Exit Function
+    End If
+    detail = detail & " | stage=rebuild ok"
+    Err.Clear
+    v = eqMgr.Equation(idx)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        ProbeAdd40mm = LineFor("Add40mm", n, d, detail & " | stage=text")
+        Exit Function
+    End If
+    detail = detail & " | stage=text text=" & CStr(v)
+    Err.Clear
+    v = eqMgr.Value(idx)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        ProbeAdd40mm = LineFor("Add40mm", n, d, detail & " | stage=value")
+        Exit Function
+    End If
+    detail = detail & " | stage=value value=" & Trim(Str(v))
+    ProbeAdd40mm = LineFor("Add40mm", 0, "", detail)
+End Function
+
+' Close exactly the document this probe created - never any other - and
+' verify it: after CloseDoc the captured document object must stop
+' answering. Reports its own outcome as one probe line on both paths.
+Function CloseLine() As String
+    Dim t As String
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    Err.Clear
+    t = swDoc.GetTitle
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        CloseLine = LineFor("close-owned-document", n, d, "title lookup failed")
+        Exit Function
+    End If
+    Err.Clear
+    swApp.CloseDoc t
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        CloseLine = LineFor("close-owned-document", n, d, "CloseDoc failed for " & t)
+        Exit Function
+    End If
+    Err.Clear
+    t = swDoc.GetTitle
+    If Err.Number <> 0 Then
+        CloseLine = LineFor("close-owned-document", 0, "", "verified closed (the document object no longer answers)")
+    Else
+        CloseLine = LineFor("close-owned-document", -1, "the document object still answers after CloseDoc", "closure NOT verified")
+    End If
 End Function
 
 Function LineFor(ByVal which As String, ByVal n As Long, ByVal d As String, ByVal detail As String) As String
