@@ -219,6 +219,33 @@ Sub DimStage()
             WriteLine LineFor("dimension", 0, "", "stage=textpos-get outcome: " & tmp)
         End If
     End If
+    WriteLine LineFor("dimension", 0, "", "stage=annot-get entering")
+    Err.Clear
+    v = dd.Annotation
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("dimension", n, d, "stage=annot-get outcome: member")
+    Else
+        WriteLine LineFor("dimension", 0, "", "stage=annot-get outcome: type=" & TypeName(v))
+        Err.Clear
+        v = dd.Annotation.GetTextPosition
+        n = Err.Number
+        d = Err.Description
+        If n <> 0 Then
+            WriteLine LineFor("dimension", n, d, "stage=annot-textpos outcome: member")
+        Else
+            Err.Clear
+            tmp = Trim(Str(v(0))) & "," & Trim(Str(v(1))) & "," & Trim(Str(v(2)))
+            n = Err.Number
+            d = Err.Description
+            If n <> 0 Then
+                WriteLine LineFor("dimension", n, d, "stage=annot-textpos outcome: decode")
+            Else
+                WriteLine LineFor("dimension", 0, "", "stage=annot-textpos outcome: " & tmp)
+            End If
+        End If
+    End If
     WriteLine LineFor("dimension", 0, "", "stage=textpos-prop entering")
     Err.Clear
     v = dd.TextPosition
