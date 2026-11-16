@@ -27,6 +27,11 @@ if (-not $items) { throw "no corpus items found under $corpus" }
 
 $results = @()
 $failed = 0
+# Provenance stamp: which commit's bytes this run executed. A checkout
+# moving mid-run (parallel pushes) must never be silent again.
+$runRev = (git -C $RepoRoot rev-parse --short HEAD 2>$null)
+Write-Host "== run commit: $runRev"
+$results += [ordered]@{ item = "run-commit"; passed = $true; output = @("$runRev") }
 
 # ---- probe: plain VBScript writes the report the macros must write ----
 $probeReport = Join-Path $ReportDir "probe-report.jsonl"
