@@ -27,7 +27,8 @@
 ' error and description at its own named stage (the host-file report
 ' plumbing - path discovery, open/append - is the proven helper set and
 ' suppresses its own I/O errors by design); entering records precede the
-' risky calls (feature creation, GetPartBox); contexts are verified
+' risky calls (feature creation, CreateMassProperty); contexts are
+' verified
 ' before the named measurements and re-verified after the mutating
 ' feature call (with selections cleared and checked); missing setup
 ' geometry fails the run with a failed step while cleanup still runs.
@@ -174,6 +175,9 @@ Function RunRevolveCase(ByVal tag As String, ByVal shape As String, ByVal revFla
     Dim skName As String
     Dim handoffTitle As String
     Dim closedOk As Boolean
+    Dim vAx As Variant
+    Dim vS As Variant
+    Dim vE As Variant
     Dim n As Long
     Dim d As String
     ' The body runs under captured-error discipline (as the helpers do):
@@ -231,7 +235,11 @@ Function RunRevolveCase(ByVal tag As String, ByVal shape As String, ByVal revFla
     End If
     ' The fixed, recorded axis: endpoint order (0,-0.010) -> (0,0.080),
     ' construction on, sgFix applied - exactly as the emitter draws and
-    ' anchors its helper axis.
+    ' anchors its helper axis. The setup is READ BACK before it is called
+    ' established: construction state and both endpoints (the pinned
+    ' array-form GetStartPoint/GetEndPoint), while the sgFix record says
+    ' only what was actually observed (a call that returned without
+    ' error; constraint insertion is not directly read back).
     Err.Clear
     Set ax = swSketchMgr.CreateLine(0#, -0.01, 0#, 0#, 0.08, 0#)
     n = Err.Number
@@ -246,9 +254,49 @@ Function RunRevolveCase(ByVal tag As String, ByVal shape As String, ByVal revFla
     ax.Construction = True
     n = Err.Number
     d = Err.Description
-    WriteLine LineFor("axis-construction-" & tag, n, d, "")
+    WriteLine LineFor("axis-construction-" & tag, n, d, "stage=assign")
     If n <> 0 Then
         WriteStep 2, "axis", "failed", "the setup axis could not be marked construction"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    vAx = ax.Construction
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("axis-construction-" & tag, n, d, "stage=readback")
+    If n <> 0 Then
+        WriteStep 2, "axis", "failed", "the axis construction state could not be read back"
+        GoTo CaseCleanup
+    End If
+    If vAx <> True Then
+        WriteLine LineFor("axis-construction-" & tag, -1, "readback is not True", "stage=readback value=" & CStr(vAx))
+        WriteStep 2, "axis", "failed", "the axis did not read back as construction geometry"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    vS = ax.GetStartPoint
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("axis-" & tag, n, d, "stage=start-readback form=" & TypeName(vS))
+    If n <> 0 Then
+        WriteStep 2, "axis", "failed", "the axis start point could not be read back"
+        GoTo CaseCleanup
+    End If
+    If Not AxisPointIs(tag, "start", vS, 0#, -0.01) Then
+        WriteStep 2, "axis", "failed", "the axis start does not read back as recorded (0,-0.010); endpoint order is not established"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    vE = ax.GetEndPoint
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("axis-" & tag, n, d, "stage=end-readback form=" & TypeName(vE))
+    If n <> 0 Then
+        WriteStep 2, "axis", "failed", "the axis end point could not be read back"
+        GoTo CaseCleanup
+    End If
+    If Not AxisPointIs(tag, "end", vE, 0#, 0.08) Then
+        WriteStep 2, "axis", "failed", "the axis end does not read back as recorded (0,0.080); endpoint order is not established"
         GoTo CaseCleanup
     End If
     Err.Clear
@@ -264,7 +312,7 @@ Function RunRevolveCase(ByVal tag As String, ByVal shape As String, ByVal revFla
     swDoc.SketchAddConstraints "sgFix"
     n = Err.Number
     d = Err.Description
-    WriteLine LineFor("axis-fix-" & tag, n, d, "")
+    WriteLine LineFor("axis-fix-" & tag, n, d, "stage=sgfix call returned without error; constraint insertion is not directly read back")
     If n <> 0 Then
         WriteStep 2, "axis", "failed", "the setup axis could not be fixed"
         GoTo CaseCleanup
@@ -278,7 +326,7 @@ Function RunRevolveCase(ByVal tag As String, ByVal shape As String, ByVal revFla
         WriteStep 1, "selection", "failed", "selections could not be cleared after the axis setup"
         GoTo CaseCleanup
     End If
-    WriteStep 2, "profile", "created", "closed rectangle u 0.010..0.030, v 0.015..0.060 (metres), 4 lines verified; axis (0,-0.010)-(0,0.080) construction+sgFix verified"
+    WriteStep 2, "profile", "created", "closed rectangle u 0.010..0.030, v 0.015..0.060 (metres), 4 lines verified; axis (0,-0.010)-(0,0.080): construction read back True, endpoints read back as recorded, sgFix call returned without error (insertion not directly read back)"
     Err.Clear
     swSketchMgr.InsertSketch True
     n = Err.Number
@@ -429,6 +477,80 @@ CaseCleanup:
     RunRevolveCase = result
 End Function
 
+' One axis endpoint readback: the array form of GetStartPoint/
+' GetEndPoint (the pinned Double() sketch-space API), rank-probed, each
+' component extracted with its own captured error before NumDecode, and
+' the (u,v) pair compared against the recorded endpoint order. True =
+' the endpoint reads back exactly as recorded (1e-6 m).
+Function AxisPointIs(ByVal tag As String, ByVal which As String, ByVal arr As Variant, ByVal eu As Double, ByVal ev As Double) As Boolean
+    Dim n As Long
+    Dim d As String
+    Dim x As Double
+    Dim y As Double
+    Dim lb As Long
+    Dim ub As Long
+    Dim vOne As Variant
+    On Error Resume Next
+    AxisPointIs = False
+    Err.Clear
+    lb = LBound(arr)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("axis-" & tag, n, d, "stage=" & which & " form lbound")
+        Exit Function
+    End If
+    Err.Clear
+    ub = UBound(arr)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("axis-" & tag, n, d, "stage=" & which & " form ubound")
+        Exit Function
+    End If
+    WriteLine LineFor("axis-" & tag, 0, "", "stage=" & which & " form lbound=" & Trim(Str(lb)) & " ubound=" & Trim(Str(ub)))
+    If lb <> 0 Or ub < 1 Then
+        WriteLine LineFor("axis-" & tag, -1, "unexpected form", "stage=" & which & " form check: at least (u,v) expected; the values are not interpreted")
+        Exit Function
+    End If
+    Err.Clear
+    ub = UBound(arr, 2)
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        WriteLine LineFor("axis-" & tag, -1, "a second dimension exists", "stage=" & which & " rank-probe")
+        Exit Function
+    End If
+    WriteLine LineFor("axis-" & tag, n, d, "stage=" & which & " rank-probe (error 9 = one-dimensional, expected)")
+    If n <> 9 Then Exit Function
+    Err.Clear
+    vOne = Empty
+    vOne = arr(0)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("axis-" & tag, n, d, "stage=" & which & " u extraction")
+        Exit Function
+    End If
+    If Not NumDecode("axis-" & tag, which & " u", vOne, x) Then Exit Function
+    Err.Clear
+    vOne = Empty
+    vOne = arr(1)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("axis-" & tag, n, d, "stage=" & which & " v extraction")
+        Exit Function
+    End If
+    If Not NumDecode("axis-" & tag, which & " v", vOne, y) Then Exit Function
+    If Abs(x - eu) > 0.000001 Or Abs(y - ev) > 0.000001 Then
+        WriteLine LineFor("axis-" & tag, -1, "endpoint order mismatch", "stage=" & which & " reads (" & Trim(Str(x)) & "," & Trim(Str(y)) & ") expected (" & Trim(Str(eu)) & "," & Trim(Str(ev)) & ")")
+        Exit Function
+    End If
+    WriteLine LineFor("axis-" & tag, 0, "", "stage=" & which & " verified at (" & Trim(Str(x)) & "," & Trim(Str(y)) & ")")
+    AxisPointIs = True
+End Function
+
 ' The body's mass properties (the tools/check-part.vbs approach): the
 ' Extension acquisition and CreateMassProperty are separate captured
 ' stages; Volume is required; the centroid is required through at least
@@ -472,7 +594,13 @@ Sub MassEvidence(ByVal tag As String, ByRef ok As Boolean)
     If n <> 0 Then
         WriteLine LineFor("massprops-" & tag, n, d, "stage=volume")
     ElseIf NumDecode("massprops-" & tag, "volume", v, sv) Then
-        volOk = True
+        ' Strictly positive volume is required body evidence: a numeric
+        ' zero is kept as a raw observation but proves no valid solid.
+        If sv > 0# Then
+            volOk = True
+        Else
+            WriteLine LineFor("massprops-" & tag, -1, "nonpositive volume", "stage=volume positivity: value=" & Trim(Str(sv)) & " is not valid body evidence")
+        End If
     End If
     WriteLine LineFor("massprops-" & tag, 0, "", "entering: candidate centerofmass")
     Err.Clear
@@ -499,9 +627,11 @@ Sub MassEvidence(ByVal tag As String, ByRef ok As Boolean)
 End Sub
 
 ' One centroid candidate: the exact returned form (zero-based
-' one-dimensional, 3 components) and every component decoded through
-' NumDecode (Empty/Null/nonnumeric rejected before conversion, never a
-' default). True = all three components decoded.
+' one-dimensional, 3 components - rank probed, not assumed), every
+' component extracted with its own captured error BEFORE decoding (a
+' failed extraction is recorded and can never reach True), and decoded
+' through NumDecode (Empty/Null/nonnumeric rejected before conversion,
+' never a default). True = all three components decoded.
 Function ComDecode(ByVal tag As String, ByVal cand As String, ByVal v As Variant) As Boolean
     Dim n As Long
     Dim d As String
@@ -510,6 +640,7 @@ Function ComDecode(ByVal tag As String, ByVal cand As String, ByVal v As Variant
     Dim bad As Boolean
     Dim lb As Long
     Dim ub As Long
+    Dim vOne As Variant
     Dim comps As String
     On Error Resume Next
     ComDecode = False
@@ -535,9 +666,27 @@ Function ComDecode(ByVal tag As String, ByVal cand As String, ByVal v As Variant
         WriteLine LineFor("massprops-" & tag, -1, "unexpected form", "stage=candidate " & cand & " form check: zero-based 3 components (0..2) expected; the values are not interpreted")
         Exit Function
     End If
+    Err.Clear
+    ub = UBound(v, 2)
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        WriteLine LineFor("massprops-" & tag, -1, "a second dimension exists", "stage=candidate " & cand & " rank-probe")
+        Exit Function
+    End If
+    WriteLine LineFor("massprops-" & tag, n, d, "stage=candidate " & cand & " rank-probe (error 9 = one-dimensional, expected)")
+    If n <> 9 Then Exit Function
     comps = ""
     For i = 0 To 2
-        If NumDecode("massprops-" & tag, "candidate " & cand & " component" & Trim(Str(i)), v(i), x) Then
+        Err.Clear
+        vOne = Empty
+        vOne = v(i)
+        n = Err.Number
+        d = Err.Description
+        If n <> 0 Then
+            WriteLine LineFor("massprops-" & tag, n, d, "stage=candidate " & cand & " component" & Trim(Str(i)) & " extraction")
+            bad = True
+        ElseIf NumDecode("massprops-" & tag, "candidate " & cand & " component" & Trim(Str(i)), vOne, x) Then
             comps = comps & " " & Trim(Str(x))
         Else
             bad = True
@@ -549,7 +698,8 @@ Function ComDecode(ByVal tag As String, ByVal cand As String, ByVal v As Variant
 End Function
 
 ' One dimension identity: the lookup key, the returned Name and the
-' SystemValue in SI metres, each at its own captured stage. Required
+' SystemValue in SI base units (lengths in metres, angles in radians),
+' each at its own captured stage. Required
 ' evidence: a nonblank returned Name and a decoded numeric SystemValue -
 ' neither is ever substituted with a default. required = True makes a
 ' missing identity a measurement failure; required = False is an
