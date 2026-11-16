@@ -273,4 +273,17 @@ confirmed by the eqdiag probe alongside working `Equation(i)`, `Value(i)`
 and `EditRebuild3`): the insert-index upper bound is checked through the
 `Equation(idx)` readback, which raises on an out-of-range index and fails
 closed while also proving the stored text.
+The evaluated value the manager reports is the millimetre magnitude for a
+millimetre-form right-hand side (eqdiag on 34.3.2: `"W1"=40mm` -> `40`;
+a unitless right-hand side reads back as written), so the global-equation
+value check compares against `expect * 1000` and fails closed loudly if
+that convention ever changes.
+
+**Document cleanup (runtime):** every generated macro and the checkpoint
+close exactly the document they created, and never any other: before the
+name-based close, a live enumeration of open documents must find exactly
+one match for the captured title and it must be the macro's own object
+(an empty title is refused outright); after the close, no open document
+may answer to the title. An unverified closure fails the run. Owner rule
+(2026-11-16): test runs leave no documents open.
 

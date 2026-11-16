@@ -1085,6 +1085,10 @@ fn equations_use_the_seat_proven_add_shape_and_read_back() {
         gbody.contains("eqMgr.Value(idx)"),
         "the global equation value is not checked"
     );
+    assert!(
+        gbody.contains("eqMgr.Value(idx) - expect * 1000#"),
+        "the global value check does not use the evaluator's millimetre space"
+    );
     let dstart = macro_text.find("Function AddDimEquation(").unwrap();
     let dbody = &macro_text[dstart..macro_text[dstart..].find("End Function").unwrap() + dstart];
     assert!(
@@ -1125,6 +1129,35 @@ fn report_path_prefers_the_fresh_path_file_over_the_environment() {
         assert!(
             file < env,
             "{name}: the environment wins over the fresh path file"
+        );
+    }
+}
+
+#[test]
+fn runs_close_their_own_document() {
+    // The owner rule: test runs leave no documents open - each macro closes
+    // exactly the document it created, with ownership checked first.
+    let case = Case::new(TRACER);
+    case.build_to("closecheck.swb", false).unwrap();
+    let generated = fs::read_to_string(case.dir.path().join("closecheck.swb")).unwrap();
+    for (name, text) in [
+        ("generated", generated.as_str()),
+        (
+            "checkpoint",
+            include_str!("../corpus/compat-check/minimal.swb"),
+        ),
+    ] {
+        assert!(
+            text.contains("Sub CloseOwnedDoc(ByRef closedOk As Boolean)"),
+            "{name}: no owned-document closer"
+        );
+        assert!(
+            text.contains("CloseOwnedDoc closedOk"),
+            "{name}: the closer is never called"
+        );
+        assert!(
+            text.contains("If cnt <> 1 Or Not isOurs Then Exit Sub"),
+            "{name}: no pre-close ownership check"
         );
     }
 }

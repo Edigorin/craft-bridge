@@ -391,7 +391,9 @@ pub fn emit(
         }
     }
 
+    out.push_str("    Dim closedOk As Boolean\n    CloseOwnedDoc closedOk\n    If closedOk Then");
     out.push_str("    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"ok\"\"}\"\n");
+    out.push_str("    Else\n    WriteStep stepIdx, \"close\", \"failed\", \"the owned document could not be confirmed closed\"\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"failed\"\"}\"\n    End If");
     out.push_str("    Exit Sub\n\n");
     out.push_str("Fail:\n");
     out.push_str("    ' Capture the error FIRST: executing On Error resets Err.\n");
@@ -407,6 +409,7 @@ pub fn emit(
     out.push_str(
         "        WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"failed\"\"}\"\n",
     );
+    out.push_str("    Dim closedOk As Boolean\n    CloseOwnedDoc closedOk");
     out.push_str("    End If\nEnd Sub\n\n");
 
     // ---- per-sketch builders ----
@@ -733,7 +736,55 @@ pub fn emit(
          End Sub\n\
 \n\
 \n\
-         ' The report path travels in a one-line file under the TEMP directory that
+                 ' Close exactly the document this macro created - never any other - and\n\
+        ' verify it by a live enumeration of open documents: before the close, the\n\
+        ' title must identify exactly our object among open documents (an empty\n\
+        ' title is refused); after it, no open document may answer to the title.\n\
+        ' A failed query proves nothing and leaves the run failed. The owner rule:\n\
+        ' runs leave no documents open.\n\
+        Sub CloseOwnedDoc(ByRef closedOk As Boolean)\n\
+        Dim exact As String\n\
+        Dim d As Object\n\
+        Dim cnt As Long\n\
+        Dim isOurs As Boolean\n\
+        On Error Resume Next\n\
+        closedOk = False\n\
+        If swDoc Is Nothing Then\n\
+        closedOk = True\n\
+        Exit Sub\n\
+        End If\n\
+        Err.Clear\n\
+        exact = swDoc.GetTitle\n\
+        If Err.Number <> 0 Then Exit Sub\n\
+        If Trim(exact) = \"\" Then Exit Sub\n\
+        Err.Clear\n\
+        cnt = 0\n\
+        isOurs = False\n\
+        Set d = swApp.GetFirstDocument\n\
+        Do While Not d Is Nothing\n\
+        If d.GetTitle = exact Then\n\
+        cnt = cnt + 1\n\
+        If d Is swDoc Then isOurs = True\n\
+        End If\n\
+        Set d = d.GetNext\n\
+        Loop\n\
+        If Err.Number <> 0 Then Exit Sub\n\
+        If cnt <> 1 Or Not isOurs Then Exit Sub\n\
+        Err.Clear\n\
+        swApp.CloseDoc exact\n\
+        If Err.Number <> 0 Then Exit Sub\n\
+        Err.Clear\n\
+        cnt = 0\n\
+        Set d = swApp.GetFirstDocument\n\
+        Do While Not d Is Nothing\n\
+        If d.GetTitle = exact Then cnt = cnt + 1\n\
+        Set d = d.GetNext\n\
+        Loop\n\
+        If Err.Number <> 0 Then Exit Sub\n\
+        If cnt = 0 Then closedOk = True\n\
+        End Sub\n\
+
+' The report path travels in a one-line file under the TEMP directory that
 ' the host rewrites before every run: preferred over CRAFT_BRIDGE_REPORT,
 ' because the macro runs inside the SolidWorks process, which may be an
 ' instance that started long ago with a stale environment. The environment
@@ -814,7 +865,7 @@ If idx < 0 Then gMsg = \"equation failed: the equation was not accepted\": GoTo 
 swDoc.EditRebuild3
 
 If eqMgr.Equation(idx) <> eqText Then gMsg = \"equation failed: the stored equation reads back differently\": GoTo EqFail
-If Abs(eqMgr.Value(idx) - expect) > 0.000001 Then gMsg = \"equation failed: the equation value does not match\": GoTo EqFail
+If Abs(eqMgr.Value(idx) - expect * 1000#) > 0.001 Then gMsg = \"equation failed: the equation value does not match\": GoTo EqFail
 gMsg = \"equation \" & eqText
 AddGlobalEquation = \"created\"
 Exit Function
