@@ -317,11 +317,13 @@ CaseCleanup:
 End Function
 
 ' The body's bounding box: the exact returned form (zero-based
-' one-dimensional, 6 components) and every component decoded as a
-' Double, each at its own captured stage. Required evidence: the call
-' must succeed and all six components must decode; a different form is
-' reported verbatim and refused - components are never interpreted
-' against a wrong form and never substituted with defaults.
+' one-dimensional, 6 components - rank probed, not assumed) and every
+' component extracted with its own captured error BEFORE decoding (a
+' failed extraction is recorded and can never pass), then decoded
+' through NumDecode. Required evidence: the call must succeed and all
+' six components must decode; a different form is reported verbatim and
+' refused - components are never interpreted against a wrong form and
+' never substituted with defaults.
 Sub BoxEvidence(ByVal tag As String, ByRef ok As Boolean)
     Dim pb As SldWorks.PartDoc
     Dim v As Variant
@@ -331,6 +333,7 @@ Sub BoxEvidence(ByVal tag As String, ByRef ok As Boolean)
     Dim lb As Long
     Dim ub As Long
     Dim i As Long
+    Dim vOne As Variant
     Dim comps As String
     Dim bad As Boolean
     Dim x As Double
@@ -382,9 +385,27 @@ Sub BoxEvidence(ByVal tag As String, ByRef ok As Boolean)
         WriteLine LineFor("getpartbox-" & tag, -1, "unexpected form", "stage=form check: zero-based 6 components (0..5) expected; the values are not interpreted")
         Exit Sub
     End If
+    Err.Clear
+    ub = UBound(v, 2)
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        WriteLine LineFor("getpartbox-" & tag, -1, "a second dimension exists", "stage=rank-probe")
+        Exit Sub
+    End If
+    WriteLine LineFor("getpartbox-" & tag, n, d, "stage=rank-probe (error 9 = one-dimensional, expected)")
+    If n <> 9 Then Exit Sub
     comps = ""
     For i = 0 To 5
-        If NumDecode("getpartbox-" & tag, "component" & Trim(Str(i)), v(i), x) Then
+        Err.Clear
+        vOne = Empty
+        vOne = v(i)
+        n = Err.Number
+        d = Err.Description
+        If n <> 0 Then
+            WriteLine LineFor("getpartbox-" & tag, n, d, "stage=component" & Trim(Str(i)) & " extraction")
+            bad = True
+        ElseIf NumDecode("getpartbox-" & tag, "component" & Trim(Str(i)), vOne, x) Then
             tmp = Trim(Str(x))
             comps = comps & " c" & Trim(Str(i)) & "=" & tmp
         Else
@@ -397,7 +418,8 @@ Sub BoxEvidence(ByVal tag As String, ByRef ok As Boolean)
 End Sub
 
 ' One dimension identity: the lookup key, the returned Name and the
-' SystemValue in SI metres, each at its own captured stage. Required
+' SystemValue in SI base units (lengths in metres, angles in radians),
+' each at its own captured stage. Required
 ' evidence: a nonblank returned Name and a decoded numeric SystemValue -
 ' neither is ever substituted with a default. required = True makes a
 ' missing identity a measurement failure; required = False is an
