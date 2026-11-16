@@ -1744,13 +1744,6 @@ fn no_identifier_shadows_a_vba_intrinsic() {
     // Seat-proven compile rule: a VBA intrinsic name cannot be an
     // identifier - `Dim sgn As Double` is a compile error that RunMacro
     // reports only as a bare failure with no report (bisected 2026-11-16).
-    const INTRINSICS: &[&str] = &[
-        "sgn", "abs", "val", "mid", "left", "right", "len", "asc", "chr", "instr", "date", "time",
-        "now", "timer", "format", "string", "array", "filter", "split", "join", "lcase", "ucase",
-        "trim", "str", "fix", "int", "round", "sin", "cos", "tan", "log", "exp", "hex", "oct",
-        "rgb", "environ", "shell", "name", "kill", "width", "spc", "tab", "stop", "line", "open",
-        "close", "input", "print",
-    ];
     for (name, recipe) in [
         ("tracer", TRACER),
         ("stop-rule", TRACER_STOP),
@@ -1778,7 +1771,7 @@ fn assert_no_intrinsic_shadowing(text: &str, what: &str) {
         "rgb", "environ", "shell", "name", "kill", "width", "spc", "tab", "stop", "line", "open",
         "close", "input", "print",
     ];
-    let mut check = |name: &str, at: usize| {
+    let check = |name: &str, at: usize| {
         assert!(
             !INTRINSICS.contains(&name.to_lowercase().as_str()),
             "{what}: identifier {name} shadows a VBA intrinsic (line {at})"
@@ -1809,7 +1802,7 @@ fn assert_no_intrinsic_shadowing(text: &str, what: &str) {
                     for p in plist.split(',') {
                         // The parameter NAME is the first non-keyword token;
                         // the type follows "As".
-                        for tok in p.trim().split_whitespace() {
+                        for tok in p.split_whitespace() {
                             let low = tok.to_lowercase();
                             if low == "byval"
                                 || low == "byref"
@@ -1818,7 +1811,7 @@ fn assert_no_intrinsic_shadowing(text: &str, what: &str) {
                             {
                                 continue;
                             }
-                            let name = tok.trim_end_matches(')').trim();
+                            let name = tok.trim_end_matches(')');
                             if !name.is_empty() {
                                 check(name, i + 1);
                             }
