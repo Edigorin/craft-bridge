@@ -22,6 +22,7 @@ Sub main()
     Dim runFailed As Boolean
     Dim closedOk As Boolean
     Dim cleanupMode As String
+    Dim prevToggle As Boolean
     Dim errNum As Long
     Dim errMsg As String
     Dim n As Long
@@ -62,11 +63,35 @@ Sub main()
         runFailed = True
         GoTo WrapUp
     End If
+    ' The seat evidence (owner experiment 2026-11-16): AddDimension2 opens
+    ' the input-dimension-value dialog and blocks until confirmed. Turn that
+    ' preference off around the stage - saving and restoring it - so the
+    ' call is the non-interactive one every recording macro expects.
+    Err.Clear
+    prevToggle = swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("dimval-toggle", n, d, "stage=get prev=" & CStr(prevToggle))
+    Err.Clear
+    swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, False
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("dimval-toggle", n, d, "stage=set-off")
+        runFailed = True
+        GoTo WrapUp
+    End If
+    WriteLine LineFor("dimval-toggle", 0, "", "stage=set-off ok")
     ' The stage under test. If it stalls, this probe - and only this probe -
     ' loses its remaining records and its cleanup; the timeout path is the
     ' documented stop-and-reconcile.
     DimStage
 WrapUp:
+    Err.Clear
+    swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, prevToggle
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then WriteLine LineFor("dimval-toggle", n, d, "stage=restore")
     cleanupMode = CloseMode()
     If cleanupMode = "close" Then
         CloseOwnedDoc closedOk
@@ -93,6 +118,8 @@ Fail:
     errMsg = Err.Description
     On Error Resume Next
     WriteLine "{""type"":""step"",""index"":-1,""command"":""probe"",""status"":""failed"",""message"":""" & JsonStr("err " & Trim(Str(errNum)) & ": " & errMsg) & """}"
+    Err.Clear
+    swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, prevToggle
     cleanupMode = CloseMode()
     If cleanupMode = "close" Then CloseOwnedDoc closedOk
     WriteLine "{""type"":""summary"",""status"":""failed""}"
