@@ -1,0 +1,558 @@
+' craft-bridge probe-endpoints - Phase 0 companion pin: how does one
+' obtain SELECTABLE point handles (relations and dimensions select them),
+' given that GetStartPoint returns Double() arrays? A line and a circle in
+' one sketch: the coordinate readbacks (known), then every candidate form
+' of point handle with its Select result captured - and the circle centre
+' candidates likewise. Diagnostic instrument, not a fidelity golden.
+Option Explicit
+
+Dim swApp As SldWorks.SldWorks
+Dim swDoc As SldWorks.ModelDoc2
+Dim swSketchMgr As SketchManager
+Dim reportPath As String
+Dim gProbeLog As String
+
+Sub main()
+    Dim template As String
+    Dim ln As Object
+    Dim ci As Object
+    Dim ok As Boolean
+    Dim verified As Boolean
+    Dim runFailed As Boolean
+    Dim closedOk As Boolean
+    Dim cleanupMode As String
+    Dim errNum As Long
+    Dim errMsg As String
+    Dim n As Long
+    Dim d As String
+    On Error GoTo Fail
+    runFailed = False
+    reportPath = ReportPathFromHost()
+    If reportPath = "" Then Err.Raise vbObjectError + 513, "probe-endpoints", "no report path"
+    StartReport
+    WriteLine "{""type"":""header"",""macro"":""probe-endpoints"",""bridge_version"":""0.1.0""}"
+    Set swApp = Application.SldWorks
+    template = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
+    If template = "" Then Err.Raise vbObjectError + 514, "probe-endpoints", "no default part template"
+    Set swDoc = swApp.NewDocument(template, 0, 0, 0)
+    If swDoc Is Nothing Then Err.Raise vbObjectError + 515, "probe-endpoints", "no document"
+    Set swSketchMgr = swDoc.SketchManager
+    WriteLine "{""type"":""step"",""index"":-1,""command"":""document.new"",""status"":""created"",""message"":""fresh part from the default template""}"
+    If Not OpenFirstPlane() Then
+        WriteLine "{""type"":""step"",""index"":0,""command"":""sketch.open"",""status"":""failed"",""message"":""" & JsonStr("the sketch could not be opened; probed: " & gProbeLog) & """}"
+        runFailed = True
+        GoTo WrapUp
+    End If
+    WriteLine "{""type"":""step"",""index"":0,""command"":""sketch.open"",""status"":""created"",""message"":""" & JsonStr(gProbeLog) & """}"
+    ReportContext "active", verified
+    If Not verified Then
+        WriteLine "{""type"":""step"",""index"":1,""command"":""context"",""status"":""failed"",""message"":""the active context is not verified""}"
+        runFailed = True
+        GoTo WrapUp
+    End If
+    Err.Clear
+    Set ln = swSketchMgr.CreateLine(0.013, 0.027, 0#, 0.041, -0.009, 0#)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("createline", n, d, "type=" & TypeName(ln))
+    Err.Clear
+    Set ci = swSketchMgr.CreateCircleByRadius(0.023, -0.031, 0#, 0.007)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("createcircle", n, d, "type=" & TypeName(ci))
+    WriteLine PointsEnumLine()
+    WriteLine HandleCandidates("line-start", ln, True)
+    WriteLine HandleCandidates("line-end", ln, False)
+    WriteLine CircleCentreCandidates(ci)
+WrapUp:
+    cleanupMode = CloseMode()
+    If cleanupMode = "close" Then
+        CloseOwnedDoc closedOk
+        If closedOk And Not runFailed Then
+            WriteLine "{""type"":""summary"",""status"":""ok""}"
+        Else
+            If Not closedOk Then WriteStep 5, "close", "failed", "the owned document could not be confirmed closed"
+            WriteLine "{""type"":""summary"",""status"":""failed""}"
+        End If
+    ElseIf cleanupMode = "keep" Then
+        WriteStep 5, "owned-document", "kept-open", OwnedDocTitle()
+        If runFailed Then
+            WriteLine "{""type"":""summary"",""status"":""failed""}"
+        Else
+            WriteLine "{""type"":""summary"",""status"":""ok""}"
+        End If
+    Else
+        WriteStep 5, "close-mode", "failed", "the cleanup mode could not be established"
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
+    End If
+    Exit Sub
+Fail:
+    errNum = Err.Number
+    errMsg = Err.Description
+    On Error Resume Next
+    WriteLine "{""type"":""step"",""index"":-1,""command"":""probe"",""status"":""failed"",""message"":""" & JsonStr("err " & Trim(Str(errNum)) & ": " & errMsg) & """}"
+    cleanupMode = CloseMode()
+    If cleanupMode = "close" Then CloseOwnedDoc closedOk
+    WriteLine "{""type"":""summary"",""status"":""failed""}"
+End Sub
+
+' The sketch's point collection: count, type and - if objects come back -
+' each one's coordinates and Select result.
+Function PointsEnumLine() As String
+    Dim sk As Object
+    Dim ps As Variant
+    Dim v As Variant
+    Dim i As Long
+    Dim n As Long
+    Dim d As String
+    Dim detail As String
+    On Error Resume Next
+    Err.Clear
+    Set sk = swSketchMgr.ActiveSketch
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        PointsEnumLine = LineFor("sketchpoints", n, d, "stage=activesketch")
+        Exit Function
+    End If
+    Err.Clear
+    ps = sk.SketchPoints
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        PointsEnumLine = LineFor("sketchpoints", n, d, "stage=sketchpoints")
+        Exit Function
+    End If
+    Err.Clear
+    detail = "type=" & TypeName(ps) & " ubound=" & Trim(Str(UBound(ps)))
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        PointsEnumLine = LineFor("sketchpoints", n, d, "stage=ubound " & detail)
+        Exit Function
+    End If
+    For i = 0 To UBound(ps)
+        Err.Clear
+        Set v = ps(i)
+        n = Err.Number
+        d = Err.Description
+        If n <> 0 Then
+            detail = detail & " | idx" & Trim(Str(i)) & " set err=" & Trim(Str(n))
+        ElseIf v Is Nothing Then
+            detail = detail & " | idx" & Trim(Str(i)) & " Nothing"
+        Else
+            detail = detail & " | idx" & Trim(Str(i)) & " type=" & TypeName(v) & " select=" & CStr(v.Select(False))
+        End If
+        If Err.Number <> 0 Then detail = detail & " err=" & Trim(Str(Err.Number))
+    Next i
+    PointsEnumLine = LineFor("sketchpoints", 0, "", detail)
+End Function
+
+' Every candidate form of selectable point handle on a line endpoint,
+' each with its own captured Select result.
+Function HandleCandidates(ByVal tag As String, ByVal ln As Object, ByVal isStart As Boolean) As String
+    Dim v As Variant
+    Dim sp As Object
+    Dim n As Long
+    Dim d As String
+    Dim detail As String
+    On Error Resume Next
+    detail = ""
+    Err.Clear
+    If isStart Then
+        v = ln.GetStartPoint
+    Else
+        v = ln.GetEndPoint
+    End If
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        detail = detail & "array-form type=" & TypeName(v)
+    Else
+        detail = detail & "array-form err=" & Trim(Str(n))
+    End If
+    Err.Clear
+    If isStart Then
+        Set sp = ln.GetStartPoint
+    Else
+        Set sp = ln.GetEndPoint
+    End If
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        detail = detail & " | set-form type=" & TypeName(sp)
+        If Not sp Is Nothing Then detail = detail & " select=" & CStr(sp.Select(False))
+    Else
+        detail = detail & " | set-form err=" & Trim(Str(n)) & " " & d
+    End If
+    Err.Clear
+    v = ln.StartPoint
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        detail = detail & " | startpoint-prop type=" & TypeName(v)
+    Else
+        detail = detail & " | startpoint-prop err=" & Trim(Str(n))
+    End If
+    HandleCandidates = LineFor("handle-" & tag, 0, "", detail)
+End Function
+
+' The circle centre: every candidate form with captured types and Selects.
+Function CircleCentreCandidates(ByVal ci As Object) As String
+    Dim v As Variant
+    Dim sp As Object
+    Dim n As Long
+    Dim d As String
+    Dim detail As String
+    On Error Resume Next
+    detail = ""
+    Err.Clear
+    v = ci.GetStartPoint
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        detail = detail & "getstart type=" & TypeName(v)
+    Else
+        detail = detail & "getstart err=" & Trim(Str(n))
+    End If
+    Err.Clear
+    Set sp = ci.GetStartPoint
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        detail = detail & " | getstart-set type=" & TypeName(sp)
+        If Not sp Is Nothing Then detail = detail & " select=" & CStr(sp.Select(False))
+    Else
+        detail = detail & " | getstart-set err=" & Trim(Str(n))
+    End If
+    Err.Clear
+    v = ci.CenterX
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        detail = detail & " | centerx=" & Trim(Str(v))
+    Else
+        detail = detail & " | centerx err=" & Trim(Str(n))
+    End If
+    Err.Clear
+    v = ci.CenterY
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        detail = detail & " | centery=" & Trim(Str(v))
+    Else
+        detail = detail & " | centery err=" & Trim(Str(n))
+    End If
+    CircleCentreCandidates = LineFor("circle-centre", 0, "", detail)
+End Function
+
+Function LineFor(ByVal which As String, ByVal n As Long, ByVal d As String, ByVal detail As String) As String
+    LineFor = "{""type"":""probe"",""member"":""" & JsonStr(which) & """,""err"":" & Trim(Str(n)) & ",""errdesc"":""" & JsonStr(d) & """,""detail"":""" & JsonStr(detail) & """}"
+End Function
+
+Function OpenFirstPlane() As Boolean
+    Dim feat As Object
+    Dim nm As String
+    Dim fname As String
+    Dim sk As Object
+    Dim n As Long
+    Dim d As String
+    Dim sel As Boolean
+    On Error Resume Next
+    OpenFirstPlane = False
+    gProbeLog = ""
+    Err.Clear
+    Set feat = swDoc.FirstFeature
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        gProbeLog = gProbeLog & "stage=firstfeature err=" & Trim(Str(n)) & " " & d & "; "
+        Exit Function
+    End If
+    Do While Not feat Is Nothing
+        Err.Clear
+        nm = feat.GetTypeName2()
+        n = Err.Number
+        d = Err.Description
+        If n <> 0 Then
+            gProbeLog = gProbeLog & "stage=typename err=" & Trim(Str(n)) & " " & d & "; "
+            Exit Function
+        End If
+        If InStr(1, nm, "lane", vbTextCompare) > 0 Then
+            Err.Clear
+            fname = feat.Name
+            n = Err.Number
+            d = Err.Description
+            If n <> 0 Then
+                gProbeLog = gProbeLog & "stage=name err=" & Trim(Str(n)) & " " & d & "; "
+                Exit Function
+            End If
+            Err.Clear
+            sel = feat.Select(False)
+            n = Err.Number
+            d = Err.Description
+            If n <> 0 Then
+                gProbeLog = gProbeLog & fname & ": select err=" & Trim(Str(n)) & " " & d & "; "
+                Exit Function
+            End If
+            If Not sel Then
+                gProbeLog = gProbeLog & fname & ": select returned false; "
+            Else
+                Err.Clear
+                swSketchMgr.InsertSketch True
+                n = Err.Number
+                d = Err.Description
+                If n <> 0 Then
+                    gProbeLog = gProbeLog & fname & ": insertsketch err=" & Trim(Str(n)) & " " & d & "; "
+                    Exit Function
+                End If
+                Err.Clear
+                Set sk = swSketchMgr.ActiveSketch
+                n = Err.Number
+                d = Err.Description
+                If n <> 0 Then
+                    gProbeLog = gProbeLog & fname & ": activesketch err=" & Trim(Str(n)) & " " & d & "; "
+                    Exit Function
+                End If
+                If sk Is Nothing Then
+                    gProbeLog = gProbeLog & fname & ": opened but no active sketch object; "
+                    Exit Function
+                End If
+                gProbeLog = gProbeLog & fname & ": opened; frame " & FrameTextEx() & "; "
+                OpenFirstPlane = True
+                Exit Function
+            End If
+        End If
+        Err.Clear
+        Set feat = feat.GetNextFeature
+        n = Err.Number
+        d = Err.Description
+        If n <> 0 Then
+            gProbeLog = gProbeLog & "stage=nextfeature err=" & Trim(Str(n)) & " " & d & "; "
+            Exit Function
+        End If
+    Loop
+End Function
+
+Function FrameTextEx() As String
+    Dim tr As Object
+    Dim a As Variant
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    Err.Clear
+    Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        FrameTextEx = "(frame unavailable: get err " & Trim(Str(n)) & " " & d & ")"
+        Exit Function
+    End If
+    Err.Clear
+    a = tr.ArrayData
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        FrameTextEx = "(frame unavailable: arraydata err " & Trim(Str(n)) & " " & d & ")"
+        Exit Function
+    End If
+    Err.Clear
+    FrameTextEx = "u=(" & Vec3Text(a(0), a(3), a(6)) & ") v=(" & Vec3Text(a(1), a(4), a(7)) & ") n=(" & Vec3Text(a(2), a(5), a(8)) & ") o=(" & Vec3Text(a(9), a(10), a(11)) & ")"
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then FrameTextEx = "(frame unavailable: index err " & Trim(Str(n)) & " " & d & ")"
+End Function
+
+Sub ReportContext(ByVal ctx As String, ByRef verified As Boolean)
+    Dim sk As Object
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    verified = False
+    Err.Clear
+    Set sk = swSketchMgr.ActiveSketch
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("context-" & ctx, n, d, "active-sketch query failed; context NOT verified")
+        Exit Sub
+    End If
+    If ctx = "active" Then
+        If sk Is Nothing Then
+            WriteLine LineFor("context-active", -1, "no active sketch", "context NOT verified")
+        Else
+            verified = True
+            WriteLine LineFor("context-active", 0, "", "verified: a sketch is active")
+        End If
+    Else
+        If sk Is Nothing Then
+            verified = True
+            WriteLine LineFor("context-closed", 0, "", "verified: no sketch is active")
+        Else
+            WriteLine LineFor("context-closed", -1, "a sketch is still active", "context NOT verified")
+        End If
+    End If
+End Sub
+
+Function Vec3Text(ByVal x As Double, ByVal y As Double, ByVal z As Double) As String
+    Vec3Text = Trim(Str(x)) & "," & Trim(Str(y)) & "," & Trim(Str(z))
+End Function
+
+' The report path travels in a one-line file under the TEMP directory that
+    ' the host rewrites before every run: preferred over CRAFT_BRIDGE_REPORT,
+    ' because the macro runs inside the SolidWorks process, which may be an
+    ' instance that started long ago with a stale environment. The environment
+    ' variable is only the fallback for when the path file is missing or blank.
+    Function ReportPathFromHost() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim got As Boolean
+    ReportPathFromHost = ""
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p <> "" Then
+    p = p & "\craft-bridge-report-path.txt"
+    Err.Clear
+    f = FreeFile
+    Open p For Input As #f
+    If Err.Number = 0 Then
+    Err.Clear
+    Line Input #f, oneLine
+    got = (Err.Number = 0)
+    Err.Clear
+    Close #f
+    If got Then
+    oneLine = Trim(oneLine)
+    If oneLine <> "" Then
+    ReportPathFromHost = oneLine
+    Exit Function
+    End If
+    End If
+    End If
+    Err.Clear
+    End If
+    ReportPathFromHost = Trim(Environ$("CRAFT_BRIDGE_REPORT"))
+    End Function
+
+' Truncate the report so this run never inherits a previous run's lines.
+Sub StartReport()
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Output As #f
+    Close #f
+End Sub
+
+' One line, one fresh handle: open, print, close. Nothing to leak, nothing
+' to collide with.
+Sub WriteLine(ByVal text As String)
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Append As #f
+    Print #f, text
+    Close #f
+End Sub
+
+Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)
+    WriteLine "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
+End Sub
+
+' JSON string escaping. This is not VBA-literal escaping: it is only for the
+' report file. Generated code strings are escaped separately by the generator.
+Function JsonStr(ByVal s As String) As String
+    Dim t As String
+    t = Replace(s, "\", "\\")
+    t = Replace(t, """", "\""")
+    t = Replace(t, vbCrLf, "\n")
+    t = Replace(t, vbCr, "\n")
+    t = Replace(t, vbLf, "\n")
+    t = Replace(t, vbTab, "\t")
+    JsonStr = t
+End Function
+
+Sub CloseOwnedDoc(ByRef closedOk As Boolean)
+    Dim exact As String
+    Dim d As Object
+    Dim t2 As String
+    Dim cnt As Long
+    Dim isOurs As Boolean
+    On Error Resume Next
+    closedOk = False
+    If swDoc Is Nothing Then
+        closedOk = True
+        Exit Sub
+    End If
+    Err.Clear
+    exact = swDoc.GetTitle
+    If Err.Number <> 0 Then Exit Sub
+    If Trim(exact) = "" Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then
+            cnt = cnt + 1
+            If d Is swDoc Then isOurs = True
+        End If
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt <> 1 Or Not isOurs Then Exit Sub
+    Err.Clear
+    swApp.CloseDoc exact
+    If Err.Number <> 0 Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    cnt = 0
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then cnt = cnt + 1
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt = 0 Then closedOk = True
+End Sub
+
+Function CloseMode() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim ok As Boolean
+    Dim e3 As Long
+    CloseMode = "unknown"
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p = "" Then Exit Function
+    p = p & "\craft-bridge-report-path.txt"
+    Err.Clear
+    f = FreeFile
+    Open p For Input As #f
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    Line Input #f, oneLine
+    ok = (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    ok = ok And (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    e3 = Err.Number
+    Close #f
+    If Not ok Then Exit Function
+    If e3 = 0 Then
+    If Trim(oneLine) = "close-after-run" Then CloseMode = "close" Else CloseMode = "unknown"
+    ElseIf e3 = 62 And ok Then
+    CloseMode = "keep"
+    End If
+End Function
+
+Function OwnedDocTitle() As String
+    On Error Resume Next
+    OwnedDocTitle = ""
+    If swDoc Is Nothing Then Exit Function
+    OwnedDocTitle = "" & swDoc.GetTitle
+End Function
