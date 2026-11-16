@@ -155,12 +155,18 @@ End Sub
 ' What did CreateLine actually return, and which accessor form yields
 ' points? Every candidate is captured as variant-type evidence: a raw
 ' variant fetch reports its TypeName, the Set form reports its own error.
+' Caveat for interpretation: assignment without Set can invoke an
+' object's default member, so the value-form TypeName describes the
+' value-form result, not necessarily the API's native return type - read
+' it alongside the separately captured Set form; a value-form error never
+' establishes that the API returned a scalar.
 Function LineDiag(ByVal ln As Object) As String
     Dim v As Variant
     Dim sp As Object
     Dim n As Long
     Dim d As String
     Dim detail As String
+    Dim res As String
     On Error Resume Next
     If ln Is Nothing Then
         LineDiag = LineFor("createline", -1, "returned Nothing", "the created object is Nothing")
@@ -173,10 +179,18 @@ Function LineDiag(ByVal ln As Object) As String
     v = ln.Select(False)
     n = Err.Number
     d = Err.Description
-    If n = 0 Then
-        detail = detail & " | select result=" & CStr(v)
-    Else
+    If n <> 0 Then
         detail = detail & " | select err=" & Trim(Str(n)) & " " & d
+    Else
+        Err.Clear
+        res = CStr(v)
+        n = Err.Number
+        d = Err.Description
+        If n = 0 Then
+            detail = detail & " | select result=" & res
+        Else
+            detail = detail & " | select convert err=" & Trim(Str(n)) & " " & d
+        End If
     End If
     Err.Clear
     v = ln.GetStartPoint
