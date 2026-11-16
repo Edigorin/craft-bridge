@@ -406,20 +406,20 @@ Function Dims0() As Boolean
     gMsg = "dimension length line 3 measures " & Trim(Str(created)) & " but the line length is " & Trim(Str(proj))
     GoTo DimFail
     End If
-    If Abs(created - 0.01) <= TOL Then
+    If Abs(created - 0.005) <= TOL Then
     signVal = 1#
-    ElseIf Abs(created + 0.01) <= TOL Then
+    ElseIf Abs(created + 0.005) <= TOL Then
     signVal = -1#
     Else
-    gMsg = "dimension length line 3 measures " & Trim(Str(created)) & " but the source value is 0.01"
+    gMsg = "dimension length line 3 measures " & Trim(Str(created)) & " but the source value is 0.005"
     GoTo DimFail
     End If
-    dm.SystemValue = signVal * 0.01
+    dm.SystemValue = signVal * 0.005
     v = sl0(3).GetStartPoint
     v2 = sl0(3).GetEndPoint
     chk = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))
-    If Abs(chk - Abs(0.01)) > TOL Then gMsg = "the value edit did not carry the length line 3 geometry (length " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.01))) & ")": GoTo DimFail
-    If Not AddDimEquation(dm, "10mm", signVal * 0.01, 0, signVal) Then GoTo DimFail
+    If Abs(chk - Abs(0.005)) > TOL Then gMsg = "the value edit did not carry the length line 3 geometry (length " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.005))) & ")": GoTo DimFail
+    If Not AddDimEquation(dm, "10mm", signVal * 0.005, 0, signVal) Then GoTo DimFail
     SolveSketch skName0
     swDoc.ClearSelection2 True
     Dims0 = True
