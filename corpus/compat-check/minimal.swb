@@ -68,6 +68,7 @@ Sub main()
     Dim created As Double
     Dim signVal As Double
     Dim lengthNow As Double
+    Dim skName As String
     stepIdx = -1
     On Error GoTo Fail
 
@@ -103,6 +104,7 @@ Sub main()
     ' kind measures a different number on it, so the kind checks below are
     ' discriminating (an axis-aligned line cannot distinguish aligned from
     ' projected).
+    skName = swSketchMgr.ActiveSketch.Name
     Set ln = swSketchMgr.CreateLine(MapU(0#, 0#), MapV(0#, 0#), 0#, MapU(0.03, 0.04), MapV(0.03, 0.04), 0#)
     Set ci = swSketchMgr.CreateCircleByRadius(MapU(0.02, 0.02), MapV(0.02, 0.02), 0#, 0.005)
     swDoc.ClearSelection2 True
@@ -165,7 +167,7 @@ Sub main()
     ' ---- step 3: edit-and-follow (acceptance check) ----
     stepIdx = 3
     dp.SystemValue = 0.1
-    swDoc.EditRebuild3
+    SolveSketch
     v = ln.GetStartPoint
     v2 = ln.GetEndPoint
     lengthNow = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))
@@ -184,7 +186,7 @@ Sub main()
         If Not ok Then Err.Raise vbObjectError + 517, "minimal.swb", "could not select the line"
         swDoc.SketchAddConstraints "sgHORIZONTAL2D"
         swDoc.ClearSelection2 True
-        swDoc.EditRebuild3
+        SolveSketch
         v = ln.GetStartPoint
         v2 = ln.GetEndPoint
         If Abs(v(1) - v2(1)) > 0.000001 Then Err.Raise vbObjectError + 526, "minimal.swb", "the horizontal relation did not level the classified axis"
@@ -194,7 +196,7 @@ Sub main()
         If Not ok Then Err.Raise vbObjectError + 517, "minimal.swb", "could not select the line"
         swDoc.SketchAddConstraints "sgVERTICAL2D"
         swDoc.ClearSelection2 True
-        swDoc.EditRebuild3
+        SolveSketch
         v = ln.GetStartPoint
         v2 = ln.GetEndPoint
         If Abs(v(0) - v2(0)) > 0.000001 Then Err.Raise vbObjectError + 526, "minimal.swb", "the vertical relation did not level the classified axis"
@@ -260,6 +262,24 @@ Fail:
     If reportPath <> "" Then
         WriteLine "{""type"":""summary"",""status"":""failed""}"
     End If
+End Sub
+
+' Rebuild and stay in sketch edit (seat-proven 2026-11-16: EditRebuild3
+' EXITS sketch edit - sketch API calls then silently do nothing). The
+' rebuild is required before any behavioural readback of a constraint;
+' re-entry is required before any further sketch API call.
+Sub SolveSketch()
+    Dim sk As Object
+    swDoc.EditRebuild3
+    On Error Resume Next
+    Set sk = swSketchMgr.ActiveSketch
+    If Not sk Is Nothing Then Exit Sub
+    Err.Clear
+    swDoc.Extension.SelectByID2 skName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault
+    If Err.Number <> 0 Then Err.Raise vbObjectError + 529, "minimal.swb", "the sketch could not be selected for re-entry: err " & Trim(Str(Err.Number))
+    swSketchMgr.InsertSketch True
+    Set sk = swSketchMgr.ActiveSketch
+    If sk Is Nothing Then Err.Raise vbObjectError + 529, "minimal.swb", "sketch edit could not be re-entered"
 End Sub
 
 ' Frame adaptation map (owner decision 2026-11-13), single-sketch slot: the

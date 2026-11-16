@@ -1029,6 +1029,24 @@ If Abs(gMap10(idx)) > 0.000001 Then Exit Function
 MapIsIdentity = True
 End Function
 
+' Rebuild and stay in sketch edit (seat-proven 2026-11-16: EditRebuild3
+' EXITS sketch edit - sketch API calls then silently do nothing). The
+' rebuild is required before any behavioural readback of a constraint;
+' re-entry is required before any further sketch API call.
+Sub SolveSketch(ByVal nm As String)
+Dim sk As Object
+swDoc.EditRebuild3
+On Error Resume Next
+Set sk = swSketchMgr.ActiveSketch
+If Not sk Is Nothing Then Exit Sub
+Err.Clear
+swDoc.Extension.SelectByID2 nm, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault
+If Err.Number <> 0 Then Err.Raise vbObjectError + 529, \"craft-bridge\", \"the sketch \" & nm & \" could not be selected for re-entry: err \" & Trim(Str(Err.Number))
+swSketchMgr.InsertSketch True
+Set sk = swSketchMgr.ActiveSketch
+If sk Is Nothing Then Err.Raise vbObjectError + 529, \"craft-bridge\", \"sketch edit could not be re-entered for \" & nm
+End Sub
+
 ' The closed-context half of verification (F7): after closing, no sketch
 ' may be active. The geometry readback runs in both contexts - the seat
 ' pinned handle readback as identical in active and closed contexts.
@@ -1521,7 +1539,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     // this sketch registered are cleared so the redraw rebinds them under
     // fresh runtime names.
     out.push_str(&format!(
-        "Function CleanSketch{index}() As Boolean\n    On Error GoTo CleanFail\n    Dim anySel As Boolean\n    Dim okSel As Boolean\n    Dim cleanOk As Boolean\n    Dim pts As Variant\n    Dim ub As Long\n    Dim skFeat As SldWorks.Feature\n    CleanSketch{index} = False\n    gMsg = \"\"\n    ClearMap {index}\n"
+        "Function CleanSketch{index}() As Boolean\n    On Error GoTo CleanFail\n    Dim anySel As Boolean\n    Dim okSel As Boolean\n    Dim cleanOk As Boolean\n    Dim pts As Variant\n    Dim ub As Long\n    Dim skFeat As SldWorks.Feature\n    CleanSketch{index} = False\n    gMsg = \"\"\n    SolveSketch skName{index}\n    ClearMap {index}\n"
     ));
     for (_, eq) in &sk.dim_equations {
         out.push_str(&format!(
@@ -1573,7 +1591,7 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
     // SketchAddConstraints), so application is established behaviourally:
     // the constraint's own predicate must hold on the solved geometry.
     let apply = |c: &str| {
-        format!("    swDoc.SketchAddConstraints \"{c}\"\n    swDoc.ClearSelection2 True\n    swDoc.EditRebuild3\n")
+        format!("    swDoc.SketchAddConstraints \"{c}\"\n    swDoc.ClearSelection2 True\n    SolveSketch skName{index}\n")
     };
     // Level checks per classified axis: 0 = the pair shares t (Y), 1 = s (X).
     let level_pts = |a: usize, b: usize, axis0: bool, label: &str| {
@@ -1602,7 +1620,7 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
                       name0: &str,
                       name1: &str| {
         format!(
-            "    Select Case AxisClass({index}, {is_horiz})\n    Case 0\n{sel}    swDoc.SketchAddConstraints \"{name0}\"\n    swDoc.ClearSelection2 True\n    swDoc.EditRebuild3\n{check0}    Case 1\n{sel}    swDoc.SketchAddConstraints \"{name1}\"\n    swDoc.ClearSelection2 True\n    swDoc.EditRebuild3\n{check1}    Case Else\n    gOmit = gOmit & \"relation {label}: the SC {dir} axis is not axis-aligned in this sketch frame (non-permutation map); \"\n    End Select\n"
+            "    Select Case AxisClass({index}, {is_horiz})\n    Case 0\n{sel}    swDoc.SketchAddConstraints \"{name0}\"\n    swDoc.ClearSelection2 True\n    SolveSketch skName{index}\n{check0}    Case 1\n{sel}    swDoc.SketchAddConstraints \"{name1}\"\n    swDoc.ClearSelection2 True\n    SolveSketch skName{index}\n{check1}    Case Else\n    gOmit = gOmit & \"relation {label}: the SC {dir} axis is not axis-aligned in this sketch frame (non-permutation map); \"\n    End Select\n"
         )
     };
     match *rel {
@@ -1895,7 +1913,7 @@ fn emit_dimension(
     if let Some(equation) = equation {
         tail.push_str(&slot_guards(equation, "DimFail"));
         tail.push_str(&format!(
-            "    If Not AddDimEquation(dm, {}, signVal * {}, {}, signVal) Then GoTo DimFail\n",
+            "    If Not AddDimEquation(dm, {}, signVal * {}, {}, signVal) Then GoTo DimFail\n    SolveSketch skName{index}\n",
             rhs_vba(equation),
             vba_num(equation.expect_si),
             equation.slot

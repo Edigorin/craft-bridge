@@ -284,6 +284,7 @@ Function CleanSketch0() As Boolean
     Dim skFeat As SldWorks.Feature
     CleanSketch0 = False
     gMsg = ""
+    SolveSketch skName0
     ClearMap 0
     If Not sl0(0) Is Nothing Then
     okSel = sl0(0).Select(anySel)
@@ -851,6 +852,24 @@ If Abs(gMap01(idx)) > 0.000001 Then Exit Function
 If Abs(gMap10(idx)) > 0.000001 Then Exit Function
 MapIsIdentity = True
 End Function
+
+' Rebuild and stay in sketch edit (seat-proven 2026-11-16: EditRebuild3
+' EXITS sketch edit - sketch API calls then silently do nothing). The
+' rebuild is required before any behavioural readback of a constraint;
+' re-entry is required before any further sketch API call.
+Sub SolveSketch(ByVal nm As String)
+Dim sk As Object
+swDoc.EditRebuild3
+On Error Resume Next
+Set sk = swSketchMgr.ActiveSketch
+If Not sk Is Nothing Then Exit Sub
+Err.Clear
+swDoc.Extension.SelectByID2 nm, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault
+If Err.Number <> 0 Then Err.Raise vbObjectError + 529, "craft-bridge", "the sketch " & nm & " could not be selected for re-entry: err " & Trim(Str(Err.Number))
+swSketchMgr.InsertSketch True
+Set sk = swSketchMgr.ActiveSketch
+If sk Is Nothing Then Err.Raise vbObjectError + 529, "craft-bridge", "sketch edit could not be re-entered for " & nm
+End Sub
 
 ' The closed-context half of verification (F7): after closing, no sketch
 ' may be active. The geometry readback runs in both contexts - the seat
