@@ -1520,7 +1520,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
 
     // Dimensions
     out.push_str(&format!(
-        "Function Dims{index}() As Boolean\n    On Error GoTo DimFail\n    Const TOL As Double = 0.000001\n    gMsg = \"\"\n    Dim dd As SldWorks.DisplayDimension\n    Dim dm As SldWorks.Dimension\n    Dim ax As Double\n    Dim ay As Double\n    Dim bx As Double\n    Dim by As Double\n    Dim ds As Double\n    Dim dt As Double\n    Dim proj As Double\n    Dim other As Double\n    Dim created As Double\n    Dim signVal As Double\n    Dim sT As Double\n    Dim tT As Double\n    Dim mx As Double\n    Dim my As Double\n    Dim mz As Double\n    Dim axClass As Long\n    Dim v2 As Variant\n    Dim nax As Double\n    Dim nay As Double\n    Dim nbx As Double\n    Dim nby As Double\n    Dim chk As Double\n    Dim chk2 As Double\n"
+        "Function Dims{index}() As Boolean\n    On Error GoTo DimFail\n    Const TOL As Double = 0.000001\n    gMsg = \"\"\n    Dim dd As SldWorks.DisplayDimension\n    Dim dm As SldWorks.Dimension\n    Dim ax As Double\n    Dim ay As Double\n    Dim bx As Double\n    Dim by As Double\n    Dim ds As Double\n    Dim dt As Double\n    Dim proj As Double\n    Dim other As Double\n    Dim created As Double\n    Dim signVal As Double\n    Dim sT As Double\n    Dim tT As Double\n    Dim mx As Double\n    Dim my As Double\n    Dim mz As Double\n    Dim axClass As Long\n    Dim v As Variant\n    Dim v2 As Variant\n    Dim nax As Double\n    Dim nay As Double\n    Dim nbx As Double\n    Dim nby As Double\n    Dim chk As Double\n    Dim chk2 As Double\n"
     ));
     for (di, dim) in sk.dimensions.iter().enumerate() {
         out.push_str(&emit_dimension(index, dim, sk, equation_for(sk, di)));

@@ -245,6 +245,7 @@ Function Dims0() As Boolean
     Dim my As Double
     Dim mz As Double
     Dim axClass As Long
+    Dim v As Variant
     Dim v2 As Variant
     Dim nax As Double
     Dim nay As Double

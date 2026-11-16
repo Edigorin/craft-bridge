@@ -1802,7 +1802,13 @@ fn assert_no_intrinsic_shadowing(text: &str, what: &str) {
         let t = line.trim();
         let up = t.to_uppercase();
         if up.starts_with("DIM ") || up.starts_with("CONST ") {
-            for part in t[4..].split(',') {
+            // Strip the keyword by its own length: a fixed offset is wrong
+            // for Const (it would register "T ..." as the name).
+            let rest = match t.find(' ') {
+                Some(sp) => &t[sp..],
+                None => "",
+            };
+            for part in rest.split(',') {
                 if let Some(m) = part.split_whitespace().next() {
                     let name = m.split('(').next().unwrap_or("");
                     if !name.is_empty() {
@@ -2544,4 +2550,346 @@ fn regenerate_goldens() {
     fs::copy(&out, gold.join("tracer.swb")).unwrap();
     fs::copy(&plan_path, gold.join("tracer-plan.json")).unwrap();
     fs::copy(&text_path, gold.join("tracer-plan.txt")).unwrap();
+}
+
+/// The `Option Explicit` compile contract, scanned offline: every identifier
+/// a procedure uses must be declared there, at module level, or be a known
+/// VBA word or procedure name. Same scanner as tests/frame_corpus.rs (the
+/// test files carry their own copies of the scans). Regression for the
+/// Dims-template defect the 2026-11-16 byte reviews found: the template
+/// declared `v2` but the length behaviour assigns `v` - a whole-module
+/// compile error the seat reports only as a bare invocation failure with no
+/// report (docs/seat-acceptance.md "Runner quirks").
+fn assert_locals_declared(text: &str, what: &str) {
+    // VBA keywords, intrinsic functions and intrinsic constants: never a
+    // user identifier in these macros.
+    const VBA_WORDS: &[&str] = &[
+        "dim",
+        "const",
+        "as",
+        "set",
+        "let",
+        "get",
+        "call",
+        "new",
+        "nothing",
+        "true",
+        "false",
+        "empty",
+        "null",
+        "if",
+        "then",
+        "else",
+        "elseif",
+        "end",
+        "select",
+        "case",
+        "for",
+        "next",
+        "to",
+        "step",
+        "each",
+        "in",
+        "do",
+        "while",
+        "loop",
+        "until",
+        "wend",
+        "with",
+        "exit",
+        "goto",
+        "on",
+        "error",
+        "resume",
+        "function",
+        "sub",
+        "property",
+        "private",
+        "public",
+        "static",
+        "optional",
+        "byref",
+        "byval",
+        "paramarray",
+        "not",
+        "and",
+        "or",
+        "is",
+        "mod",
+        "xor",
+        "eqv",
+        "imp",
+        "boolean",
+        "byte",
+        "integer",
+        "long",
+        "single",
+        "double",
+        "string",
+        "variant",
+        "object",
+        "date",
+        "any",
+        "sgn",
+        "abs",
+        "val",
+        "mid",
+        "left",
+        "right",
+        "len",
+        "asc",
+        "chr",
+        "instr",
+        "time",
+        "now",
+        "timer",
+        "format",
+        "array",
+        "filter",
+        "split",
+        "join",
+        "lcase",
+        "ucase",
+        "trim",
+        "str",
+        "fix",
+        "int",
+        "round",
+        "sin",
+        "cos",
+        "tan",
+        "log",
+        "exp",
+        "hex",
+        "oct",
+        "rgb",
+        "environ",
+        "shell",
+        "name",
+        "kill",
+        "width",
+        "spc",
+        "tab",
+        "stop",
+        "line",
+        "open",
+        "close",
+        "input",
+        "print",
+        "err",
+        "ubound",
+        "lbound",
+        "isarray",
+        "isnumeric",
+        "isempty",
+        "isnull",
+        "isobject",
+        "cint",
+        "clng",
+        "cdbl",
+        "csng",
+        "cstr",
+        "cbool",
+        "cvar",
+        "cdate",
+        "vbcrlf",
+        "vbcr",
+        "vblf",
+        "vbtab",
+        "vbobjecterror",
+        "vbtextcompare",
+        "msgbox",
+        "inputbox",
+        "typename",
+        "createobject",
+        "getobject",
+        "chrw",
+        "ascw",
+        "sqr",
+        "replace",
+        "freefile",
+        "output",
+        "append",
+    ];
+    let is_word = |t: &str| VBA_WORDS.contains(&t.to_lowercase().as_str());
+    let decl_names = |line: &str| -> Vec<String> {
+        let t = line.trim();
+        // Strip the Dim/Const keyword; a fixed offset is wrong for Const.
+        let rest = match t.find(' ') {
+            Some(sp) => &t[sp..],
+            None => return Vec::new(),
+        };
+        rest.split(',')
+            .filter_map(|part| {
+                let name = part
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .split('(')
+                    .next()
+                    .unwrap_or("");
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(name.to_lowercase())
+                }
+            })
+            .collect()
+    };
+
+    // Pass 1: procedure spans, names, parameters, labels and declarations.
+    let mut proc_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut module_decls: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut owners: Vec<Option<usize>> = Vec::new();
+    let mut procs: Vec<(String, std::collections::HashSet<String>)> = Vec::new();
+    let mut current: Option<usize> = None;
+    for line in text.lines() {
+        let t = line.trim();
+        let up = t.to_uppercase();
+        let code = code_only(line);
+        let cu = code.trim().to_uppercase();
+        if cu.starts_with("FUNCTION ") || cu.starts_with("SUB ") {
+            let name = t
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or("")
+                .split('(')
+                .next()
+                .unwrap_or("")
+                .to_lowercase();
+            proc_names.insert(name.clone());
+            let mut decls: std::collections::HashSet<String> = std::collections::HashSet::new();
+            if let Some(plist) = t.split('(').nth(1) {
+                for p in plist.split(',') {
+                    for tok in p.split_whitespace() {
+                        let low = tok.to_lowercase();
+                        if low == "byval"
+                            || low == "byref"
+                            || low == "optional"
+                            || low == "paramarray"
+                        {
+                            continue;
+                        }
+                        decls.insert(tok.trim_end_matches(')').to_lowercase());
+                        break;
+                    }
+                }
+            }
+            procs.push((name, decls));
+            current = Some(procs.len() - 1);
+            owners.push(current);
+            continue;
+        }
+        if cu.starts_with("END FUNCTION") || cu.starts_with("END SUB") {
+            current = None;
+            owners.push(None);
+            continue;
+        }
+        owners.push(current);
+        if up.starts_with("DIM ") || up.starts_with("CONST ") {
+            let names = decl_names(t);
+            match current {
+                Some(pi) => procs[pi].1.extend(names),
+                None => module_decls.extend(names),
+            }
+            continue;
+        }
+        if let Some(pi) = current {
+            let c = code.trim();
+            if let Some(label) = c.split(':').next() {
+                if c.contains(':')
+                    && label
+                        .chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                    && !label.is_empty()
+                {
+                    procs[pi].1.insert(label.to_lowercase());
+                }
+            }
+        }
+    }
+
+    // Pass 2: every used identifier is declared somewhere legitimate.
+    for (i, line) in text.lines().enumerate() {
+        let Some(pi) = owners.get(i).copied().flatten() else {
+            continue;
+        };
+        let code = code_only(line);
+        let cu = code.trim().to_uppercase();
+        if cu.starts_with("FUNCTION ")
+            || cu.starts_with("SUB ")
+            || cu.starts_with("DIM ")
+            || cu.starts_with("CONST ")
+            || cu.starts_with("END FUNCTION")
+            || cu.starts_with("END SUB")
+        {
+            continue;
+        }
+        let chars: Vec<char> = code.chars().collect();
+        let mut j = 0;
+        while j < chars.len() {
+            if chars[j].is_ascii_alphabetic() || chars[j] == '_' {
+                let start = j;
+                while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
+                    j += 1;
+                }
+                // Word boundaries: "1E+100" must not yield "e".
+                if start > 0
+                    && (chars[start - 1].is_ascii_alphanumeric() || chars[start - 1] == '_')
+                {
+                    continue;
+                }
+                let after_dot = start > 0 && chars[start - 1] == '.';
+                let before_dot = j < chars.len() && chars[j] == '.';
+                if after_dot || before_dot {
+                    continue;
+                }
+                let token: String = chars[start..j].iter().collect();
+                let low = token.to_lowercase();
+                if is_word(&low) {
+                    continue;
+                }
+                if procs[pi].1.contains(&low) || module_decls.contains(&low) {
+                    continue;
+                }
+                if proc_names.contains(&low) {
+                    continue;
+                }
+                panic!(
+                    "{what}: {token} is used in {} at line {} but declared nowhere",
+                    procs[pi].0,
+                    i + 1
+                );
+            } else {
+                j += 1;
+            }
+        }
+    }
+}
+
+#[test]
+fn every_emitted_local_is_declared() {
+    // Option Explicit turns an undeclared local into a whole-module compile
+    // failure that the seat reports only as a bare invocation failure with
+    // no report - the offline scan is the only early warning.
+    for (name, recipe) in [
+        ("tracer", TRACER),
+        ("stop-rule", TRACER_STOP),
+        ("revolve", TRACER_REVOLVE),
+        ("primitives", TRACER_PRIM),
+        ("modifications", TRACER_MOD),
+        ("patterns", TRACER_PAT),
+    ] {
+        let case = Case::new(recipe);
+        case.build_to("locals.swb", false).unwrap();
+        let text = fs::read_to_string(case.dir.path().join("locals.swb")).unwrap();
+        assert_locals_declared(&text, name);
+    }
+    // Negative control: the scan must catch the exact defect class it
+    // exists for (the Dims-template `v`).
+    let broken = "Sub Build1()\n    Dim ok As Boolean\n    v = 1#\nEnd Sub\n";
+    assert!(
+        std::panic::catch_unwind(|| assert_locals_declared(broken, "negative-control")).is_err(),
+        "the locals scan misses undeclared locals"
+    );
 }
