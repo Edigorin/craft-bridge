@@ -73,7 +73,7 @@ Sub main()
     ' The active read after the drawing stage stands on its own.
     ReportContext "active", verified
     If Not verified Then
-        WriteLine "{""type"":""step"",""index"":3,""command"":""context"",""status"":""failed"",""message"":""the active context is not verified before closing; the post-dimension read is refused""}"
+        WriteLine "{""type"":""step"",""index"":3,""command"":""context"",""status"":""failed"",""message"":""the active context is not verified before closing; the pre-close read is refused""}"
         runFailed = True
         GoTo WrapUp
     End If

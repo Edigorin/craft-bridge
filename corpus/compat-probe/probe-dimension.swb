@@ -108,8 +108,7 @@ Sub DimStage()
     Dim n As Long
     Dim d As String
     Dim v As Variant
-    Dim na As Long
-    Dim da As String
+    Dim tmp As String
     On Error Resume Next
     WriteLine LineFor("dimension", 0, "", "stage=adddimension2 entering")
     Err.Clear
@@ -148,40 +147,68 @@ Sub DimStage()
         WriteLine LineFor("dimension", n, d, "stage=systemvalue outcome")
         Exit Sub
     End If
-    WriteLine LineFor("dimension", 0, "", "stage=systemvalue outcome: value=" & Trim(Str(v)))
+    Err.Clear
+    tmp = Trim(Str(v))
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("dimension", n, d, "stage=systemvalue outcome: formatting")
+    Else
+        WriteLine LineFor("dimension", 0, "", "stage=systemvalue outcome: value=" & tmp)
+    End If
     WriteLine LineFor("dimension", 0, "", "stage=name entering")
     Err.Clear
     v = dm.Name
-    na = Err.Number
-    da = Err.Description
-    If na = 0 Then
-        WriteLine LineFor("dimension", 0, "", "stage=name outcome: " & CStr(v))
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("dimension", n, d, "stage=name outcome")
     Else
-        WriteLine LineFor("dimension", na, da, "stage=name outcome")
+        Err.Clear
+        tmp = CStr(v)
+        n = Err.Number
+        d = Err.Description
+        If n <> 0 Then
+            WriteLine LineFor("dimension", n, d, "stage=name outcome: conversion")
+        Else
+            WriteLine LineFor("dimension", 0, "", "stage=name outcome: " & tmp)
+        End If
     End If
     WriteLine LineFor("dimension", 0, "", "stage=textpos-get entering")
     Err.Clear
     v = dd.GetTextPosition
-    na = Err.Number
-    da = Err.Description
-    If na <> 0 Then
-        WriteLine LineFor("dimension", na, da, "stage=textpos-get outcome: member")
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("dimension", n, d, "stage=textpos-get outcome: member")
     Else
-        WriteLine LineFor("dimension", 0, "", "stage=textpos-get outcome: member returned type=" & TypeName(v))
         Err.Clear
-        WriteLine LineFor("dimension", Err.Number, Err.Description, "stage=textpos-get outcome: decoded=" & Trim(Str(v(0))) & "," & Trim(Str(v(1))) & "," & Trim(Str(v(2))))
+        tmp = Trim(Str(v(0))) & "," & Trim(Str(v(1))) & "," & Trim(Str(v(2)))
+        n = Err.Number
+        d = Err.Description
+        If n <> 0 Then
+            WriteLine LineFor("dimension", n, d, "stage=textpos-get outcome: decode")
+        Else
+            WriteLine LineFor("dimension", 0, "", "stage=textpos-get outcome: " & tmp)
+        End If
     End If
     WriteLine LineFor("dimension", 0, "", "stage=textpos-prop entering")
     Err.Clear
     v = dd.TextPosition
-    na = Err.Number
-    da = Err.Description
-    If na <> 0 Then
-        WriteLine LineFor("dimension", na, da, "stage=textpos-prop outcome: member")
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("dimension", n, d, "stage=textpos-prop outcome: member")
     Else
-        WriteLine LineFor("dimension", 0, "", "stage=textpos-prop outcome: member returned type=" & TypeName(v))
         Err.Clear
-        WriteLine LineFor("dimension", Err.Number, Err.Description, "stage=textpos-prop outcome: decoded=" & Trim(Str(v(0))) & "," & Trim(Str(v(1))) & "," & Trim(Str(v(2))))
+        tmp = Trim(Str(v(0))) & "," & Trim(Str(v(1))) & "," & Trim(Str(v(2)))
+        n = Err.Number
+        d = Err.Description
+        If n <> 0 Then
+            WriteLine LineFor("dimension", n, d, "stage=textpos-prop outcome: decode")
+        Else
+            WriteLine LineFor("dimension", 0, "", "stage=textpos-prop outcome: " & tmp)
+        End If
     End If
 End Sub
 
