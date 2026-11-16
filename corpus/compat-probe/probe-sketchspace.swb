@@ -64,20 +64,11 @@ Sub main()
     End If
     WriteLine PointLine("active-predim", ln)
     WriteLine TransformLine()
-    Err.Clear
-    ok = ln.Select(False)
-    n = Err.Number
-    d = Err.Description
-    WriteLine LineFor("select-fordim", IIf(n = 0, 0, n), d, "result=" & CStr(ok))
-    If (ok = False) Or (n <> 0) Then
-        WriteLine LineFor("select-gate", n, d, "fired with ok=" & CStr(ok) & " n=" & Trim(Str(n)))
-        WriteLine "{""type"":""step"",""index"":2,""command"":""dimension"",""status"":""failed"",""message"":""line selection failed; no dimension placed and no later measurement claimed""}"
-        runFailed = True
-        GoTo WrapUp
-    End If
-    WriteLine DimLine()
-    ' The active read AFTER the dimension: solver effects must not be
-    ' confounded with the coordinate-context change.
+    ' The dimension stage is deliberately NOT here: on this seat AddDimension2
+    ' stalls the macro (v8 run: the report stops dead at this point), and a
+    ' hung stage must not eat the pinning evidence or the cleanup. It lives
+    ' in probe-dimension, isolated, where a hang costs only its own run.
+    ' The active read after the drawing stage stands on its own.
     ReportContext "active", verified
     If Not verified Then
         WriteLine "{""type"":""step"",""index"":3,""command"":""context"",""status"":""failed"",""message"":""the active context is not verified before closing; the post-dimension read is refused""}"
@@ -360,77 +351,7 @@ Function TransformLine() As String
     TransformLine = LineFor("transform", 0, "", detail)
 End Function
 
-' The dimension: value and name through a separate dimension object; each
-' text-position candidate records member access and then decoding as
-' separate stages - an unsupported candidate is data, never a position.
-Function DimLine() As String
-    Dim dd As Object
-    Dim dm As Object
-    Dim n As Long
-    Dim d As String
-    Dim detail As String
-    Dim v As Variant
-    Dim na As Long
-    Dim da As String
-    On Error Resume Next
-    Err.Clear
-    Set dd = swDoc.AddDimension2(0.055, -0.035, 0#)
-    n = Err.Number
-    d = Err.Description
-    If n <> 0 Then
-        DimLine = LineFor("dimension", n, d, "stage=adddimension2")
-        Exit Function
-    End If
-    Err.Clear
-    Set dm = dd.GetDimension2(0)
-    n = Err.Number
-    d = Err.Description
-    If n <> 0 Then
-        DimLine = LineFor("dimension", n, d, "stage=getdimension2")
-        Exit Function
-    End If
-    Err.Clear
-    v = dm.SystemValue
-    n = Err.Number
-    d = Err.Description
-    If n <> 0 Then
-        DimLine = LineFor("dimension", n, d, "stage=systemvalue")
-        Exit Function
-    End If
-    detail = "value=" & Trim(Str(v))
-    Err.Clear
-    v = dm.Name
-    na = Err.Number
-    da = Err.Description
-    If na = 0 Then
-        detail = detail & " | name=" & CStr(v)
-    Else
-        detail = detail & " | name-read err=" & Trim(Str(na)) & " " & da
-    End If
-    Err.Clear
-    v = dd.GetTextPosition
-    na = Err.Number
-    da = Err.Description
-    If na <> 0 Then
-        detail = detail & " | textpos-get member err=" & Trim(Str(na)) & " " & da
-    Else
-        Err.Clear
-        detail = detail & " | textpos-get=" & Trim(Str(v(0))) & "," & Trim(Str(v(1))) & "," & Trim(Str(v(2)))
-        If Err.Number <> 0 Then detail = detail & " decode err=" & Trim(Str(Err.Number)) & " " & Err.Description
-    End If
-    Err.Clear
-    v = dd.TextPosition
-    na = Err.Number
-    da = Err.Description
-    If na <> 0 Then
-        detail = detail & " | textpos-prop member err=" & Trim(Str(na)) & " " & da
-    Else
-        Err.Clear
-        detail = detail & " | textpos-prop=" & Trim(Str(v(0))) & "," & Trim(Str(v(1))) & "," & Trim(Str(v(2)))
-        If Err.Number <> 0 Then detail = detail & " decode err=" & Trim(Str(Err.Number)) & " " & Err.Description
-    End If
-    DimLine = LineFor("dimension", 0, "", detail)
-End Function
+
 
 Function LineFor(ByVal which As String, ByVal n As Long, ByVal d As String, ByVal detail As String) As String
     LineFor = "{""type"":""probe"",""member"":""" & JsonStr(which) & """,""err"":" & Trim(Str(n)) & ",""errdesc"":""" & JsonStr(d) & """,""detail"":""" & JsonStr(detail) & """}"
