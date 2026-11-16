@@ -1043,26 +1043,50 @@ fn equations_use_the_seat_proven_add_shape_and_read_back() {
     let macro_text = fs::read_to_string(case.dir.path().join("eqshape.swb")).unwrap();
     // Seat evidence (rev 34.3.2): Add2 with the documented two arguments is
     // rejected at runtime ("Argument not optional"); the two-argument classic
-    // Add works and its returned index is validated and read back.
-    assert!(
-        macro_text.contains("idx = eqMgr.Add(-1, eqText)"),
-        "the equation insert does not use the seat-proven Add call"
-    );
+    // Add works and its returned index is validated and read back. Each
+    // helper is checked on its own - a whole-module search would let the
+    // global helper carry the dimension helper's checks.
     assert!(
         !macro_text.contains("eqMgr.Add2"),
         "the unproven Add2 call survived"
     );
+    for helper in ["AddGlobalEquation", "AddDimEquation"] {
+        let start = macro_text
+            .find(&format!("Function {helper}("))
+            .unwrap_or_else(|| panic!("{helper} is missing"));
+        let end = macro_text[start..]
+            .find("End Function")
+            .expect("the helper ends")
+            + start;
+        let body = &macro_text[start..end];
+        assert!(
+            body.contains("idx = eqMgr.Add(-1, eqText)"),
+            "{helper}: no seat-proven Add call"
+        );
+        assert!(
+            body.contains("If idx < 0 Then"),
+            "{helper}: the insert index lower bound is not validated"
+        );
+        assert!(
+            body.contains("eqMgr.Count <= idx"),
+            "{helper}: the insert index upper bound is not validated"
+        );
+        assert!(
+            body.contains("eqMgr.Equation(idx) <> eqText"),
+            "{helper}: the stored equation is not read back"
+        );
+    }
+    let gstart = macro_text.find("Function AddGlobalEquation(").unwrap();
+    let gbody = &macro_text[gstart..macro_text[gstart..].find("End Function").unwrap() + gstart];
     assert!(
-        macro_text.contains("If idx < 0 Then"),
-        "the insert result is not validated"
+        gbody.contains("eqMgr.Value(idx)"),
+        "the global equation value is not checked"
     );
+    let dstart = macro_text.find("Function AddDimEquation(").unwrap();
+    let dbody = &macro_text[dstart..macro_text[dstart..].find("End Function").unwrap() + dstart];
     assert!(
-        macro_text.contains("eqMgr.Equation(idx) <> eqText"),
-        "the stored equation is not read back"
-    );
-    assert!(
-        macro_text.contains("eqMgr.Value(idx)"),
-        "the evaluated value is not checked"
+        dbody.contains("dm.SystemValue - expect"),
+        "the driven dimension value is not checked"
     );
 }
 
