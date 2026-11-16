@@ -1219,8 +1219,7 @@ fn assert_vba_structure(text: &str, what: &str) {
             let u = l.trim().to_uppercase();
             if u.starts_with("FUNCTION ") || u.starts_with("SUB ") {
                 Some(
-                    l.trim()
-                        .split_whitespace()
+                    l.split_whitespace()
                         .nth(1)
                         .unwrap_or("")
                         .split('(')
