@@ -52,7 +52,14 @@ Sub main()
     End If
     ' Asymmetric and off-origin on purpose: any axis swap or reflection
     ' moves these points, so the readback space cannot hide.
+    Err.Clear
     Set ln = swSketchMgr.CreateLine(0.013, 0.027, 0#, 0.041, -0.009, 0#)
+    WriteLine LineDiag(ln)
+    If ln Is Nothing Then
+        WriteLine "{""type"":""step"",""index"":1,""command"":""draw"",""status"":""failed"",""message"":""CreateLine returned nothing; no measurement will be claimed""}"
+        runFailed = True
+        GoTo WrapUp
+    End If
     WriteLine PointLine("active-predim", ln)
     WriteLine TransformLine()
     Err.Clear
@@ -144,6 +151,66 @@ Sub ReportContext(ByVal ctx As String, ByRef verified As Boolean)
         End If
     End If
 End Sub
+
+' What did CreateLine actually return, and which accessor form yields
+' points? Every candidate is captured as variant-type evidence: a raw
+' variant fetch reports its TypeName, the Set form reports its own error.
+Function LineDiag(ByVal ln As Object) As String
+    Dim v As Variant
+    Dim sp As Object
+    Dim n As Long
+    Dim d As String
+    Dim detail As String
+    On Error Resume Next
+    If ln Is Nothing Then
+        LineDiag = LineFor("createline", -1, "returned Nothing", "the created object is Nothing")
+        Exit Function
+    End If
+    Err.Clear
+    detail = "type=" & TypeName(ln)
+    If Err.Number <> 0 Then detail = "type err=" & Trim(Str(Err.Number))
+    Err.Clear
+    v = ln.Select(False)
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        detail = detail & " | select result=" & CStr(v)
+    Else
+        detail = detail & " | select err=" & Trim(Str(n)) & " " & d
+    End If
+    Err.Clear
+    v = ln.GetStartPoint
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        detail = detail & " | getstart-variant err=" & Trim(Str(n)) & " " & d
+    Else
+        detail = detail & " | getstart-variant type=" & TypeName(v)
+    End If
+    Err.Clear
+    Set sp = ln.GetStartPoint
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        detail = detail & " | getstart-set err=" & Trim(Str(n)) & " " & d
+    Else
+        If sp Is Nothing Then
+            detail = detail & " | getstart-set returned Nothing"
+        Else
+            detail = detail & " | getstart-set type=" & TypeName(sp)
+        End If
+    End If
+    Err.Clear
+    v = ln.StartPoint
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        detail = detail & " | startpoint-prop err=" & Trim(Str(n)) & " " & d
+    Else
+        detail = detail & " | startpoint-prop type=" & TypeName(v)
+    End If
+    LineDiag = LineFor("createline", 0, "", detail)
+End Function
 
 ' All three point components, each captured and attributed to its own
 ' stage; nothing is labeled successful when a stage failed.
