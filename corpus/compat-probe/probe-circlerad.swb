@@ -1,0 +1,340 @@
+' craft-bridge probe-circlerad - pin the circle radius readback: the
+' checkpoint's step 1 failed with err 438 on ci.Radius (never pinned).
+' A circle at a known centre/radius; every candidate radius member
+' captured with its own error, plus the centre handle and the start-point
+' array (a perimeter point?) so a computable fallback is established.
+Option Explicit
+
+Dim swApp As SldWorks.SldWorks
+Dim swDoc As SldWorks.ModelDoc2
+Dim swSketchMgr As SketchManager
+Dim reportPath As String
+Dim gProbeLog As String
+
+Sub main()
+    Dim template As String
+    Dim ci As Object
+    Dim ok As Boolean
+    Dim runFailed As Boolean
+    Dim closedOk As Boolean
+    Dim cleanupMode As String
+    Dim errNum As Long
+    Dim errMsg As String
+    On Error GoTo Fail
+    runFailed = False
+    reportPath = ReportPathFromHost()
+    If reportPath = "" Then Err.Raise vbObjectError + 513, "probe-circlerad", "no report path"
+    StartReport
+    WriteLine "{""type"":""header"",""macro"":""probe-circlerad"",""bridge_version"":""0.1.0""}"
+    Set swApp = Application.SldWorks
+    template = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
+    If template = "" Then Err.Raise vbObjectError + 514, "probe-circlerad", "no default part template"
+    Set swDoc = swApp.NewDocument(template, 0, 0, 0)
+    If swDoc Is Nothing Then Err.Raise vbObjectError + 515, "probe-circlerad", "no document"
+    Set swSketchMgr = swDoc.SketchManager
+    WriteLine "{""type"":""step"",""index"":-1,""command"":""document.new"",""status"":""created"",""message"":""fresh part from the default template""}"
+    If Not OpenFirstPlane() Then
+        WriteStep 0, "sketch.open", "failed", "the sketch could not be opened; probed: " & gProbeLog
+        runFailed = True
+        GoTo WrapUp
+    End If
+    WriteStep 0, "sketch.open", "created", gProbeLog
+    Err.Clear
+    Set ci = swSketchMgr.CreateCircleByRadius(0.023, -0.031, 0#, 0.007)
+    If ci Is Nothing Then
+        WriteStep 1, "draw", "failed", "the circle did not appear"
+        runFailed = True
+        GoTo WrapUp
+    End If
+    WriteLine RadiusCandidates(ci)
+WrapUp:
+    cleanupMode = CloseMode()
+    If cleanupMode = "close" Then
+        CloseOwnedDoc closedOk
+        If closedOk And Not runFailed Then
+            WriteLine "{""type"":""summary"",""status"":""ok""}"
+        Else
+            If Not closedOk Then WriteStep 5, "close", "failed", "the owned document could not be confirmed closed"
+            WriteLine "{""type"":""summary"",""status"":""failed""}"
+        End If
+    ElseIf cleanupMode = "keep" Then
+        WriteStep 5, "owned-document", "kept-open", OwnedDocTitle()
+        If runFailed Then
+            WriteLine "{""type"":""summary"",""status"":""failed""}"
+        Else
+            WriteLine "{""type"":""summary"",""status"":""ok""}"
+        End If
+    Else
+        WriteStep 5, "close-mode", "failed", "the cleanup mode could not be established"
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
+    End If
+    Exit Sub
+Fail:
+    errNum = Err.Number
+    errMsg = Err.Description
+    On Error Resume Next
+    WriteLine "{""type"":""step"",""index"":-1,""command"":""probe"",""status"":""failed"",""message"":"""" & JsonStr("err " & Trim(Str(errNum)) & ": " & errMsg) & """"}"
+    cleanupMode = CloseMode()
+    If cleanupMode = "close" Then CloseOwnedDoc closedOk
+    WriteLine "{""type"":""summary"",""status"":""failed""}"
+End Sub
+
+' Every radius candidate on the circle object, each captured separately,
+' plus the centre handle and the start-point array with components.
+Function RadiusCandidates(ByVal ci As Object) As String
+    Dim v As Variant
+    Dim sp As Object
+    Dim n As Long
+    Dim d As String
+    Dim detail As String
+    Dim dist As Double
+    On Error Resume Next
+    detail = ""
+    Err.Clear
+    v = ci.Radius
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        detail = detail & "radius-prop=" & Trim(Str(v))
+    Else
+        detail = detail & "radius-prop err=" & Trim(Str(n)) & " " & d
+    End If
+    Err.Clear
+    v = ci.GetRadius
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        detail = detail & " | getradius=" & Trim(Str(v))
+    Else
+        detail = detail & " | getradius err=" & Trim(Str(n)) & " " & d
+    End If
+    Err.Clear
+    Set sp = ci.GetCenterPoint2
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        If sp Is Nothing Then
+            detail = detail & " | centre2 Nothing"
+        Else
+            detail = detail & " | centre2 x=" & Trim(Str(sp.X)) & " y=" & Trim(Str(sp.Y)) & " z=" & Trim(Str(sp.Z))
+        End If
+    Else
+        detail = detail & " | centre2 err=" & Trim(Str(n)) & " " & d
+    End If
+    Err.Clear
+    v = ci.GetStartPoint
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        detail = detail & " | start arr=" & Trim(Str(v(0))) & "," & Trim(Str(v(1))) & "," & Trim(Str(v(2)))
+        If Not sp Is Nothing Then
+            dist = Sqr((v(0) - sp.X) * (v(0) - sp.X) + (v(1) - sp.Y) * (v(1) - sp.Y) + (v(2) - sp.Z) * (v(2) - sp.Z))
+            detail = detail & " | start-centre dist=" & Trim(Str(dist))
+        End If
+    Else
+        detail = detail & " | start arr err=" & Trim(Str(n)) & " " & d
+    End If
+    Err.Clear
+    Set sp = ci.GetStartPoint2
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        If sp Is Nothing Then
+            detail = detail & " | start2 Nothing"
+        Else
+            detail = detail & " | start2 x=" & Trim(Str(sp.X)) & " y=" & Trim(Str(sp.Y)) & " z=" & Trim(Str(sp.Z))
+        End If
+    Else
+        detail = detail & " | start2 err=" & Trim(Str(n)) & " " & d
+    End If
+    RadiusCandidates = LineFor("circle-radius", 0, "", detail)
+End Function
+
+Function LineFor(ByVal which As String, ByVal n As Long, ByVal d As String, ByVal detail As String) As String
+    LineFor = "{""type"":""probe"",""member"":""" & JsonStr(which) & """,""err"":" & Trim(Str(n)) & ",""errdesc"":""" & JsonStr(d) & """,""detail"":""" & JsonStr(detail) & """}"
+End Function
+
+Function OpenFirstPlane() As Boolean
+    Dim feat As Object
+    Dim nm As String
+    Dim fname As String
+    Dim sk As Object
+    Dim sel As Boolean
+    On Error Resume Next
+    OpenFirstPlane = False
+    gProbeLog = ""
+    Set feat = swDoc.FirstFeature
+    Do While Not feat Is Nothing
+        nm = feat.GetTypeName2()
+        If InStr(1, nm, "lane", vbTextCompare) > 0 Then
+            fname = feat.Name
+            sel = feat.Select(False)
+            If sel Then
+                swSketchMgr.InsertSketch True
+                Set sk = swSketchMgr.ActiveSketch
+                If sk Is Nothing Then
+                    gProbeLog = gProbeLog & fname & ": opened but no active sketch object; "
+                    Exit Function
+                End If
+                gProbeLog = gProbeLog & fname & ": opened; "
+                OpenFirstPlane = True
+                Exit Function
+            Else
+                gProbeLog = gProbeLog & fname & ": select returned false; "
+            End If
+        End If
+        Set feat = feat.GetNextFeature
+    Loop
+End Function
+
+' Truncate the report so this run never inherits a previous run's lines.
+Sub StartReport()
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Output As #f
+    Close #f
+End Sub
+
+Sub WriteLine(ByVal text As String)
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Append As #f
+    Print #f, text
+    Close #f
+End Sub
+
+Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)
+    WriteLine "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
+End Sub
+
+' JSON string escaping. This is not VBA-literal escaping: it is only for the
+' report file. Generated code strings are escaped separately by the generator.
+Function JsonStr(ByVal s As String) As String
+    Dim t As String
+    t = Replace(s, "\", "\\")
+    t = Replace(t, """", "\""")
+    t = Replace(t, vbCrLf, "\n")
+    t = Replace(t, vbCr, "\n")
+    t = Replace(t, vbLf, "\n")
+    t = Replace(t, vbTab, "\t")
+    JsonStr = t
+End Function
+
+Sub CloseOwnedDoc(ByRef closedOk As Boolean)
+    Dim exact As String
+    Dim d As Object
+    Dim t2 As String
+    Dim cnt As Long
+    Dim isOurs As Boolean
+    On Error Resume Next
+    closedOk = False
+    If swDoc Is Nothing Then
+        closedOk = True
+        Exit Sub
+    End If
+    Err.Clear
+    exact = swDoc.GetTitle
+    If Err.Number <> 0 Then Exit Sub
+    If Trim(exact) = "" Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then
+            cnt = cnt + 1
+            If d Is swDoc Then isOurs = True
+        End If
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt <> 1 Or Not isOurs Then Exit Sub
+    Err.Clear
+    swApp.CloseDoc exact
+    If Err.Number <> 0 Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    cnt = 0
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then cnt = cnt + 1
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt = 0 Then closedOk = True
+End Sub
+
+Function CloseMode() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim ok As Boolean
+    Dim e3 As Long
+    CloseMode = "unknown"
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p = "" Then Exit Function
+    p = p & "\craft-bridge-report-path.txt"
+    Err.Clear
+    f = FreeFile
+    Open p For Input As #f
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    Line Input #f, oneLine
+    ok = (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    ok = ok And (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    e3 = Err.Number
+    Close #f
+    If Not ok Then Exit Function
+    If e3 = 0 Then
+    If Trim(oneLine) = "close-after-run" Then CloseMode = "close" Else CloseMode = "unknown"
+    ElseIf e3 = 62 And ok Then
+    CloseMode = "keep"
+    End If
+End Function
+
+Function OwnedDocTitle() As String
+    On Error Resume Next
+    OwnedDocTitle = ""
+    If swDoc Is Nothing Then Exit Function
+    OwnedDocTitle = "" & swDoc.GetTitle
+End Function
+
+Function ReportPathFromHost() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim got As Boolean
+    ReportPathFromHost = ""
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p <> "" Then
+    p = p & "\craft-bridge-report-path.txt"
+    Err.Clear
+    f = FreeFile
+    Open p For Input As #f
+    If Err.Number = 0 Then
+    Err.Clear
+    Line Input #f, oneLine
+    got = (Err.Number = 0)
+    Err.Clear
+    Close #f
+    If got Then
+    oneLine = Trim(oneLine)
+    If oneLine <> "" Then
+    ReportPathFromHost = oneLine
+    Exit Function
+    End If
+    End If
+    End If
+    Err.Clear
+    End If
+    ReportPathFromHost = Trim(Environ$("CRAFT_BRIDGE_REPORT"))
+    End Function
