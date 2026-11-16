@@ -262,7 +262,7 @@ Function RunRevolveCase(ByVal tag As String, ByVal shape As String, ByVal revFla
         GoTo CaseCleanup
     End If
     Err.Clear
-    vAx = ax.Construction
+    vAx = ax.ConstructionGeometry
     n = Err.Number
     d = Err.Description
     WriteLine LineFor("axis-construction-" & tag, n, d, "stage=readback")
