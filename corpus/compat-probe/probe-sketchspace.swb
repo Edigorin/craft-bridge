@@ -69,7 +69,8 @@ Sub main()
     n = Err.Number
     d = Err.Description
     WriteLine LineFor("select-fordim", IIf(n = 0, 0, n), d, "result=" & CStr(ok))
-    If Not ok Or n <> 0 Then
+    If (ok = False) Or (n <> 0) Then
+        WriteLine LineFor("select-gate", n, d, "fired with ok=" & CStr(ok) & " n=" & Trim(Str(n)))
         WriteLine "{""type"":""step"",""index"":2,""command"":""dimension"",""status"":""failed"",""message"":""line selection failed; no dimension placed and no later measurement claimed""}"
         runFailed = True
         GoTo WrapUp
