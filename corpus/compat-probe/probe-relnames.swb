@@ -11,6 +11,7 @@ Dim swDoc As SldWorks.ModelDoc2
 Dim swSketchMgr As SketchManager
 Dim reportPath As String
 Dim gProbeLog As String
+Dim gDimToggle As Boolean
 
 Sub main()
     Dim template As String
@@ -32,6 +33,7 @@ Sub main()
     Set swDoc = swApp.NewDocument(template, 0, 0, 0)
     If swDoc Is Nothing Then Err.Raise vbObjectError + 515, "probe-relnames", "no document"
     Set swSketchMgr = swDoc.SketchManager
+    gDimToggle = swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate)
     swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, False
     WriteLine "{""type"":""step"",""index"":-1,""command"":""document.new"",""status"":""created"",""message"":""fresh part from the default template""}"
     If Not OpenFirstPlane() Then
@@ -50,7 +52,7 @@ Sub main()
     WriteLine TryCoincident("sgCOINCIDENT")
     WriteLine TryCoincident("sgMERGEPOINTS")
 WrapUp:
-    swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, True
+    swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle
     cleanupMode = CloseMode()
     If cleanupMode = "close" Then
         CloseOwnedDoc closedOk
@@ -76,7 +78,7 @@ Fail:
     errNum = Err.Number
     errMsg = Err.Description
     On Error Resume Next
-    swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, True
+    swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle
     WriteLine "{""type"":""step"",""index"":-1,""command"":""probe"",""status"":""failed"",""message"":""" & JsonStr("err " & Trim(Str(errNum)) & ": " & errMsg) & """}"
     cleanupMode = CloseMode()
     If cleanupMode = "close" Then CloseOwnedDoc closedOk
