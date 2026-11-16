@@ -42,6 +42,7 @@ Dim gMapSide As Long
 Dim gFrame(0 To 11) As Double
 Dim gDimToggle As Boolean
 Dim gDimToggleSaved As Boolean
+Dim skName As String
 
 Sub main()
     Dim template As String
@@ -68,7 +69,6 @@ Sub main()
     Dim created As Double
     Dim signVal As Double
     Dim lengthNow As Double
-    Dim skName As String
     stepIdx = -1
     On Error GoTo Fail
 
