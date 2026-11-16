@@ -256,7 +256,7 @@ Function Relations0() As Boolean
     Select Case AxisClass(0, False)
     Case 0
     If Not sl0(0).Select(False) Then gMsg = "the line 0 would not select": GoTo RelFail
-    swDoc.SketchAddConstraints "sgHorizontal"
+    swDoc.SketchAddConstraints "sgHORIZONTAL2D"
     swDoc.ClearSelection2 True
     swDoc.EditRebuild3
     vA = sl0(0).GetStartPoint
@@ -264,7 +264,7 @@ Function Relations0() As Boolean
     If Abs(vA(1) - vB(1)) > TOL Then gMsg = "the line-vertical 0 relation did not level the classified axis": GoTo RelFail
     Case 1
     If Not sl0(0).Select(False) Then gMsg = "the line 0 would not select": GoTo RelFail
-    swDoc.SketchAddConstraints "sgVertical"
+    swDoc.SketchAddConstraints "sgVERTICAL2D"
     swDoc.ClearSelection2 True
     swDoc.EditRebuild3
     vA = sl0(0).GetStartPoint
@@ -276,7 +276,7 @@ Function Relations0() As Boolean
     Select Case AxisClass(0, True)
     Case 0
     If Not sl0(1).Select(False) Then gMsg = "the line 1 would not select": GoTo RelFail
-    swDoc.SketchAddConstraints "sgHorizontal"
+    swDoc.SketchAddConstraints "sgHORIZONTAL2D"
     swDoc.ClearSelection2 True
     swDoc.EditRebuild3
     vA = sl0(1).GetStartPoint
@@ -284,7 +284,7 @@ Function Relations0() As Boolean
     If Abs(vA(1) - vB(1)) > TOL Then gMsg = "the line-horizontal 1 relation did not level the classified axis": GoTo RelFail
     Case 1
     If Not sl0(1).Select(False) Then gMsg = "the line 1 would not select": GoTo RelFail
-    swDoc.SketchAddConstraints "sgVertical"
+    swDoc.SketchAddConstraints "sgVERTICAL2D"
     swDoc.ClearSelection2 True
     swDoc.EditRebuild3
     vA = sl0(1).GetStartPoint
@@ -296,7 +296,7 @@ Function Relations0() As Boolean
     Select Case AxisClass(0, False)
     Case 0
     If Not sl0(2).Select(False) Then gMsg = "the line 2 would not select": GoTo RelFail
-    swDoc.SketchAddConstraints "sgHorizontal"
+    swDoc.SketchAddConstraints "sgHORIZONTAL2D"
     swDoc.ClearSelection2 True
     swDoc.EditRebuild3
     vA = sl0(2).GetStartPoint
@@ -304,7 +304,7 @@ Function Relations0() As Boolean
     If Abs(vA(1) - vB(1)) > TOL Then gMsg = "the line-vertical 2 relation did not level the classified axis": GoTo RelFail
     Case 1
     If Not sl0(2).Select(False) Then gMsg = "the line 2 would not select": GoTo RelFail
-    swDoc.SketchAddConstraints "sgVertical"
+    swDoc.SketchAddConstraints "sgVERTICAL2D"
     swDoc.ClearSelection2 True
     swDoc.EditRebuild3
     vA = sl0(2).GetStartPoint
@@ -316,7 +316,7 @@ Function Relations0() As Boolean
     Select Case AxisClass(0, False)
     Case 0
     If Not sl0(4).Select(False) Then gMsg = "the line 4 would not select": GoTo RelFail
-    swDoc.SketchAddConstraints "sgHorizontal"
+    swDoc.SketchAddConstraints "sgHORIZONTAL2D"
     swDoc.ClearSelection2 True
     swDoc.EditRebuild3
     vA = sl0(4).GetStartPoint
@@ -324,7 +324,7 @@ Function Relations0() As Boolean
     If Abs(vA(1) - vB(1)) > TOL Then gMsg = "the line-vertical 4 relation did not level the classified axis": GoTo RelFail
     Case 1
     If Not sl0(4).Select(False) Then gMsg = "the line 4 would not select": GoTo RelFail
-    swDoc.SketchAddConstraints "sgVertical"
+    swDoc.SketchAddConstraints "sgVERTICAL2D"
     swDoc.ClearSelection2 True
     swDoc.EditRebuild3
     vA = sl0(4).GetStartPoint

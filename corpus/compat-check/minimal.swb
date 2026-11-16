@@ -182,7 +182,7 @@ Sub main()
     Case 0
         ok = ln.Select(False)
         If Not ok Then Err.Raise vbObjectError + 517, "minimal.swb", "could not select the line"
-        swDoc.SketchAddConstraints "sgHorizontal"
+        swDoc.SketchAddConstraints "sgHORIZONTAL2D"
         swDoc.ClearSelection2 True
         swDoc.EditRebuild3
         v = ln.GetStartPoint
@@ -192,7 +192,7 @@ Sub main()
     Case 1
         ok = ln.Select(False)
         If Not ok Then Err.Raise vbObjectError + 517, "minimal.swb", "could not select the line"
-        swDoc.SketchAddConstraints "sgVertical"
+        swDoc.SketchAddConstraints "sgVERTICAL2D"
         swDoc.ClearSelection2 True
         swDoc.EditRebuild3
         v = ln.GetStartPoint

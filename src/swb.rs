@@ -1598,9 +1598,11 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
                       label: &str,
                       dir: &str,
                       check0: &str,
-                      check1: &str| {
+                      check1: &str,
+                      name0: &str,
+                      name1: &str| {
         format!(
-            "    Select Case AxisClass({index}, {is_horiz})\n    Case 0\n{sel}    swDoc.SketchAddConstraints \"sgHorizontal\"\n    swDoc.ClearSelection2 True\n    swDoc.EditRebuild3\n{check0}    Case 1\n{sel}    swDoc.SketchAddConstraints \"sgVertical\"\n    swDoc.ClearSelection2 True\n    swDoc.EditRebuild3\n{check1}    Case Else\n    gOmit = gOmit & \"relation {label}: the SC {dir} axis is not axis-aligned in this sketch frame (non-permutation map); \"\n    End Select\n"
+            "    Select Case AxisClass({index}, {is_horiz})\n    Case 0\n{sel}    swDoc.SketchAddConstraints \"{name0}\"\n    swDoc.ClearSelection2 True\n    swDoc.EditRebuild3\n{check0}    Case 1\n{sel}    swDoc.SketchAddConstraints \"{name1}\"\n    swDoc.ClearSelection2 True\n    swDoc.EditRebuild3\n{check1}    Case Else\n    gOmit = gOmit & \"relation {label}: the SC {dir} axis is not axis-aligned in this sketch frame (non-permutation map); \"\n    End Select\n"
         )
     };
     match *rel {
@@ -1623,6 +1625,8 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
                 "u",
                 &level_pts(a, b, true, &label),
                 &level_pts(a, b, false, &label),
+                "sgHORIZONTALPOINTS2D",
+                "sgVERTPOINTS2D",
             )
         }
         RelationT::PointsVertical(a, b) => {
@@ -1635,6 +1639,8 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
                 "v",
                 &level_pts(a, b, true, &label),
                 &level_pts(a, b, false, &label),
+                "sgHORIZONTALPOINTS2D",
+                "sgVERTPOINTS2D",
             )
         }
         RelationT::LineHorizontal(l) => {
@@ -1647,6 +1653,8 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
                 "u",
                 &level_line(l, true, &label),
                 &level_line(l, false, &label),
+                "sgHORIZONTAL2D",
+                "sgVERTICAL2D",
             )
         }
         RelationT::LineVertical(l) => {
@@ -1659,6 +1667,8 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
                 "v",
                 &level_line(l, true, &label),
                 &level_line(l, false, &label),
+                "sgHORIZONTAL2D",
+                "sgVERTICAL2D",
             )
         }
         RelationT::LinesParallel(a, b) => {
