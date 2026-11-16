@@ -130,9 +130,11 @@ Function RunTwoCase(ByVal tag As String, ByVal isFinal As Boolean, ByVal mode As
     Dim ok As Boolean
     Dim verified As Boolean
     Dim measOk As Boolean
+    Dim nameOk As Boolean
     Dim feat As Object
     Dim extSel As Object
     Dim featName As String
+    Dim featShown As String
     Dim skName As String
     Dim handoffTitle As String
     Dim closedOk As Boolean
@@ -206,9 +208,9 @@ Function RunTwoCase(ByVal tag As String, ByVal isFinal As Boolean, ByVal mode As
         WriteStep 1, "context", "failed", "the closed-sketch context is not verified; the feature call is refused"
         GoTo CaseCleanup
     End If
-    ' The stage under test: the emitter's explicit profile-sketch
-    ' selection, then its exact two-sided call shape.
-    result = 1
+    ' The emitter's explicit profile-sketch selection is SETUP: its
+    ' failures keep the setup classification. The stage under test - and
+    ' with it measurement-failure semantics - begins at the feature call.
     Err.Clear
     swDoc.ClearSelection2 True
     n = Err.Number
@@ -233,9 +235,10 @@ Function RunTwoCase(ByVal tag As String, ByVal isFinal As Boolean, ByVal mode As
     d = Err.Description
     WriteLine LineFor("selectsketch-" & tag, n, d, "stage=selectbyname name=" & skName & " result=" & CStr(ok))
     If n <> 0 Or Not ok Then
-        WriteStep 3, "extrude", "failed", "the profile sketch " & skName & " could not be selected; the extrusion is not attempted"
+        WriteStep 3, "extrude", "failed", "the profile sketch " & skName & " could not be selected; the extrusion is not attempted (setup)"
         GoTo CaseCleanup
     End If
+    result = 1
     WriteLine LineFor("featureextrusion2-" & tag, 0, "", "entering: FeatureExtrusion2(False, False, False, swEndCondBlind, swEndCondBlind, 0.01, 0.03, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)")
     Err.Clear
     Set feat = gFeatMgr.FeatureExtrusion2(False, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.01, 0.03, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)
@@ -251,11 +254,14 @@ Function RunTwoCase(ByVal tag As String, ByVal isFinal As Boolean, ByVal mode As
     n = Err.Number
     d = Err.Description
     WriteLine LineFor("feature-name-" & tag, n, d, "name=" & featName)
+    nameOk = True
+    featShown = featName
     If n <> 0 Or Trim(featName) = "" Then
-        WriteStep 3, "extrude", "failed", "the created feature has no name; the dimension identity cannot be read"
-        GoTo CaseCleanup
+        nameOk = False
+        featShown = "(name unavailable)"
+        WriteLine LineFor("feature-name-" & tag, -1, "name unavailable", "the D1/D2 lookups cannot be constructed; their keys are never issued empty")
     End If
-    WriteStep 3, "extrude", "created", "two-sided first 0.010 m second 0.030 m, feature " & featName
+    WriteStep 3, "extrude", "created", "two-sided first 0.010 m second 0.030 m, feature " & featShown
     ' The measurement context is re-established AFTER the mutating
     ' feature call: no active sketch, clean selection.
     ReportContext "closed", verified
@@ -275,10 +281,16 @@ Function RunTwoCase(ByVal tag As String, ByVal isFinal As Boolean, ByVal mode As
     measOk = True
     BoxEvidence tag, ok
     If Not ok Then measOk = False
-    DimEvidence "dim-d1-" & tag, "D1@" & featName, True, ok
-    If Not ok Then measOk = False
-    DimEvidence "dim-d2-" & tag, "D2@" & featName, True, ok
-    If Not ok Then measOk = False
+    If nameOk Then
+        DimEvidence "dim-d1-" & tag, "D1@" & featName, True, ok
+        If Not ok Then measOk = False
+        DimEvidence "dim-d2-" & tag, "D2@" & featName, True, ok
+        If Not ok Then measOk = False
+    Else
+        WriteLine LineFor("dim-d1-" & tag, -1, "lookup unavailable", "required: no feature name; the D1 identity is missing")
+        WriteLine LineFor("dim-d2-" & tag, -1, "lookup unavailable", "required: no feature name; the D2 identity is missing")
+        measOk = False
+    End If
     If measOk Then
         WriteStep 4, "measure-" & tag, "created", "box form and all 6 components captured; D1 and D2 identities captured"
         result = 0

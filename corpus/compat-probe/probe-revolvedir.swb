@@ -167,11 +167,13 @@ Function RunRevolveCase(ByVal tag As String, ByVal shape As String, ByVal revFla
     Dim ok As Boolean
     Dim verified As Boolean
     Dim measOk As Boolean
+    Dim nameOk As Boolean
     Dim matched As Boolean
     Dim feat As Object
     Dim ax As Object
     Dim extSel As Object
     Dim featName As String
+    Dim featShown As String
     Dim skName As String
     Dim handoffTitle As String
     Dim closedOk As Boolean
@@ -341,9 +343,10 @@ Function RunRevolveCase(ByVal tag As String, ByVal shape As String, ByVal revFla
         WriteStep 1, "context", "failed", "the closed-sketch context is not verified; the feature call is refused"
         GoTo CaseCleanup
     End If
-    ' The stage under test: the emitter's explicit profile-sketch and
-    ' axis selection, then its exact FeatureRevolve2 call shape.
-    result = 1
+    ' The emitter's explicit profile-sketch and axis selection is SETUP:
+    ' its failures keep the setup classification and abort the remaining
+    ' cases. The stage under test - and with it measurement-failure
+    ' semantics - begins at the feature call.
     Err.Clear
     swDoc.ClearSelection2 True
     n = Err.Number
@@ -377,9 +380,10 @@ Function RunRevolveCase(ByVal tag As String, ByVal shape As String, ByVal revFla
     d = Err.Description
     WriteLine LineFor("selectaxis-" & tag, n, d, "stage=select-append result=" & CStr(ok))
     If n <> 0 Or Not ok Then
-        WriteStep 3, "revolve", "failed", "the axis could not be selected; the revolve is not attempted"
+        WriteStep 3, "revolve", "failed", "the axis could not be selected; the revolve is not attempted (setup)"
         GoTo CaseCleanup
     End If
+    result = 1
     matched = False
     Select Case shape
         Case "blind"
@@ -415,11 +419,14 @@ Function RunRevolveCase(ByVal tag As String, ByVal shape As String, ByVal revFla
     n = Err.Number
     d = Err.Description
     WriteLine LineFor("feature-name-" & tag, n, d, "name=" & featName)
+    nameOk = True
+    featShown = featName
     If n <> 0 Or Trim(featName) = "" Then
-        WriteStep 3, "revolve", "failed", "the created feature has no name; the angle dimension identities cannot be read"
-        GoTo CaseCleanup
+        nameOk = False
+        featShown = "(name unavailable)"
+        WriteLine LineFor("feature-name-" & tag, -1, "name unavailable", "the D1/D2 lookups cannot be constructed; their keys are never issued empty")
     End If
-    WriteStep 3, "revolve", "created", "shape=" & shape & " reverse=" & CStr(revFlag) & " a1=" & Trim(Str(a1)) & " a2=" & Trim(Str(a2)) & ", feature " & featName
+    WriteStep 3, "revolve", "created", "shape=" & shape & " reverse=" & CStr(revFlag) & " a1=" & Trim(Str(a1)) & " a2=" & Trim(Str(a2)) & ", feature " & featShown
     ' The measurement context is re-established AFTER the mutating
     ' feature call: no active sketch, clean selection.
     ReportContext "closed", verified
@@ -439,11 +446,16 @@ Function RunRevolveCase(ByVal tag As String, ByVal shape As String, ByVal revFla
     measOk = True
     MassEvidence tag, ok
     If Not ok Then measOk = False
-    DimEvidence "dim-d1-" & tag, "D1@" & featName, True, ok
-    If Not ok Then measOk = False
-    DimEvidence "dim-d2-" & tag, "D2@" & featName, (shape = "twosided"), ok
-    If shape = "twosided" Then
+    If nameOk Then
+        DimEvidence "dim-d1-" & tag, "D1@" & featName, True, ok
         If Not ok Then measOk = False
+        DimEvidence "dim-d2-" & tag, "D2@" & featName, (shape = "twosided"), ok
+        If shape = "twosided" Then
+            If Not ok Then measOk = False
+        End If
+    Else
+        WriteLine LineFor("dim-d1-" & tag, -1, "lookup unavailable", "required: no feature name; the angle identities are missing")
+        measOk = False
     End If
     If measOk Then
         WriteStep 4, "measure-" & tag, "created", "volume and centroid captured (mass properties); angle dimension identities captured"

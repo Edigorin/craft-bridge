@@ -48,8 +48,11 @@ Sub main()
     Dim closedOk As Boolean
     Dim cleanupMode As String
     Dim ok As Boolean
-    Dim ln As SketchSegment
-    Dim ci As SketchSegment
+    ' Late-bound Object throughout: the pinned members (GetStartPoint
+    ' array form, GetCenterPoint2, Radius) are proven on the late-bound
+    ' form; typed declarations risk a compile-time member mismatch.
+    Dim ln As Object
+    Dim ci As Object
     Dim cph As Object
     Dim sk As Object
     Dim dp As SldWorks.Dimension
