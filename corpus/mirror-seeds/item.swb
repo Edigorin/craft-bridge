@@ -549,27 +549,39 @@ WriteLine "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" &
 End Sub
 
 
-' The report path travels in the host's environment or in a one-line path
-' file under %%TEMP%%, because the macro runs inside the SolidWorks process.
+' The report path travels in a one-line file under the TEMP directory that
+' the host rewrites before every run: preferred over CRAFT_BRIDGE_REPORT,
+' because the macro runs inside the SolidWorks process, which may be an
+' instance that started long ago with a stale environment. The environment
+' variable is only the fallback for when the path file is missing or blank.
 Function ReportPathFromHost() As String
 Dim p As String, f As Integer, oneLine As String
-p = Environ$("CRAFT_BRIDGE_REPORT")
-If p <> "" Then
-ReportPathFromHost = p
-Exit Function
-End If
+Dim got As Boolean
+ReportPathFromHost = ""
+On Error Resume Next
 p = Environ$("TEMP")
-If p = "" Then Exit Function
+If p <> "" Then
 p = p & "\craft-bridge-report-path.txt"
 Err.Clear
-On Error Resume Next
 f = FreeFile
 Open p For Input As #f
 If Err.Number = 0 Then
+Err.Clear
 Line Input #f, oneLine
+got = (Err.Number = 0)
+Err.Clear
 Close #f
-If Err.Number = 0 Then ReportPathFromHost = Trim(oneLine)
+If got Then
+oneLine = Trim(oneLine)
+If oneLine <> "" Then
+ReportPathFromHost = oneLine
+Exit Function
 End If
+End If
+End If
+Err.Clear
+End If
+ReportPathFromHost = Trim(Environ$("CRAFT_BRIDGE_REPORT"))
 End Function
 
 ' The directory of the macro (its sidecar snapshots live there): the
@@ -609,16 +621,21 @@ Function AddGlobalEquation(ByVal nm As String, ByVal rhs As String, ByVal expect
 On Error GoTo EqFail
 Dim eqMgr As Object
 Dim eqText As String
+Dim idx As Long
 Set eqMgr = swDoc.GetEquationMgr
 If eqMgr Is Nothing Then gMsg = "the equation manager is missing": AddGlobalEquation = "failed": Exit Function
 eqText = """" & nm & """=" & rhs
-eqMgr.Add2 -1, eqText
+idx = eqMgr.Add(-1, eqText)
+If idx < 0 Then gMsg = "equation failed: the equation was not accepted": GoTo EqFail
 swDoc.EditRebuild3
+If eqMgr.Count <= idx Then gMsg = "equation failed: the equation is missing after the rebuild": GoTo EqFail
+If eqMgr.Equation(idx) <> eqText Then gMsg = "equation failed: the stored equation reads back differently": GoTo EqFail
+If Abs(eqMgr.Value(idx) - expect) > 0.000001 Then gMsg = "equation failed: the equation value does not match": GoTo EqFail
 gMsg = "equation " & eqText
 AddGlobalEquation = "created"
 Exit Function
 EqFail:
-gMsg = "equation failed: " & Err.Description
+If Err.Number <> 0 Then gMsg = "equation failed: " & Err.Description
 AddGlobalEquation = "failed"
 End Function
 
@@ -629,16 +646,20 @@ Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByV
 On Error GoTo EqFail
 Dim eqMgr As Object
 Dim eqText As String
+Dim idx As Long
 Set eqMgr = swDoc.GetEquationMgr
-If eqMgr Is Nothing Then GoTo EqFail
+If eqMgr Is Nothing Then gMsg = "the equation manager is missing": GoTo EqFail
 eqText = """" & dm.Name & """=" & rhs
-eqMgr.Add2 -1, eqText
+idx = eqMgr.Add(-1, eqText)
+If idx < 0 Then gMsg = "the dimension equation was not accepted": GoTo EqFail
 swDoc.EditRebuild3
-If Abs(dm.SystemValue - expect) > 0.000001 Then GoTo EqFail
+If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = "the driven value does not match": GoTo EqFail
+If eqMgr.Count <= idx Then gMsg = "the dimension equation is missing after the rebuild": GoTo EqFail
+If eqMgr.Equation(idx) <> eqText Then gMsg = "the stored equation reads back differently": GoTo EqFail
 If slot >= 0 Then regName(slot) = dm.Name
-             AddDimEquation = True
+AddDimEquation = True
 Exit Function
 EqFail:
-If Err.Number <> 0 Then gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description Else gMsg = "the dimension equation could not be added"
+If Err.Number <> 0 Then gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description
 AddDimEquation = False
 End Function

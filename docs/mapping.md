@@ -251,3 +251,21 @@ Diagnostic recovery (the macro compiles, runs, and records attributed
 failures) is established separately from full seat replay acceptance (the
 rebuilt model matches the design): the first is a prerequisite for the
 second, never a substitute.
+
+**Report routing (runtime):** the report path travels in a one-line file
+under the TEMP directory, rewritten before every run, and the macro reads
+that file first; `CRAFT_BRIDGE_REPORT` is only the fallback for when the
+file is missing or blank. A long-lived SolidWorks process can carry a stale
+environment inherited from whatever launched it - preferring the
+environment silently misrouted every report after a restart (2026-11-14)
+and made sound runs look like failures.
+
+**Equation manager (runtime):** on this seat (rev 34.3.2) the late-bound
+`IEquationMgr.Add2` call rejected the two-argument form ("Argument not
+optional"); the classic two-argument `Add` works, and so does `Add2` with a
+third argument. The emitter calls `Add`, fails closed unless the returned
+index is valid, and reads the stored equation and its evaluated value back
+after the rebuild. This is observed late-bound behaviour on 34.3.2; the
+help pages consulted (help.solidworks.com, `Add2` 2023 and 2026, `Add`
+2025) show the two-argument `Add2` form.
+

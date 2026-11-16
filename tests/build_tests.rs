@@ -1035,3 +1035,69 @@ fn xz_revolve_axes_map_world_z_and_lines_with_v_along_minus_z() {
         other => panic!("not a revolve: {other:?}"),
     }
 }
+
+#[test]
+fn equations_use_the_seat_proven_add_shape_and_read_back() {
+    let case = Case::new(TRACER);
+    case.build_to("eqshape.swb", false).unwrap();
+    let macro_text = fs::read_to_string(case.dir.path().join("eqshape.swb")).unwrap();
+    // Seat evidence (rev 34.3.2): Add2 with the documented two arguments is
+    // rejected at runtime ("Argument not optional"); the two-argument classic
+    // Add works and its returned index is validated and read back.
+    assert!(
+        macro_text.contains("idx = eqMgr.Add(-1, eqText)"),
+        "the equation insert does not use the seat-proven Add call"
+    );
+    assert!(
+        !macro_text.contains("eqMgr.Add2"),
+        "the unproven Add2 call survived"
+    );
+    assert!(
+        macro_text.contains("If idx < 0 Then"),
+        "the insert result is not validated"
+    );
+    assert!(
+        macro_text.contains("eqMgr.Equation(idx) <> eqText"),
+        "the stored equation is not read back"
+    );
+    assert!(
+        macro_text.contains("eqMgr.Value(idx)"),
+        "the evaluated value is not checked"
+    );
+}
+
+#[test]
+fn report_path_prefers_the_fresh_path_file_over_the_environment() {
+    // A long-lived SolidWorks process can carry a stale CRAFT_BRIDGE_REPORT
+    // inherited from whatever launched it; the path file is rewritten before
+    // every run and must win. Environment is the fallback only.
+    let case = Case::new(TRACER);
+    case.build_to("routing.swb", false).unwrap();
+    let generated = fs::read_to_string(case.dir.path().join("routing.swb")).unwrap();
+    for (name, text) in [
+        ("generated", generated.as_str()),
+        (
+            "checkpoint",
+            include_str!("../corpus/compat-check/minimal.swb"),
+        ),
+    ] {
+        let start = text
+            .find("Function ReportPathFromHost")
+            .expect("the function exists");
+        let end = text[start..]
+            .find("End Function")
+            .expect("the function ends")
+            + start;
+        let body = &text[start..end];
+        let file = body
+            .find("craft-bridge-report-path.txt")
+            .unwrap_or_else(|| panic!("{name}: no path-file read"));
+        let env = body
+            .find("CRAFT_BRIDGE_REPORT")
+            .unwrap_or_else(|| panic!("{name}: no environment fallback"));
+        assert!(
+            file < env,
+            "{name}: the environment wins over the fresh path file"
+        );
+    }
+}

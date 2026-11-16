@@ -121,28 +121,40 @@ Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String
     WriteLine "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
 End Sub
 
-' The report path travels in the host's environment or in a one-line path file
-' under %TEMP%, because the macro runs inside the SolidWorks process.
-Function ReportPathFromHost() As String
+    ' The report path travels in a one-line file under the TEMP directory that
+    ' the host rewrites before every run: preferred over CRAFT_BRIDGE_REPORT,
+    ' because the macro runs inside the SolidWorks process, which may be an
+    ' instance that started long ago with a stale environment. The environment
+    ' variable is only the fallback for when the path file is missing or blank.
+    Function ReportPathFromHost() As String
     Dim p As String, f As Integer, oneLine As String
-    p = Environ$("CRAFT_BRIDGE_REPORT")
-    If p <> "" Then
-        ReportPathFromHost = p
-        Exit Function
-    End If
+    Dim got As Boolean
+    ReportPathFromHost = ""
+    On Error Resume Next
     p = Environ$("TEMP")
-    If p = "" Then Exit Function
+    If p <> "" Then
     p = p & "\craft-bridge-report-path.txt"
     Err.Clear
-    On Error Resume Next
     f = FreeFile
     Open p For Input As #f
     If Err.Number = 0 Then
-        Line Input #f, oneLine
-        Close #f
-        If Err.Number = 0 Then ReportPathFromHost = Trim(oneLine)
+    Err.Clear
+    Line Input #f, oneLine
+    got = (Err.Number = 0)
+    Err.Clear
+    Close #f
+    If got Then
+    oneLine = Trim(oneLine)
+    If oneLine <> "" Then
+    ReportPathFromHost = oneLine
+    Exit Function
     End If
-End Function
+    End If
+    End If
+    Err.Clear
+    End If
+    ReportPathFromHost = Trim(Environ$("CRAFT_BRIDGE_REPORT"))
+    End Function
 
 ' JSON string escaping. This is not VBA-literal escaping: it is only for the
 ' report file. Generated code strings are escaped separately by the generator.

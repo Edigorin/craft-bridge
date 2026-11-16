@@ -733,28 +733,40 @@ pub fn emit(
          End Sub\n\
 \n\
 \n\
-         ' The report path travels in the host's environment or in a one-line path\n\
-         ' file under %%TEMP%%, because the macro runs inside the SolidWorks process.\n\
-         Function ReportPathFromHost() As String\n\
-             Dim p As String, f As Integer, oneLine As String\n\
-             p = Environ$(\"CRAFT_BRIDGE_REPORT\")\n\
-             If p <> \"\" Then\n\
-                 ReportPathFromHost = p\n\
-                 Exit Function\n\
-             End If\n\
-             p = Environ$(\"TEMP\")\n\
-             If p = \"\" Then Exit Function\n\
-             p = p & \"\\craft-bridge-report-path.txt\"\n\
-             Err.Clear\n\
-             On Error Resume Next\n\
-             f = FreeFile\n\
-             Open p For Input As #f\n\
-             If Err.Number = 0 Then\n\
-                 Line Input #f, oneLine\n\
-                 Close #f\n\
-                 If Err.Number = 0 Then ReportPathFromHost = Trim(oneLine)\n\
-             End If\n\
-         End Function\n\
+         ' The report path travels in a one-line file under the TEMP directory that
+' the host rewrites before every run: preferred over CRAFT_BRIDGE_REPORT,
+' because the macro runs inside the SolidWorks process, which may be an
+' instance that started long ago with a stale environment. The environment
+' variable is only the fallback for when the path file is missing or blank.
+Function ReportPathFromHost() As String
+Dim p As String, f As Integer, oneLine As String
+Dim got As Boolean
+ReportPathFromHost = \"\"
+On Error Resume Next
+p = Environ$(\"TEMP\")
+If p <> \"\" Then
+p = p & \"\\craft-bridge-report-path.txt\"
+Err.Clear
+f = FreeFile
+Open p For Input As #f
+If Err.Number = 0 Then
+Err.Clear
+Line Input #f, oneLine
+got = (Err.Number = 0)
+Err.Clear
+Close #f
+If got Then
+oneLine = Trim(oneLine)
+If oneLine <> \"\" Then
+ReportPathFromHost = oneLine
+Exit Function
+End If
+End If
+End If
+Err.Clear
+End If
+ReportPathFromHost = Trim(Environ$(\"CRAFT_BRIDGE_REPORT\"))
+End Function\n\
 \n\
          ' The directory of the macro (its sidecar snapshots live there): the\n\
          ' second line of the host's path file.\n\
@@ -789,43 +801,52 @@ pub fn emit(
          ' Add a global-variable equation and rebuild. The name is a global, the\n\
          ' right-hand side is equation syntax. Globals are verified through the\n\
          ' dimensions that reference them.\n\
-         Function AddGlobalEquation(ByVal nm As String, ByVal rhs As String, ByVal expect As Double) As String\n\
-             On Error GoTo EqFail\n\
-             Dim eqMgr As Object\n\
-             Dim eqText As String\n\
-             Set eqMgr = swDoc.GetEquationMgr\n\
-             If eqMgr Is Nothing Then gMsg = \"the equation manager is missing\": AddGlobalEquation = \"failed\": Exit Function\n\
-             eqText = \"\"\"\" & nm & \"\"\"=\" & rhs\n\
-             eqMgr.Add2 -1, eqText\n\
-             swDoc.EditRebuild3\n\
-             gMsg = \"equation \" & eqText\n\
-             AddGlobalEquation = \"created\"\n\
-             Exit Function\n\
-         EqFail:\n\
-             gMsg = \"equation failed: \" & Err.Description\n\
-             AddGlobalEquation = \"failed\"\n\
-         End Function\n\
+         Function AddGlobalEquation(ByVal nm As String, ByVal rhs As String, ByVal expect As Double) As String
+On Error GoTo EqFail
+Dim eqMgr As Object
+Dim eqText As String
+Dim idx As Long
+Set eqMgr = swDoc.GetEquationMgr
+If eqMgr Is Nothing Then gMsg = \"the equation manager is missing\": AddGlobalEquation = \"failed\": Exit Function
+eqText = \"\"\"\" & nm & \"\"\"=\" & rhs
+idx = eqMgr.Add(-1, eqText)
+If idx < 0 Then gMsg = \"equation failed: the equation was not accepted\": GoTo EqFail
+swDoc.EditRebuild3
+If eqMgr.Count <= idx Then gMsg = \"equation failed: the equation is missing after the rebuild\": GoTo EqFail
+If eqMgr.Equation(idx) <> eqText Then gMsg = \"equation failed: the stored equation reads back differently\": GoTo EqFail
+If Abs(eqMgr.Value(idx) - expect) > 0.000001 Then gMsg = \"equation failed: the equation value does not match\": GoTo EqFail
+gMsg = \"equation \" & eqText
+AddGlobalEquation = \"created\"
+Exit Function
+EqFail:
+If Err.Number <> 0 Then gMsg = \"equation failed: \" & Err.Description
+AddGlobalEquation = \"failed\"
+End Function\n\
 \n\
          ' Add an equation driving a dimension and verify it evaluated: the\n\
          ' dimension name is captured at runtime, the value must match the\n\
          ' expectation after a rebuild. Never presence alone.\n\
-         Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long) As Boolean\n\
-             On Error GoTo EqFail\n\
-             Dim eqMgr As Object\n\
-             Dim eqText As String\n\
-             Set eqMgr = swDoc.GetEquationMgr\n\
-             If eqMgr Is Nothing Then GoTo EqFail\n\
-             eqText = \"\"\"\" & dm.Name & \"\"\"=\" & rhs\n\
-             eqMgr.Add2 -1, eqText\n\
-             swDoc.EditRebuild3\n\
-             If Abs(dm.SystemValue - expect) > 0.000001 Then GoTo EqFail\n\
-             If slot >= 0 Then regName(slot) = dm.Name
-             AddDimEquation = True\n\
-             Exit Function\n\
-         EqFail:\n\
-             If Err.Number <> 0 Then gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description Else gMsg = \"the dimension equation could not be added\"\n\
-             AddDimEquation = False\n\
-         End Function\n",
+         Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long) As Boolean
+On Error GoTo EqFail
+Dim eqMgr As Object
+Dim eqText As String
+Dim idx As Long
+Set eqMgr = swDoc.GetEquationMgr
+If eqMgr Is Nothing Then gMsg = \"the equation manager is missing\": GoTo EqFail
+eqText = \"\"\"\" & dm.Name & \"\"\"=\" & rhs
+idx = eqMgr.Add(-1, eqText)
+If idx < 0 Then gMsg = \"the dimension equation was not accepted\": GoTo EqFail
+swDoc.EditRebuild3
+If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = \"the driven value does not match\": GoTo EqFail
+If eqMgr.Count <= idx Then gMsg = \"the dimension equation is missing after the rebuild\": GoTo EqFail
+If eqMgr.Equation(idx) <> eqText Then gMsg = \"the stored equation reads back differently\": GoTo EqFail
+If slot >= 0 Then regName(slot) = dm.Name
+AddDimEquation = True
+Exit Function
+EqFail:
+If Err.Number <> 0 Then gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description
+AddDimEquation = False
+End Function\n",
     );
     out
 }
