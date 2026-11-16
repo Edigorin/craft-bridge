@@ -18,6 +18,7 @@ Dim gMapValid(0 To 2) As Boolean
 Dim gMapSide(0 To 2) As Long
 Dim gFrame(0 To 2, 0 To 11) As Double
 Dim gOmit As String
+         Dim gCause As String
 Dim gDimToggle As Boolean
 Dim gDimToggleSaved As Boolean
 Dim gDoc As Object

@@ -196,7 +196,7 @@ pub fn emit(
          Dim gMapValid(0 To {max_step}) As Boolean\n\
          Dim gMapSide(0 To {max_step}) As Long\n\
          Dim gFrame(0 To {max_step}, 0 To 11) As Double\n\
-         Dim gOmit As String\n\
+         Dim gOmit As String\n         Dim gCause As String\n\
          Dim gDimToggle As Boolean\n\
          Dim gDimToggleSaved As Boolean\n"
     ));
@@ -1578,7 +1578,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     // this sketch registered are cleared so the redraw rebinds them under
     // fresh runtime names.
     out.push_str(&format!(
-        "Function CleanSketch{index}() As Boolean\n    On Error GoTo CleanFail\n    Dim anySel As Boolean\n    Dim okSel As Boolean\n    Dim cleanOk As Boolean\n    Dim pts As Variant\n    Dim ub As Long\n    Dim skFeat As SldWorks.Feature\n    CleanSketch{index} = False\n    gMsg = \"\"\n    SolveSketch skName{index}\n    ClearMap {index}\n"
+        "Function CleanSketch{index}() As Boolean\n    On Error GoTo CleanFail\n    Dim anySel As Boolean\n    Dim okSel As Boolean\n    Dim cleanOk As Boolean\n    Dim pts As Variant\n    Dim ub As Long\n    Dim skFeat As SldWorks.Feature\n    CleanSketch{index} = False\n    gCause = gMsg\n    gMsg = \"\"\n    SolveSketch skName{index}\n    ClearMap {index}\n"
     ));
     for (_, eq) in &sk.dim_equations {
         out.push_str(&format!(
@@ -1598,7 +1598,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     }
     out.push_str("    If anySel Then swDoc.EditDelete\n    swDoc.ClearSelection2 True\n");
     out.push_str(
-        "    ' Verify the deletion through the pinned point enumeration (every\n    ' line endpoint and circle centre is a sketch point): only a PROVEN-\n    ' EMPTY collection counts. A fetch, type or bounds failure refuses -\n    ' a failed query is never proof of emptiness.\n    On Error Resume Next\n    Err.Clear\n    pts = swSketchMgr.ActiveSketch.GetSketchPoints2\n    If Err.Number <> 0 Then\n    On Error GoTo CleanFail\n    gMsg = \"the point collection could not be read after deletion: err \" & Trim(Str(Err.Number))\n    GoTo CleanFail\n    End If\n    If Not IsArray(pts) Then\n    On Error GoTo CleanFail\n    gMsg = \"the point collection did not come back as an array after deletion\"\n    GoTo CleanFail\n    End If\n    Err.Clear\n    ub = UBound(pts)\n    If Err.Number = 0 Then\n    On Error GoTo CleanFail\n    gMsg = \"sketch contents deletion is not verified: \" & Trim(Str(ub + 1)) & \" points remain\"\n    GoTo CleanFail\n    End If\n    If Err.Number <> 9 Then\n    On Error GoTo CleanFail\n    gMsg = \"the point collection bounds could not be established: err \" & Trim(Str(Err.Number))\n    GoTo CleanFail\n    End If\n    On Error GoTo CleanFail\n",
+        "    ' Verify the deletion through the pinned point enumeration (every\n    ' line endpoint and circle centre is a sketch point): only a PROVEN-\n    ' EMPTY collection counts. A fetch, type or bounds failure refuses -\n    ' a failed query is never proof of emptiness.\n    On Error Resume Next\n    Err.Clear\n    pts = swSketchMgr.ActiveSketch.GetSketchPoints2\n    If Err.Number <> 0 Then\n    On Error GoTo CleanFail\n    gMsg = \"the point collection could not be read after deletion: err \" & Trim(Str(Err.Number))\n    GoTo CleanFail\n    End If\n    If IsArray(pts) Then\n    Err.Clear\n    ub = UBound(pts)\n    If Err.Number = 0 Then\n    On Error GoTo CleanFail\n    gMsg = \"sketch contents deletion is not verified: \" & Trim(Str(ub + 1)) & \" points remain\"\n    GoTo CleanFail\n    End If\n    If Err.Number <> 9 Then\n    On Error GoTo CleanFail\n    gMsg = \"the point collection bounds could not be established: err \" & Trim(Str(Err.Number))\n    GoTo CleanFail\n    End If\n    Else\n    ' The seat-proven empty signature (2026-11-16, revolve-axes run): a\n    ' successful fetch on a deleted sketch returns Empty, not an empty\n    ' array. Any other non-array value refuses.\n    If Not IsEmpty(pts) Then\n    On Error GoTo CleanFail\n    gMsg = \"the point collection came back as an unexpected non-array value\"\n    GoTo CleanFail\n    End If\n    End If\n    On Error GoTo CleanFail\n",
     );
     out.push_str(&format!(
         "    If Not AcceptAndPublish({index}, {}, gProbeReason) Then gMsg = \"the sketch frame could not be re-accepted after recreation: \" & gProbeReason: GoTo CleanFail\n",
@@ -1608,7 +1608,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
         "    Set skFeat = swSketchMgr.ActiveSketch\n    If skFeat Is Nothing Then gMsg = \"the recreated sketch has no active sketch object\": GoTo CleanFail\n",
     );
     out.push_str(&format!(
-        "    skName{index} = skFeat.Name\n    CleanSketch{index} = True\n    Exit Function\nCleanFail:\n    If Err.Number <> 0 Then gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description\n    CleanSketch{index} = False\nEnd Function\n\n"
+        "    skName{index} = skFeat.Name\n    CleanSketch{index} = True\n    Exit Function\nCleanFail:\n    If Err.Number <> 0 Then gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description\n    gMsg = gCause & \" | recreate refused: \" & gMsg\n    CleanSketch{index} = False\nEnd Function\n\n"
     ));
     out
 }

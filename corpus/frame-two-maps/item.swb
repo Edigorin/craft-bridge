@@ -18,6 +18,7 @@ Dim gMapValid(0 To 3) As Boolean
 Dim gMapSide(0 To 3) As Long
 Dim gFrame(0 To 3, 0 To 11) As Double
 Dim gOmit As String
+         Dim gCause As String
 Dim gDimToggle As Boolean
 Dim gDimToggleSaved As Boolean
 Dim gDoc As Object
@@ -594,6 +595,7 @@ Function CleanSketch1() As Boolean
     Dim ub As Long
     Dim skFeat As SldWorks.Feature
     CleanSketch1 = False
+    gCause = gMsg
     gMsg = ""
     SolveSketch skName1
     ClearMap 1
@@ -635,11 +637,7 @@ Function CleanSketch1() As Boolean
     gMsg = "the point collection could not be read after deletion: err " & Trim(Str(Err.Number))
     GoTo CleanFail
     End If
-    If Not IsArray(pts) Then
-    On Error GoTo CleanFail
-    gMsg = "the point collection did not come back as an array after deletion"
-    GoTo CleanFail
-    End If
+    If IsArray(pts) Then
     Err.Clear
     ub = UBound(pts)
     If Err.Number = 0 Then
@@ -652,6 +650,16 @@ Function CleanSketch1() As Boolean
     gMsg = "the point collection bounds could not be established: err " & Trim(Str(Err.Number))
     GoTo CleanFail
     End If
+    Else
+    ' The seat-proven empty signature (2026-11-16, revolve-axes run): a
+    ' successful fetch on a deleted sketch returns Empty, not an empty
+    ' array. Any other non-array value refuses.
+    If Not IsEmpty(pts) Then
+    On Error GoTo CleanFail
+    gMsg = "the point collection came back as an unexpected non-array value"
+    GoTo CleanFail
+    End If
+    End If
     On Error GoTo CleanFail
     If Not AcceptAndPublish(1, "YZ", gProbeReason) Then gMsg = "the sketch frame could not be re-accepted after recreation: " & gProbeReason: GoTo CleanFail
     Set skFeat = swSketchMgr.ActiveSketch
@@ -661,6 +669,7 @@ Function CleanSketch1() As Boolean
     Exit Function
 CleanFail:
     If Err.Number <> 0 Then gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description
+    gMsg = gCause & " | recreate refused: " & gMsg
     CleanSketch1 = False
 End Function
 
@@ -1101,6 +1110,7 @@ Function CleanSketch2() As Boolean
     Dim ub As Long
     Dim skFeat As SldWorks.Feature
     CleanSketch2 = False
+    gCause = gMsg
     gMsg = ""
     SolveSketch skName2
     ClearMap 2
@@ -1142,11 +1152,7 @@ Function CleanSketch2() As Boolean
     gMsg = "the point collection could not be read after deletion: err " & Trim(Str(Err.Number))
     GoTo CleanFail
     End If
-    If Not IsArray(pts) Then
-    On Error GoTo CleanFail
-    gMsg = "the point collection did not come back as an array after deletion"
-    GoTo CleanFail
-    End If
+    If IsArray(pts) Then
     Err.Clear
     ub = UBound(pts)
     If Err.Number = 0 Then
@@ -1159,6 +1165,16 @@ Function CleanSketch2() As Boolean
     gMsg = "the point collection bounds could not be established: err " & Trim(Str(Err.Number))
     GoTo CleanFail
     End If
+    Else
+    ' The seat-proven empty signature (2026-11-16, revolve-axes run): a
+    ' successful fetch on a deleted sketch returns Empty, not an empty
+    ' array. Any other non-array value refuses.
+    If Not IsEmpty(pts) Then
+    On Error GoTo CleanFail
+    gMsg = "the point collection came back as an unexpected non-array value"
+    GoTo CleanFail
+    End If
+    End If
     On Error GoTo CleanFail
     If Not AcceptAndPublish(2, "XZ", gProbeReason) Then gMsg = "the sketch frame could not be re-accepted after recreation: " & gProbeReason: GoTo CleanFail
     Set skFeat = swSketchMgr.ActiveSketch
@@ -1168,6 +1184,7 @@ Function CleanSketch2() As Boolean
     Exit Function
 CleanFail:
     If Err.Number <> 0 Then gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description
+    gMsg = gCause & " | recreate refused: " & gMsg
     CleanSketch2 = False
 End Function
 

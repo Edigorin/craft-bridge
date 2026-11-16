@@ -110,3 +110,20 @@ snapshots. Anything the seat reports as a correction becomes a new fixture.
 - **`Dim sgn`-style names are compile errors**: VBA intrinsic names cannot
   be identifiers. A compile error presents as RunMacro returning failure
   with no report at all - bisect with committed compile probes.
+
+## Extrude and mass APIs (measured on the seat, 2026-11-16)
+
+- `FeatureExtrusion2` takes **23 arguments**; `T0/StartOffset/FlipStartOffset`
+  are not optional (err 449 "Argument not optional"). Full-arity calls in the
+  emitter end `, 0, 0#, False)`.
+- **Direction truth table (Front plane = SC YZ, n = +X):** `Dir=True` sends
+  material toward **minus** the sketch normal, `Dir=False` toward **plus**.
+  Two-sided: `D1` (first depth) to the **plus**-normal side, `D2` (second) to
+  the **minus**-normal side. Through-all follows the same Dir rule.
+  Dimension identities: `D1@Boss-Extrude1` / `D2@Boss-Extrude1`, SI metres.
+- `IPartDoc.GetPartBox(True)` returns `Double()` of 6 (c0..c2 one diagonal
+  corner, c3..c5 the other), SI metres.
+- Mass properties: the centroid member is `centerofmass` (American spelling;
+  `centreofmass` raises 438). Volume + centroid captured per body.
+- Construction geometry is `ISketchSegment.ConstructionGeometry` (get/set);
+  `.Construction` raises 438.

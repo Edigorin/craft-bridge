@@ -1527,8 +1527,12 @@ fn sketch_recreation_rebinds_and_reprobes() {
         "a failed point query is not refused"
     );
     assert!(
-        region.contains("did not come back as an array"),
-        "a non-array point collection is not refused"
+        region.contains("unexpected non-array value"),
+        "an unexpected non-array point collection is not refused"
+    );
+    assert!(
+        region.contains("If Not IsEmpty(pts) Then"),
+        "the seat-proven empty signature is not the only accepted non-array case"
     );
     // The frame is re-probed and republished before any redraw.
     assert!(
@@ -1544,6 +1548,10 @@ fn sketch_recreation_rebinds_and_reprobes() {
     assert!(
         text.contains("If Not CleanSketch2() Then GoTo SketchFailed"),
         "recreation refusal does not fail the sketch"
+    );
+    assert!(
+        text.contains("gMsg = gCause &"),
+        "the recreation refusal loses the original failure cause"
     );
     // Omission is terminating: recorded with a named reason and never
     // re-attempted as a failure (the class check is deterministic).
