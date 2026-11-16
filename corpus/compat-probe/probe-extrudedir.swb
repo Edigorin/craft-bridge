@@ -138,9 +138,11 @@ Function RunBlindCase(ByVal tag As String, ByVal dirFlag As Boolean, ByVal isFin
     Dim ok As Boolean
     Dim verified As Boolean
     Dim measOk As Boolean
+    Dim nameOk As Boolean
     Dim feat As Object
     Dim extSel As Object
     Dim featName As String
+    Dim featShown As String
     Dim skName As String
     Dim handoffTitle As String
     Dim closedOk As Boolean
@@ -214,9 +216,10 @@ Function RunBlindCase(ByVal tag As String, ByVal dirFlag As Boolean, ByVal isFin
         WriteStep 1, "context", "failed", "the closed-sketch context is not verified; the feature call is refused"
         GoTo CaseCleanup
     End If
-    ' The stage under test: the emitter's explicit profile-sketch
-    ' selection, then its exact blind call shape.
-    result = 1
+    ' The emitter's explicit profile-sketch selection is SETUP: its
+    ' failures keep the setup classification and abort the remaining
+    ' cases. The stage under test - and with it measurement-failure
+    ' semantics - begins at the feature call.
     Err.Clear
     swDoc.ClearSelection2 True
     n = Err.Number
@@ -241,9 +244,10 @@ Function RunBlindCase(ByVal tag As String, ByVal dirFlag As Boolean, ByVal isFin
     d = Err.Description
     WriteLine LineFor("selectsketch-" & tag, n, d, "stage=selectbyname name=" & skName & " result=" & CStr(ok))
     If n <> 0 Or Not ok Then
-        WriteStep 3, "extrude", "failed", "the profile sketch " & skName & " could not be selected; the extrusion is not attempted"
+        WriteStep 3, "extrude", "failed", "the profile sketch " & skName & " could not be selected; the extrusion is not attempted (setup)"
         GoTo CaseCleanup
     End If
+    result = 1
     WriteLine LineFor("featureextrusion2-" & tag, 0, "", "entering: FeatureExtrusion2(True, False, " & CStr(dirFlag) & ", swEndCondBlind, swEndCondBlind, 0.012, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)")
     Err.Clear
     Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.012, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)
@@ -259,11 +263,14 @@ Function RunBlindCase(ByVal tag As String, ByVal dirFlag As Boolean, ByVal isFin
     n = Err.Number
     d = Err.Description
     WriteLine LineFor("feature-name-" & tag, n, d, "name=" & featName)
+    nameOk = True
+    featShown = featName
     If n <> 0 Or Trim(featName) = "" Then
-        WriteStep 3, "extrude", "failed", "the created feature has no name; the dimension identity cannot be read"
-        GoTo CaseCleanup
+        nameOk = False
+        featShown = "(name unavailable)"
+        WriteLine LineFor("feature-name-" & tag, -1, "name unavailable", "the D1 lookup cannot be constructed; its key is never issued empty")
     End If
-    WriteStep 3, "extrude", "created", "blind 0.012 m, Dir=" & CStr(dirFlag) & ", feature " & featName
+    WriteStep 3, "extrude", "created", "blind 0.012 m, Dir=" & CStr(dirFlag) & ", feature " & featShown
     ' The measurement context is re-established AFTER the mutating
     ' feature call: no active sketch, clean selection.
     ReportContext "closed", verified
@@ -283,8 +290,13 @@ Function RunBlindCase(ByVal tag As String, ByVal dirFlag As Boolean, ByVal isFin
     measOk = True
     BoxEvidence tag, ok
     If Not ok Then measOk = False
-    DimEvidence "dim-d1-" & tag, "D1@" & featName, True, ok
-    If Not ok Then measOk = False
+    If nameOk Then
+        DimEvidence "dim-d1-" & tag, "D1@" & featName, True, ok
+        If Not ok Then measOk = False
+    Else
+        WriteLine LineFor("dim-d1-" & tag, -1, "lookup unavailable", "required: no feature name; the D1 identity is missing")
+        measOk = False
+    End If
     If measOk Then
         WriteStep 4, "measure-" & tag, "created", "box form and all 6 components captured; D1 identity captured"
         result = 0

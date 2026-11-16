@@ -149,9 +149,11 @@ Function RunThroughCase(ByVal tag As String, ByVal dirFlag As Boolean, ByVal isF
     Dim ok As Boolean
     Dim verified As Boolean
     Dim measOk As Boolean
+    Dim nameOk As Boolean
     Dim feat As Object
     Dim extSel As Object
     Dim featName As String
+    Dim featShown As String
     Dim skName As String
     Dim handoffTitle As String
     Dim closedOk As Boolean
@@ -225,9 +227,10 @@ Function RunThroughCase(ByVal tag As String, ByVal dirFlag As Boolean, ByVal isF
         WriteStep 1, "context", "failed", "the closed-sketch context is not verified; the feature call is refused"
         GoTo CaseCleanup
     End If
-    ' The stage under test: the emitter's explicit profile-sketch
-    ' selection, then its exact through-all call shape.
-    result = 1
+    ' The emitter's explicit profile-sketch selection is SETUP: its
+    ' failures keep the setup classification and abort the remaining
+    ' cases. The stage under test - and with it measurement-failure
+    ' semantics - begins at the feature call.
     Err.Clear
     swDoc.ClearSelection2 True
     n = Err.Number
@@ -252,9 +255,10 @@ Function RunThroughCase(ByVal tag As String, ByVal dirFlag As Boolean, ByVal isF
     d = Err.Description
     WriteLine LineFor("selectsketch-" & tag, n, d, "stage=selectbyname name=" & skName & " result=" & CStr(ok))
     If n <> 0 Or Not ok Then
-        WriteStep 3, "extrude", "failed", "the profile sketch " & skName & " could not be selected; the extrusion is not attempted"
+        WriteStep 3, "extrude", "failed", "the profile sketch " & skName & " could not be selected; the extrusion is not attempted (setup)"
         GoTo CaseCleanup
     End If
+    result = 1
     WriteLine LineFor("featureextrusion2-" & tag, 0, "", "entering: FeatureExtrusion2(True, False, " & CStr(dirFlag) & ", swEndCondThroughAll, swEndCondBlind, 0#, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)")
     Err.Clear
     Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondThroughAll, swEndConditions_e.swEndCondBlind, 0#, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)
@@ -270,11 +274,14 @@ Function RunThroughCase(ByVal tag As String, ByVal dirFlag As Boolean, ByVal isF
     n = Err.Number
     d = Err.Description
     WriteLine LineFor("feature-name-" & tag, n, d, "name=" & featName)
+    nameOk = True
+    featShown = featName
     If n <> 0 Or Trim(featName) = "" Then
-        WriteStep 3, "extrude", "failed", "the created feature has no name; the dimension identity cannot be read"
-        GoTo CaseCleanup
+        nameOk = False
+        featShown = "(name unavailable)"
+        WriteLine LineFor("feature-name-" & tag, -1, "name unavailable", "the D1 lookup cannot be constructed; its key is never issued empty")
     End If
-    WriteStep 3, "extrude", "created", "through-all, Dir=" & CStr(dirFlag) & ", feature " & featName
+    WriteStep 3, "extrude", "created", "through-all, Dir=" & CStr(dirFlag) & ", feature " & featShown
     ' The measurement context is re-established AFTER the mutating
     ' feature call: no active sketch, clean selection.
     ReportContext "closed", verified
@@ -295,7 +302,11 @@ Function RunThroughCase(ByVal tag As String, ByVal dirFlag As Boolean, ByVal isF
     BoxEvidence tag, ok
     If Not ok Then measOk = False
     ' Informative only: through-all carries no depth dimension by design.
-    DimEvidence "dim-d1-" & tag, "D1@" & featName, False, ok
+    If nameOk Then
+        DimEvidence "dim-d1-" & tag, "D1@" & featName, False, ok
+    Else
+        WriteLine LineFor("dim-d1-" & tag, -1, "lookup unavailable", "informative: no feature name; the D1 look was not attempted")
+    End If
     If measOk Then
         WriteStep 4, "measure-" & tag, "created", "box form and all 6 components captured; the D1 look was informative"
         result = 0
@@ -328,11 +339,13 @@ CaseCleanup:
 End Function
 
 ' The body's bounding box: the exact returned form (zero-based
-' one-dimensional, 6 components) and every component decoded as a
-' Double, each at its own captured stage. Required evidence: the call
-' must succeed and all six components must decode; a different form is
-' reported verbatim and refused - components are never interpreted
-' against a wrong form and never substituted with defaults.
+' one-dimensional, 6 components - rank probed, not assumed) and every
+' component extracted with its own captured error BEFORE decoding (a
+' failed extraction is recorded and can never pass), then decoded
+' through NumDecode. Required evidence: the call must succeed and all
+' six components must decode; a different form is reported verbatim and
+' refused - components are never interpreted against a wrong form and
+' never substituted with defaults.
 Sub BoxEvidence(ByVal tag As String, ByRef ok As Boolean)
     Dim pb As SldWorks.PartDoc
     Dim v As Variant
@@ -342,6 +355,7 @@ Sub BoxEvidence(ByVal tag As String, ByRef ok As Boolean)
     Dim lb As Long
     Dim ub As Long
     Dim i As Long
+    Dim vOne As Variant
     Dim comps As String
     Dim bad As Boolean
     Dim x As Double
@@ -393,9 +407,27 @@ Sub BoxEvidence(ByVal tag As String, ByRef ok As Boolean)
         WriteLine LineFor("getpartbox-" & tag, -1, "unexpected form", "stage=form check: zero-based 6 components (0..5) expected; the values are not interpreted")
         Exit Sub
     End If
+    Err.Clear
+    ub = UBound(v, 2)
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        WriteLine LineFor("getpartbox-" & tag, -1, "a second dimension exists", "stage=rank-probe")
+        Exit Sub
+    End If
+    WriteLine LineFor("getpartbox-" & tag, n, d, "stage=rank-probe (error 9 = one-dimensional, expected)")
+    If n <> 9 Then Exit Sub
     comps = ""
     For i = 0 To 5
-        If NumDecode("getpartbox-" & tag, "component" & Trim(Str(i)), v(i), x) Then
+        Err.Clear
+        vOne = Empty
+        vOne = v(i)
+        n = Err.Number
+        d = Err.Description
+        If n <> 0 Then
+            WriteLine LineFor("getpartbox-" & tag, n, d, "stage=component" & Trim(Str(i)) & " extraction")
+            bad = True
+        ElseIf NumDecode("getpartbox-" & tag, "component" & Trim(Str(i)), vOne, x) Then
             tmp = Trim(Str(x))
             comps = comps & " c" & Trim(Str(i)) & "=" & tmp
         Else
@@ -408,7 +440,8 @@ Sub BoxEvidence(ByVal tag As String, ByRef ok As Boolean)
 End Sub
 
 ' One dimension identity: the lookup key, the returned Name and the
-' SystemValue in SI metres, each at its own captured stage. Required
+' SystemValue in SI base units (lengths in metres, angles in radians),
+' each at its own captured stage. Required
 ' evidence: a nonblank returned Name and a decoded numeric SystemValue -
 ' neither is ever substituted with a default. required = True makes a
 ' missing identity a measurement failure; required = False is an

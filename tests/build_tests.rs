@@ -697,8 +697,10 @@ fn sketch_frame_extraction_follows_the_inverse_transform() {
     );
     assert_eq!(sketch_origin_from_array_data(&a), [0.01, -0.02, 0.03]);
 
-    // A uniform scale in element 12 scales the extracted axes, which the
-    // probe tolerates by comparing directions after normalization.
+    // A uniform scale in element 12 scales the extracted axes. This
+    // normalization serves the strict-frame DIAGNOSTIC only: publication is
+    // NOT scale-tolerant - PublishMap refuses any scale but 1 (pinned in
+    // adaptation_machinery_is_wired_fail_closed).
     let mut a = array_data_from_frame(
         [0.0, 1.0, 0.0],
         [0.0, 0.0, 1.0],
@@ -903,12 +905,42 @@ fn checkpoint_carries_the_map_and_classification_treatment() {
         "the sign is not resolved"
     );
     assert!(
-        checkpoint.contains("dp.SystemValue = sgn * 0.04"),
+        checkpoint.contains("dp.SystemValue = sgn * 0.05"),
         "the resolved sign is not carried by the value"
+    );
+    // The geometry is diagonal, so every dimension kind measures a
+    // different number and the kind check is discriminating; coinciding
+    // magnitudes are refused, never guessed.
+    assert!(
+        checkpoint.contains("the projection magnitudes coincide; the kind cannot be established"),
+        "the checkpoint does not refuse ambiguous dimension kinds"
+    );
+    assert!(
+        checkpoint.contains("the value edit did not carry the geometry"),
+        "the checkpoint has no behavioural kind evidence"
+    );
+    // Circle readback through the pinned centre handle.
+    assert!(
+        checkpoint.contains("ci.GetCenterPoint2"),
+        "the checkpoint does not read the circle back through the centre handle"
+    );
+    // Closed-context verification before any success report.
+    assert!(
+        checkpoint.contains("the sketch context did not close"),
+        "the checkpoint does not verify the closed context"
+    );
+    assert!(
+        checkpoint.contains("closed-context verification failed"),
+        "the checkpoint has no closed-context geometry readback"
+    );
+    // The toggle disable is verified by readback.
+    assert!(
+        checkpoint.contains("the input-dimension-value dialog could not be disabled"),
+        "the checkpoint does not verify the dialog disable"
     );
     // Edit-and-follow acceptance check.
     assert!(
-        checkpoint.contains("dp.SystemValue = 0.05"),
+        checkpoint.contains("dp.SystemValue = 0.1"),
         "the checkpoint does not edit the dimension"
     );
     assert!(
@@ -1448,7 +1480,7 @@ fn sketch_recreation_rebinds_and_reprobes() {
     case.build_to("recreate.swb", false).unwrap();
     let text = fs::read_to_string(case.dir.path().join("recreate.swb")).unwrap();
     let i = text.find("Function CleanSketch2").expect("no CleanSketch2");
-    let region = &text[i..i + 2200.min(text.len() - i)];
+    let region = &text[i..i + 4200.min(text.len() - i)];
     // Invalidate before deletion.
     let clear = region.find("ClearMap 2").expect("no map invalidation");
     let delete = region.find("EditDelete").expect("no deletion");
@@ -1462,10 +1494,20 @@ fn sketch_recreation_rebinds_and_reprobes() {
         region.contains("regName(1) = \"\""),
         "slot 1 is not cleared"
     );
-    // The deletion is verified through the pinned point enumeration.
+    // The deletion is verified through the pinned point enumeration, and
+    // only a PROVEN-EMPTY collection counts: a failed query never proves
+    // emptiness (REJECT regression).
     assert!(
         region.contains("GetSketchPoints2") && region.contains("points remain"),
         "deletion is not verified against the point enumeration"
+    );
+    assert!(
+        region.contains("the point collection could not be read after deletion"),
+        "a failed point query is not refused"
+    );
+    assert!(
+        region.contains("did not come back as an array"),
+        "a non-array point collection is not refused"
     );
     // The frame is re-probed and republished before any redraw.
     assert!(
@@ -1543,6 +1585,157 @@ fn plane_name_for_keeps_its_own_capture_only() {
     assert!(
         region.contains("DiscardProbeSketch"),
         "PlaneNameFor does not own its probe sketch"
+    );
+}
+
+#[test]
+fn emitted_vba_has_no_executable_residue() {
+    // REJECT regression: a stray backslash before a comment is not a VBA
+    // comment - it is executable text and a silent compile failure. Any
+    // backslash outside a string literal or comment is residue.
+    for (name, recipe) in [
+        ("tracer", TRACER),
+        ("stop-rule", TRACER_STOP),
+        ("revolve", TRACER_REVOLVE),
+        ("primitives", TRACER_PRIM),
+        ("modifications", TRACER_MOD),
+        ("patterns", TRACER_PAT),
+    ] {
+        let case = Case::new(recipe);
+        case.build_to("residue.swb", false).unwrap();
+        let text = fs::read_to_string(case.dir.path().join("residue.swb")).unwrap();
+        assert_no_executable_residue(&text, name);
+    }
+    assert_no_executable_residue(
+        include_str!("../corpus/compat-check/minimal.swb"),
+        "checkpoint",
+    );
+}
+
+fn code_only(line: &str) -> String {
+    let mut code = String::new();
+    let mut in_string = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_string {
+            if c == '"' {
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                } else {
+                    in_string = false;
+                }
+            }
+        } else if c == '"' {
+            in_string = true;
+        } else if c == '\'' {
+            break;
+        } else {
+            code.push(c);
+        }
+    }
+    code
+}
+
+fn assert_no_executable_residue(text: &str, what: &str) {
+    for (i, line) in text.lines().enumerate() {
+        let code = code_only(line);
+        assert!(
+            !code.contains('\\'),
+            "{what}: executable residue at line {}: {}",
+            i + 1,
+            line
+        );
+    }
+}
+
+#[test]
+fn module_state_is_declared_before_use() {
+    // REJECT regression: gFrame, gOmit, gDimToggle* were used but never
+    // declared - an Option Explicit compile failure that substring tests
+    // could not see. Every g-prefixed state identifier must be declared.
+    for (name, recipe) in [("tracer", TRACER), ("primitives", TRACER_PRIM)] {
+        let case = Case::new(recipe);
+        case.build_to("decls.swb", false).unwrap();
+        let text = fs::read_to_string(case.dir.path().join("decls.swb")).unwrap();
+        assert_state_declared(&text, name);
+    }
+    assert_state_declared(
+        include_str!("../corpus/compat-check/minimal.swb"),
+        "checkpoint",
+    );
+}
+
+fn assert_state_declared(text: &str, what: &str) {
+    let mut declared: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for line in text.lines() {
+        let t = line.trim();
+        let up = t.to_uppercase();
+        if up.starts_with("DIM ") || up.starts_with("CONST ") {
+            for part in t[4..].split(',') {
+                let name = part
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .split('(')
+                    .next()
+                    .unwrap_or("");
+                if !name.is_empty() {
+                    declared.insert(name.to_lowercase());
+                }
+            }
+        }
+    }
+    for (i, line) in text.lines().enumerate() {
+        let code = code_only(line);
+        let mut ident = String::new();
+        for c in code.chars().chain(std::iter::once(' ')) {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                ident.push(c);
+            } else {
+                if ident.starts_with('g')
+                    && ident.len() > 1
+                    && ident.as_bytes()[1].is_ascii_uppercase()
+                {
+                    assert!(
+                        declared.contains(&ident.to_lowercase()),
+                        "{what}: {ident} is used at line {} but never declared",
+                        i + 1
+                    );
+                }
+                ident.clear();
+            }
+        }
+    }
+}
+
+#[test]
+fn distance_dims_refuse_ambiguous_kinds_and_verify_behaviour() {
+    // A distance_x dimension on the tracer rectangle: the classified-axis
+    // kind must refuse coinciding projection magnitudes and prove itself
+    // behaviourally - setting the value must move exactly that axis.
+    let recipe = TRACER.replace(
+        "{ \"id\": \"k5\", \"l\": 0, \"param\": \"d1\", \"type\": \"length\", \"value\": 40.0 }",
+        "{ \"id\": \"k5\", \"p\": 0, \"q\": 1, \"param\": \"d1\", \"type\": \"distance_x\", \"value\": 40.0 }",
+    );
+    let case = Case::new(&recipe);
+    case.build_to("distx.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("distx.swb")).unwrap();
+    assert!(
+        text.contains("the projection magnitudes coincide; the kind cannot be established"),
+        "an ambiguous dimension kind is not refused"
+    );
+    assert!(
+        text.contains("the value edit moved the perpendicular axis"),
+        "a wrong-kind dimension is not caught behaviourally"
+    );
+    assert!(
+        text.contains("classified-axis"),
+        "the classified-axis behavioural check is missing"
+    );
+    // The omission path for non-permutation maps is named and terminating.
+    assert!(
+        text.contains("non-permutation map"),
+        "the omission path lost its named reason"
     );
 }
 

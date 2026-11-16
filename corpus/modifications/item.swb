@@ -10,15 +10,20 @@ Dim gMsg As String
 Dim gPlane As String
 Dim gProbeLog As String
 Dim gProbeReason As String
-Dim gMap00(0 To 30) As Double
-Dim gMap01(0 To 30) As Double
-Dim gMap10(0 To 30) As Double
-Dim gMap11(0 To 30) As Double
-Dim gMapValid(0 To 30) As Boolean
-Dim gMapSide(0 To 30) As Long
+Dim gMap00(0 To 2) As Double
+Dim gMap01(0 To 2) As Double
+Dim gMap10(0 To 2) As Double
+Dim gMap11(0 To 2) As Double
+Dim gMapValid(0 To 2) As Boolean
+Dim gMapSide(0 To 2) As Long
+Dim gFrame(0 To 2, 0 To 11) As Double
+Dim gOmit As String
+Dim gDimToggle As Boolean
+Dim gDimToggleSaved As Boolean
 Dim gDoc As Object
 Dim gFeatMgr As Object
 Dim regName(0 To 0) As String
+Dim regSign(0 To 0) As Double
 Dim feat0 As SldWorks.Feature
 Dim feat1 As SldWorks.Feature
 Dim feat2 As SldWorks.Feature
@@ -45,6 +50,7 @@ Set swApp = Application.SldWorks
 gDimToggle = swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate)
 gDimToggleSaved = True
 swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, False
+If swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate) Then Err.Raise vbObjectError + 528, "craft-bridge", "the input-dimension-value dialog could not be disabled"
 template = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
 If template = "" Then Err.Raise vbObjectError + 514, "craft-bridge", "no default part template is configured"
 Set swDoc = swApp.NewDocument(template, 0, 0, 0)
@@ -90,6 +96,7 @@ WriteStep stepIdx, "document.new", "created", "fresh part from the default templ
     If st = "failed" Then stopModel = True
 
     If gDimToggleSaved And Not swApp Is Nothing Then swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle
+    If gDimToggleSaved And Not swApp Is Nothing Then If swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate) <> gDimToggle Then WriteStep stepIdx, "toggle-restore", "failed", "the input-dimension-value preference did not restore"
     cleanupMode = CloseMode()
     If cleanupMode = "close" Then
     CloseOwnedDoc closedOk
@@ -121,6 +128,7 @@ Fail:
         WriteStep stepIdx, "macro", "failed", "err " & Trim(Str(errNum)) & ": " & errMsg
     End If
         If gDimToggleSaved And Not swApp Is Nothing Then swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle
+    If gDimToggleSaved And Not swApp Is Nothing Then If swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate) <> gDimToggle Then WriteStep stepIdx, "toggle-restore", "failed", "the input-dimension-value preference did not restore"
     cleanupMode = CloseMode()
     If cleanupMode = "close" Then
     CloseOwnedDoc closedOk
@@ -229,8 +237,17 @@ Sub ClearSlotsAll()
     Dim i As Long
     For i = 0 To UBound(regName)
         regName(i) = ""
+        regSign(i) = 1#
     Next i
 End Sub
+
+Function SlotRef(ByVal slot As Long) As String
+    If regSign(slot) < 0 Then
+    SlotRef = "(-1*" & """" & regName(slot) & """" & ")"
+    Else
+    SlotRef = """" & regName(slot) & """"
+    End If
+End Function
 
 ' Write one step line and flush it to disk immediately.
 ' The plane whose sketch frame exactly matches the SolidCraft frame for the
@@ -259,6 +276,8 @@ If AcceptAndPublish(idx, which, gProbeReason) Then
 OpenSketchOnPlane = True
 Exit Function
 End If
+gProbeLog = gProbeLog & feat.Name & ": map refused: " & gProbeReason & " strict-match=" & CStr(SketchFrameIs(which)) & "; "
+If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, "craft-bridge", "the refused probe sketch could not be confirmed deleted; probed: " & gProbeLog
 Else
 gProbeLog = gProbeLog & feat.Name & ": " & FrameText() & " strict-match=" & CStr(SketchFrameIs(which)) & "; "
 If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, "craft-bridge", "the probe sketch could not be confirmed deleted; probed: " & gProbeLog
@@ -609,7 +628,8 @@ End Function
 ' Accept a probed origin plane and publish its adaptation map for sketch
 ' slot idx: the probe-sketch translation must vanish and the normal must
 ' be parallel to the source normal (either sign) - the map and side come
-' from PublishMap's fail-closed validation. Any refusal carries its reason.
+' from PublishMap's fail-closed validation. Every read is trapped; any
+' refusal carries its reason.
 Function AcceptAndPublish(ByVal idx As Long, ByVal which As String, ByRef reason As String) As Boolean
 Dim tr As Object
 Dim a As Variant
@@ -622,7 +642,7 @@ Dim vPz As Double
 Dim nPx As Double
 Dim nPy As Double
 Dim nPz As Double
-On Error Resume Next
+On Error GoTo AccFail
 AcceptAndPublish = False
 reason = ""
 Select Case which
@@ -642,24 +662,21 @@ Case Else
 reason = "unknown source plane " & which
 Exit Function
 End Select
-Err.Clear
 Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
-If Err.Number <> 0 Then
-reason = "the transform could not be read: err " & Trim(Str(Err.Number))
+If tr Is Nothing Then
+reason = "the transform is missing"
 Exit Function
 End If
-Err.Clear
 a = tr.ArrayData
-If Err.Number <> 0 Then
-reason = "ArrayData could not be read: err " & Trim(Str(Err.Number))
-Exit Function
-End If
 If Abs(a(9)) > 0.000001 Or Abs(a(10)) > 0.000001 Or Abs(a(11)) > 0.000001 Then
 reason = "the probe sketch origin is " & Vec3Text(a(9), a(10), a(11)) & ", not the model origin"
 Exit Function
 End If
 If Not PublishMap(idx, uPx, uPy, uPz, vPx, vPy, vPz, nPx, nPy, nPz, reason) Then Exit Function
 AcceptAndPublish = True
+Exit Function
+AccFail:
+reason = "the frame read failed: err " & Trim(Str(Err.Number)) & ": " & Err.Description
 End Function
 
 ' Invalidate one sketch slot's map (sketch deletion or re-probe). The
@@ -669,7 +686,7 @@ gMapValid(idx) = False
 gMapSide(idx) = 0
 End Sub
 
-\' Runtime axis classification (frame adaptation): the SC u direction maps
+' Runtime axis classification (frame adaptation): the SC u direction maps
 ' to sketch (s,t) as (gMap00, gMap01), the SC v direction as (gMap10,
 ' gMap11). For a signed-permutation map each lands axis-aligned: AxisClass
 ' returns 0 when it lands on the s axis, 1 on the t axis, and -1 when the
@@ -701,7 +718,7 @@ AxisSign = 1#
 If c < 0 Then AxisSign = -1#
 End Function
 
-\' The dimension text position is MODEL space (Phase 0, owner-verified):
+' The dimension text position is MODEL space (Phase 0, owner-verified):
 ' convert a sketch (s,t) position through the stored frame to (X,Y,Z).
 Function SketchToModelX(ByVal idx As Long, ByVal s As Double, ByVal t As Double) As Double
 SketchToModelX = gFrame(idx, 9) + s * gFrame(idx, 0) + t * gFrame(idx, 3)
@@ -715,7 +732,7 @@ Function SketchToModelZ(ByVal idx As Long, ByVal s As Double, ByVal t As Double)
 SketchToModelZ = gFrame(idx, 11) + s * gFrame(idx, 2) + t * gFrame(idx, 5)
 End Function
 
-\' Feature guards (batch boundary): extrude, revolve and primitive replay
+' Feature guards (batch boundary): extrude, revolve and primitive replay
 ' still assume the identity map on the source normal side - batches 2 and 3
 ' replace this with the direction truth table and primitive adaptation.
 ' Anything else is refused with a named reason and never reports created.
@@ -728,6 +745,18 @@ If Abs(gMap11(idx) - 1#) > 0.000001 Then Exit Function
 If Abs(gMap01(idx)) > 0.000001 Then Exit Function
 If Abs(gMap10(idx)) > 0.000001 Then Exit Function
 MapIsIdentity = True
+End Function
+
+' The closed-context half of verification (F7): after closing, no sketch
+' may be active. The geometry readback runs in both contexts - the seat
+' pinned handle readback as identical in active and closed contexts.
+Function NoSketchIsOpen() As Boolean
+Dim sk As Object
+On Error Resume Next
+Err.Clear
+Set sk = swSketchMgr.ActiveSketch
+If Err.Number <> 0 Then Exit Function
+NoSketchIsOpen = (sk Is Nothing)
 End Function
 
 ' Frame adaptation map (owner decision 2026-11-13): each sketch step
@@ -744,12 +773,13 @@ MapV = u * gMap01(idx) + v * gMap11(idx)
 End Function
 
 ' Publish the map for sketch slot idx from the probed frame. Fail-closed
-' and transactional: validity is cleared first and set only after the
-' complete validation passes - finite entries, scale ~ 1 (entry 12), unit
-' axes, mutual orthogonality, and a right-handed 3D frame (u x v = n). A
-' proper 3D frame may still give an improper 2D map when the normal
-' opposes the source normal - that is supported and recorded in gMapSide.
-' Tolerances: 1e-6 on all checks.
+' and transactional: validity is cleared first, every read and conversion
+' is trapped, values are computed into locals, and the map is stored only
+' after the complete validation passes - the pinned 16-entry ArrayData
+' shape, finite entries, scale ~ 1 (entry 12), unit axes, mutual
+' orthogonality, and a right-handed 3D frame (u x v = n). A proper 3D frame
+' may still give an improper 2D map when the normal opposes the source
+' normal - that is supported and recorded in gMapSide. Tolerances: 1e-6.
 Function PublishMap(ByVal idx As Long, ByVal uPx As Double, ByVal uPy As Double, ByVal uPz As Double, ByVal vPx As Double, ByVal vPy As Double, ByVal vPz As Double, ByVal nPx As Double, ByVal nPy As Double, ByVal nPz As Double, ByRef reason As String) As Boolean
 Dim tr As Object
 Dim a As Variant
@@ -765,14 +795,25 @@ Dim nz As Double
 Dim sc As Double
 Dim ub As Long
 Dim i As Long
-On Error Resume Next
+Dim x As Double
+Dim m00 As Double
+Dim m01 As Double
+Dim m10 As Double
+Dim m11 As Double
+Dim dot As Double
+Dim side As Long
 PublishMap = False
 reason = ""
 gMapValid(idx) = False
+On Error Resume Next
 Err.Clear
 Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
 If Err.Number <> 0 Then
 reason = "the transform could not be read: err " & Trim(Str(Err.Number))
+Exit Function
+End If
+If tr Is Nothing Then
+reason = "the transform is missing"
 Exit Function
 End If
 Err.Clear
@@ -784,19 +825,32 @@ End If
 Err.Clear
 ub = UBound(a)
 If Err.Number <> 0 Then
-reason = "ArrayData bounds could not be read: err " & Trim(Str(Err.Number))
+reason = "ArrayData is not an array: err " & Trim(Str(Err.Number))
 Exit Function
 End If
-If ub < 12 Then
-reason = "ArrayData has only " & Trim(Str(ub + 1)) & " entries; scale is missing"
+If ub <> 15 Then
+reason = "ArrayData has " & Trim(Str(ub + 1)) & " entries; the pinned shape is 16"
 Exit Function
 End If
-For i = 0 To ub
-If Not IsNumeric(a(i)) Then
-reason = "entry " & Trim(Str(i)) & " is not numeric"
+For i = 0 To 15
+Err.Clear
+x = CDbl(a(i))
+If Err.Number <> 0 Then
+reason = "entry " & Trim(Str(i)) & " is not numeric: err " & Trim(Str(Err.Number))
+Exit Function
+End If
+If x <> x Then
+reason = "entry " & Trim(Str(i)) & " is not finite"
+Exit Function
+End If
+If Abs(x) > 1E+100 Then
+reason = "entry " & Trim(Str(i)) & " is not finite"
 Exit Function
 End If
 Next i
+' Arithmetic is trapped: an overflow must fail the publication, never skip
+' a check and reach the store below.
+On Error GoTo MapFail
 ux = a(0)
 uy = a(3)
 uz = a(6)
@@ -820,21 +874,27 @@ If Abs(vx * nx + vy * ny + vz * nz) > 0.000001 Then reason = "v and n are not or
 If Abs((uy * vz - uz * vy) - nx) > 0.000001 Then reason = "u x v does not equal n (x) - the 3D frame is not right-handed": Exit Function
 If Abs((uz * vx - ux * vz) - ny) > 0.000001 Then reason = "u x v does not equal n (y) - the 3D frame is not right-handed": Exit Function
 If Abs((ux * vy - uy * vx) - nz) > 0.000001 Then reason = "u x v does not equal n (z) - the 3D frame is not right-handed": Exit Function
-gMap00(idx) = uPx * ux + uPy * uy + uPz * uz
-gMap10(idx) = vPx * ux + vPy * uy + vPz * uz
-gMap01(idx) = uPx * vx + uPy * vy + uPz * vz
-gMap11(idx) = vPx * vx + vPy * vy + vPz * vz
-If Abs(nx * nPx + ny * nPy + nz * nPz) > 0 Then
-gMapSide(idx) = 1
-If nx * nPx + ny * nPy + nz * nPz < 0 Then gMapSide(idx) = -1
-Else
+m00 = uPx * ux + uPy * uy + uPz * uz
+m10 = vPx * ux + vPy * uy + vPz * uz
+m01 = uPx * vx + uPy * vy + uPz * vz
+m11 = vPx * vx + vPy * vy + vPz * vz
+dot = nx * nPx + ny * nPy + nz * nPz
+If Abs(dot) < 0.999999 Then
+If Abs(dot) <= 0.000001 Then
 reason = "the normal is perpendicular to the source normal"
+Else
+reason = "the normal is only " & Trim(Str(dot)) & " parallel to the source normal"
+End If
 Exit Function
 End If
-If Abs(nx * nPx + ny * nPy + nz * nPz) < 0.999999 Then
-reason = "the normal is only " & Trim(Str(nx * nPx + ny * nPy + nz * nPz)) & " parallel to the source normal"
-Exit Function
-End If
+side = 1
+If dot < 0 Then side = -1
+' Publish only now: nothing above has touched persistent state.
+gMap00(idx) = m00
+gMap10(idx) = m10
+gMap01(idx) = m01
+gMap11(idx) = m11
+gMapSide(idx) = side
 gFrame(idx, 0) = ux
 gFrame(idx, 1) = uy
 gFrame(idx, 2) = uz
@@ -849,6 +909,9 @@ gFrame(idx, 10) = a(10)
 gFrame(idx, 11) = a(11)
 gMapValid(idx) = True
 PublishMap = True
+Exit Function
+MapFail:
+reason = "the frame computation failed: err " & Trim(Str(Err.Number)) & ": " & Err.Description
 End Function
 
 ' The report path travels in a one-line file under the TEMP directory that
@@ -964,6 +1027,7 @@ If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = "the driven value does no
 
 If eqMgr.Equation(idx) <> eqText Then gMsg = "the stored equation reads back differently": GoTo EqFail
 If slot >= 0 Then regName(slot) = dm.Name
+If slot >= 0 Then regSign(slot) = sgn
 AddDimEquation = True
 Exit Function
 EqFail:

@@ -49,12 +49,19 @@ Sub main()
     Dim cleanupMode As String
     Dim ok As Boolean
     Dim ln As SketchSegment
+    Dim ci As SketchSegment
+    Dim cph As Object
+    Dim sk As Object
     Dim dp As SldWorks.Dimension
     Dim dd As SldWorks.DisplayDimension
     Dim stepIdx As Long
     Dim v As Variant
     Dim v2 As Variant
+    Dim sT As Double
+    Dim tT As Double
     Dim proj As Double
+    Dim compS As Double
+    Dim compT As Double
     Dim created As Double
     Dim sgn As Double
     Dim lengthNow As Double
@@ -71,110 +78,146 @@ Sub main()
     stepIdx = 0
     Set swApp = Application.SldWorks
     ' The input-dimension-value dialog blocks AddDimension2 until dismissed
-    ' (Phase 0): disable it for the run and restore it at every exit.
+    ' (Phase 0): disable it for the run, VERIFY the readback, and restore it
+    ' (verified too) at every exit.
     gDimToggle = swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate)
     gDimToggleSaved = True
     swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, False
+    If swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate) Then Err.Raise vbObjectError + 528, "minimal.swb", "the input-dimension-value dialog could not be disabled"
     template = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
     If template = "" Then Err.Raise vbObjectError + 514, "minimal.swb", "no default part template is configured"
     Set swDoc = swApp.NewDocument(template, 0, 0, 0)
     If swDoc Is Nothing Then Err.Raise vbObjectError + 515, "minimal.swb", "NewDocument returned nothing"
     WriteStep stepIdx, "document.new", "created", "fresh part from the default template"
 
-    ' ---- step 1: sketch on the source plane with one line and one circle ----
+    ' ---- step 1: sketch on the source plane: a diagonal line and a circle ----
     stepIdx = 1
     Set swSketchMgr = swDoc.SketchManager
     ok = OpenSketchOnPlane("XY")
     If Not ok Then Err.Raise vbObjectError + 516, "minimal.swb", "no origin plane carries the XY source plane (parallel normal, origin translation); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary()
-    ' Geometry goes through the adaptation map: SC (u,v) -> (s,t).
-    Set ln = swSketchMgr.CreateLine(MapU(0#, 0#), MapV(0#, 0#), 0#, MapU(0.04, 0#), MapV(0.04, 0#), 0#)
-    swSketchMgr.CreateCircleByRadius MapU(0.02, 0.02), MapV(0.02, 0.02), 0#, 0.005
+    ' Geometry goes through the adaptation map: SC (u,v) -> (s,t). The line
+    ' is DIAGONAL on purpose (0.03 x 0.04, length 0.05): every dimension
+    ' kind measures a different number on it, so the kind checks below are
+    ' discriminating (an axis-aligned line cannot distinguish aligned from
+    ' projected).
+    Set ln = swSketchMgr.CreateLine(MapU(0#, 0#), MapV(0#, 0#), 0#, MapU(0.03, 0.04), MapV(0.03, 0.04), 0#)
+    Set ci = swSketchMgr.CreateCircleByRadius(MapU(0.02, 0.02), MapV(0.02, 0.02), 0#, 0.005)
     swDoc.ClearSelection2 True
     ' Solved-position verification: the endpoints read back at the mapped
-    ' coordinates, all three components (z must vanish).
+    ' coordinates, all three components (z must vanish), and the circle
+    ' comes back through the pinned centre handle with its radius.
     v = ln.GetStartPoint
     If Abs(v(0) - MapU(0#, 0#)) > 0.000001 Or Abs(v(1) - MapV(0#, 0#)) > 0.000001 Or Abs(v(2)) > 0.000001 Then Err.Raise vbObjectError + 522, "minimal.swb", "the line start did not follow the map: " & Vec3Text(v(0), v(1), v(2))
     v = ln.GetEndPoint
-    If Abs(v(0) - MapU(0.04, 0#)) > 0.000001 Or Abs(v(1) - MapV(0.04, 0#)) > 0.000001 Or Abs(v(2)) > 0.000001 Then Err.Raise vbObjectError + 522, "minimal.swb", "the line end did not follow the map: " & Vec3Text(v(0), v(1), v(2))
-    WriteStep stepIdx, "sketch.geometry", "created", "1 line, 1 circle mapped through the adaptation map; positions verified (metres)"
+    If Abs(v(0) - MapU(0.03, 0.04)) > 0.000001 Or Abs(v(1) - MapV(0.03, 0.04)) > 0.000001 Or Abs(v(2)) > 0.000001 Then Err.Raise vbObjectError + 522, "minimal.swb", "the line end did not follow the map: " & Vec3Text(v(0), v(1), v(2))
+    Set cph = ci.GetCenterPoint2
+    If cph Is Nothing Then Err.Raise vbObjectError + 522, "minimal.swb", "the circle centre handle is missing"
+    If Abs(cph.X - MapU(0.02, 0.02)) > 0.000001 Or Abs(cph.Y - MapV(0.02, 0.02)) > 0.000001 Or Abs(cph.Z) > 0.000001 Then Err.Raise vbObjectError + 522, "minimal.swb", "the circle centre did not follow the map: " & Vec3Text(cph.X, cph.Y, cph.Z)
+    If Abs(ci.Radius - 0.005) > 0.000001 Then Err.Raise vbObjectError + 522, "minimal.swb", "the circle radius is " & Trim(Str(ci.Radius))
+    WriteStep stepIdx, "sketch.geometry", "created", "1 diagonal line, 1 circle mapped through the adaptation map; positions verified (metres)"
 
-    ' ---- step 2: one relation, classified against the map ----
+    ' ---- step 2: one driving dimension, kind and sign verified ----
     stepIdx = 2
-    ' The source-horizontal direction lands on the sketch s or t axis for a
-    ' signed permutation; the constraint kind follows it there. A
-    ' non-permutation map omits the relation with a named reason (bounded
-    ' support: this seat only exhibits permutation frames).
+    ok = ln.Select(False)
+    If Not ok Then Err.Raise vbObjectError + 518, "minimal.swb", "could not select the line for dimensioning"
+    ' The text position is MODEL space (Phase 0): convert the sketch-space
+    ' heuristic position (live midpoint + diagonal offset) through the frame.
+    v = ln.GetStartPoint
+    v2 = ln.GetEndPoint
+    sT = (v(0) + v2(0)) / 2# + 0.01
+    tT = (v(1) + v2(1)) / 2# + 0.01
+    Set dd = swDoc.AddDimension2(SketchToModelX(sT, tT), SketchToModelY(sT, tT), SketchToModelZ(sT, tT))
+    If dd Is Nothing Then Err.Raise vbObjectError + 519, "minimal.swb", "the dimension was not created"
+    Set dp = dd.GetDimension2(0)
+    If dp Is Nothing Then Err.Raise vbObjectError + 519, "minimal.swb", "the dimension has no underlying dimension"
+    created = dp.SystemValue
+    proj = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))
+    compS = Abs(v2(0) - v(0))
+    compT = Abs(v2(1) - v(1))
+    ' Dimension-kind check: a length dimension measures the endpoint
+    ' distance. The components differ from the length on this diagonal line,
+    ' so an axis kind would measure a different number and fail here - and
+    ' coinciding magnitudes are refused, never guessed.
+    If Abs(proj - compS) <= 0.000001 Or Abs(proj - compT) <= 0.000001 Then Err.Raise vbObjectError + 530, "minimal.swb", "the projection magnitudes coincide; the kind cannot be established"
+    If Abs(Abs(created) - proj) > 0.000001 Then Err.Raise vbObjectError + 523, "minimal.swb", "the created dimension measures " & Trim(Str(created)) & " but the line length is " & Trim(Str(proj))
+    ' Sign resolution: what the dimension measures against the source value,
+    ' either sign. The resolved sign goes into the assigned value so later
+    ' edits keep tracking.
+    If Abs(created - 0.05) <= 0.000001 Then
+        sgn = 1#
+    ElseIf Abs(created + 0.05) <= 0.000001 Then
+        sgn = -1#
+    Else
+        Err.Raise vbObjectError + 524, "minimal.swb", "the dimension measures " & Trim(Str(created)) & " but the source value is 0.05"
+    End If
+    dp.SystemValue = sgn * 0.05
+    swDoc.ClearSelection2 True
+    ' Behavioural kind evidence: the value edit must carry the geometry.
+    v = ln.GetStartPoint
+    v2 = ln.GetEndPoint
+    lengthNow = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))
+    If Abs(lengthNow - 0.05) > 0.000001 Then Err.Raise vbObjectError + 527, "minimal.swb", "the value edit did not carry the geometry: length " & Trim(Str(lengthNow))
+    WriteStep stepIdx, "sketch.dimension", "created", "length = 0.05 m; kind verified against the projection; sign " & Trim(Str(sgn))
+
+    ' ---- step 3: edit-and-follow (acceptance check) ----
+    stepIdx = 3
+    dp.SystemValue = 0.1
+    swDoc.EditRebuild3
+    v = ln.GetStartPoint
+    v2 = ln.GetEndPoint
+    lengthNow = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))
+    If Abs(lengthNow - 0.1) > 0.000001 Then Err.Raise vbObjectError + 525, "minimal.swb", "the edited dimension did not carry the geometry: length is " & Trim(Str(lengthNow))
+    WriteStep stepIdx, "sketch.edit-follow", "created", "edit to 0.1 m followed; measured length " & Trim(Str(lengthNow))
+
+    ' ---- step 4: one relation, classified and behaviourally verified ----
+    stepIdx = 4
+    ' The line is diagonal as the relation is applied (step 3 kept it so):
+    ' levelling is therefore discriminating evidence that the constraint
+    ' landed - not a pre-existing state. The source-horizontal direction
+    ' classifies against the map; a non-permutation map omits with a reason.
     Select Case AxisClass(True)
     Case 0
         ok = ln.Select(False)
         If Not ok Then Err.Raise vbObjectError + 517, "minimal.swb", "could not select the line"
         swDoc.SketchAddConstraints "sgHorizontal"
         swDoc.ClearSelection2 True
-        ' Relation-kind check: on the classified s axis the endpoints share t.
         v = ln.GetStartPoint
         v2 = ln.GetEndPoint
         If Abs(v(1) - v2(1)) > 0.000001 Then Err.Raise vbObjectError + 526, "minimal.swb", "the horizontal relation did not level the classified axis"
-        WriteStep stepIdx, "sketch.relation", "created", "sgHorizontal (SC u classified to sketch s)"
+        WriteStep stepIdx, "sketch.relation", "created", "sgHorizontal (SC u classified to sketch s); levelling verified"
     Case 1
         ok = ln.Select(False)
         If Not ok Then Err.Raise vbObjectError + 517, "minimal.swb", "could not select the line"
         swDoc.SketchAddConstraints "sgVertical"
         swDoc.ClearSelection2 True
-        ' Relation-kind check: on the classified t axis the endpoints share s.
         v = ln.GetStartPoint
         v2 = ln.GetEndPoint
         If Abs(v(0) - v2(0)) > 0.000001 Then Err.Raise vbObjectError + 526, "minimal.swb", "the vertical relation did not level the classified axis"
-        WriteStep stepIdx, "sketch.relation", "created", "sgVertical (SC u classified to sketch t)"
+        WriteStep stepIdx, "sketch.relation", "created", "sgVertical (SC u classified to sketch t); levelling verified"
     Case Else
         WriteStep stepIdx, "sketch.relation", "degraded", "the SC u axis is not axis-aligned in this sketch frame (non-permutation map); relation omitted"
     End Select
-
-    ' ---- step 3: one driving dimension, kind and sign verified ----
-    stepIdx = 3
-    ok = ln.Select(False)
-    If Not ok Then Err.Raise vbObjectError + 518, "minimal.swb", "could not select the line for dimensioning"
-    ' The text position is MODEL space (Phase 0): convert the sketch-space
-    ' heuristic position through the stored frame.
-    Set dd = swDoc.AddDimension2(SketchToModelX(0.03, 0.01), SketchToModelY(0.03, 0.01), SketchToModelZ(0.03, 0.01))
-    If dd Is Nothing Then Err.Raise vbObjectError + 519, "minimal.swb", "the dimension was not created"
-    Set dp = dd.GetDimension2(0)
-    If dp Is Nothing Then Err.Raise vbObjectError + 519, "minimal.swb", "the dimension has no underlying dimension"
-    created = dp.SystemValue
-    ' Dimension-kind check: a length dimension measures the endpoint distance
-    ' (an aligned kind would measure the same here; a horizontal or vertical
-    ' kind would measure only one component and fail this check).
-    v = ln.GetStartPoint
-    v2 = ln.GetEndPoint
-    proj = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))
-    If Abs(Abs(created) - proj) > 0.000001 Then Err.Raise vbObjectError + 523, "minimal.swb", "the created dimension measures " & Trim(Str(created)) & " but the line length is " & Trim(Str(proj))
-    ' Sign resolution: the value the dimension measures against the source
-    ' value, either sign. The resolved sign goes into the assigned value so
-    ' later edits keep tracking.
-    If Abs(created - 0.04) <= 0.000001 Then
-        sgn = 1#
-    ElseIf Abs(created + 0.04) <= 0.000001 Then
-        sgn = -1#
-    Else
-        Err.Raise vbObjectError + 524, "minimal.swb", "the dimension measures " & Trim(Str(created)) & " but the source value is 0.04"
-    End If
-    dp.SystemValue = sgn * 0.04
-    swDoc.ClearSelection2 True
-    If Abs(dp.SystemValue - sgn * 0.04) > 0.000001 Then Err.Raise vbObjectError + 527, "minimal.swb", "the driven value does not match"
-    WriteStep stepIdx, "sketch.dimension", "created", "length = 0.04 m; kind verified against the projection; sign " & Trim(Str(sgn))
-
-    ' ---- step 4: edit-and-follow (acceptance check) ----
-    stepIdx = 4
-    dp.SystemValue = 0.05
-    swDoc.EditRebuild3
+    ' The dimension still holds through the relation.
     v = ln.GetStartPoint
     v2 = ln.GetEndPoint
     lengthNow = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))
-    If Abs(lengthNow - 0.05) > 0.000001 Then Err.Raise vbObjectError + 525, "minimal.swb", "the edited dimension did not carry the geometry: length is " & Trim(Str(lengthNow))
-    WriteStep stepIdx, "sketch.edit-follow", "created", "edit to 0.05 m followed; measured length " & Trim(Str(lengthNow))
+    If Abs(lengthNow - 0.1) > 0.000001 Then Err.Raise vbObjectError + 532, "minimal.swb", "the relation moved the dimensioned length: " & Trim(Str(lengthNow))
 
-    ' ---- done ----
+    ' ---- done: closed-context verification before any success report ----
     swSketchMgr.InsertSketch True
+    Set sk = swSketchMgr.ActiveSketch
+    If Not sk Is Nothing Then Err.Raise vbObjectError + 533, "minimal.swb", "the sketch context did not close"
+    v = ln.GetStartPoint
+    v2 = ln.GetEndPoint
+    lengthNow = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))
+    If Abs(lengthNow - 0.1) > 0.000001 Then Err.Raise vbObjectError + 531, "minimal.swb", "closed-context verification failed: the length reads " & Trim(Str(lengthNow))
+    If Abs(v(0) - v2(0)) > 0.000001 And Abs(v(1) - v2(1)) > 0.000001 Then Err.Raise vbObjectError + 531, "minimal.swb", "closed-context verification failed: the line is level in neither axis"
+    Set cph = ci.GetCenterPoint2
+    If cph Is Nothing Then Err.Raise vbObjectError + 531, "minimal.swb", "closed-context verification failed: no circle centre handle"
+    If Abs(cph.X - MapU(0.02, 0.02)) > 0.000001 Or Abs(cph.Y - MapV(0.02, 0.02)) > 0.000001 Then Err.Raise vbObjectError + 531, "minimal.swb", "closed-context verification failed: the circle centre reads " & Vec3Text(cph.X, cph.Y, cph.Z)
+    If Abs(ci.Radius - 0.005) > 0.000001 Then Err.Raise vbObjectError + 531, "minimal.swb", "closed-context verification failed: the radius reads " & Trim(Str(ci.Radius))
     If gDimToggleSaved And Not swApp Is Nothing Then swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle
+    If gDimToggleSaved And Not swApp Is Nothing Then If swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate) <> gDimToggle Then WriteStep stepIdx, "toggle-restore", "failed", "the input-dimension-value preference did not restore"
     cleanupMode = CloseMode()
     If cleanupMode = "close" Then
         CloseOwnedDoc closedOk
@@ -204,6 +247,7 @@ Fail:
         WriteStep stepIdx, "macro", "failed", "err " & Trim(Str(errNum)) & ": " & errMsg
     End If
     If gDimToggleSaved And Not swApp Is Nothing Then swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle
+    If gDimToggleSaved And Not swApp Is Nothing Then If swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate) <> gDimToggle Then WriteStep stepIdx, "toggle-restore", "failed", "the input-dimension-value preference did not restore"
     cleanupMode = CloseMode()
     If cleanupMode = "close" Then
         CloseOwnedDoc closedOk
@@ -226,11 +270,11 @@ MapV = u * gMap01 + v * gMap11
 End Function
 
 ' Publish the map from the probed frame. Fail-closed and transactional:
-' validity is cleared first and set only after the complete validation
-' passes - finite entries, scale ~ 1 (entry 12), unit axes, mutual
-' orthogonality, and a right-handed 3D frame (u x v = n). A proper 3D frame
-' may still give an improper 2D map when the normal opposes the source
-' normal - that is supported and recorded in gMapSide. Tolerances: 1e-6.
+' validity is cleared first, every read and conversion is trapped, values
+' are computed into locals, and the map is stored only after the complete
+' validation passes - the pinned 16-entry ArrayData shape, finite entries,
+' scale ~ 1 (entry 12), unit axes, mutual orthogonality, and a
+' right-handed 3D frame (u x v = n). Tolerances: 1e-6.
 Function PublishMap(ByVal uPx As Double, ByVal uPy As Double, ByVal uPz As Double, ByVal vPx As Double, ByVal vPy As Double, ByVal vPz As Double, ByVal nPx As Double, ByVal nPy As Double, ByVal nPz As Double, ByRef reason As String) As Boolean
 Dim tr As Object
 Dim a As Variant
@@ -246,14 +290,25 @@ Dim nz As Double
 Dim sc As Double
 Dim ub As Long
 Dim i As Long
-On Error Resume Next
+Dim x As Double
+Dim m00 As Double
+Dim m01 As Double
+Dim m10 As Double
+Dim m11 As Double
+Dim dot As Double
+Dim side As Long
 PublishMap = False
 reason = ""
 gMapValid = False
+On Error Resume Next
 Err.Clear
 Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
 If Err.Number <> 0 Then
 reason = "the transform could not be read: err " & Trim(Str(Err.Number))
+Exit Function
+End If
+If tr Is Nothing Then
+reason = "the transform is missing"
 Exit Function
 End If
 Err.Clear
@@ -265,19 +320,32 @@ End If
 Err.Clear
 ub = UBound(a)
 If Err.Number <> 0 Then
-reason = "ArrayData bounds could not be read: err " & Trim(Str(Err.Number))
+reason = "ArrayData is not an array: err " & Trim(Str(Err.Number))
 Exit Function
 End If
-If ub < 12 Then
-reason = "ArrayData has only " & Trim(Str(ub + 1)) & " entries; scale is missing"
+If ub <> 15 Then
+reason = "ArrayData has " & Trim(Str(ub + 1)) & " entries; the pinned shape is 16"
 Exit Function
 End If
-For i = 0 To ub
-If Not IsNumeric(a(i)) Then
-reason = "entry " & Trim(Str(i)) & " is not numeric"
+For i = 0 To 15
+Err.Clear
+x = CDbl(a(i))
+If Err.Number <> 0 Then
+reason = "entry " & Trim(Str(i)) & " is not numeric: err " & Trim(Str(Err.Number))
+Exit Function
+End If
+If x <> x Then
+reason = "entry " & Trim(Str(i)) & " is not finite"
+Exit Function
+End If
+If Abs(x) > 1E+100 Then
+reason = "entry " & Trim(Str(i)) & " is not finite"
 Exit Function
 End If
 Next i
+' Arithmetic is trapped: an overflow must fail the publication, never skip
+' a check and reach the store below.
+On Error GoTo MapFail
 ux = a(0)
 uy = a(3)
 uz = a(6)
@@ -301,21 +369,27 @@ If Abs(vx * nx + vy * ny + vz * nz) > 0.000001 Then reason = "v and n are not or
 If Abs((uy * vz - uz * vy) - nx) > 0.000001 Then reason = "u x v does not equal n (x) - the 3D frame is not right-handed": Exit Function
 If Abs((uz * vx - ux * vz) - ny) > 0.000001 Then reason = "u x v does not equal n (y) - the 3D frame is not right-handed": Exit Function
 If Abs((ux * vy - uy * vx) - nz) > 0.000001 Then reason = "u x v does not equal n (z) - the 3D frame is not right-handed": Exit Function
-gMap00 = uPx * ux + uPy * uy + uPz * uz
-gMap10 = vPx * ux + vPy * uy + vPz * uz
-gMap01 = uPx * vx + uPy * vy + uPz * vz
-gMap11 = vPx * vx + vPy * vy + vPz * vz
-If Abs(nx * nPx + ny * nPy + nz * nPz) > 0 Then
-gMapSide = 1
-If nx * nPx + ny * nPy + nz * nPz < 0 Then gMapSide = -1
-Else
+m00 = uPx * ux + uPy * uy + uPz * uz
+m10 = vPx * ux + vPy * uy + vPz * uz
+m01 = uPx * vx + uPy * vy + uPz * vz
+m11 = vPx * vx + vPy * vy + vPz * vz
+dot = nx * nPx + ny * nPy + nz * nPz
+If Abs(dot) < 0.999999 Then
+If Abs(dot) <= 0.000001 Then
 reason = "the normal is perpendicular to the source normal"
+Else
+reason = "the normal is only " & Trim(Str(dot)) & " parallel to the source normal"
+End If
 Exit Function
 End If
-If Abs(nx * nPx + ny * nPy + nz * nPz) < 0.999999 Then
-reason = "the normal is only " & Trim(Str(nx * nPx + ny * nPy + nz * nPz)) & " parallel to the source normal"
-Exit Function
-End If
+side = 1
+If dot < 0 Then side = -1
+' Publish only now: nothing above has touched persistent state.
+gMap00 = m00
+gMap10 = m10
+gMap01 = m01
+gMap11 = m11
+gMapSide = side
 gFrame(0) = ux
 gFrame(1) = uy
 gFrame(2) = uz
@@ -330,11 +404,15 @@ gFrame(10) = a(10)
 gFrame(11) = a(11)
 gMapValid = True
 PublishMap = True
+Exit Function
+MapFail:
+reason = "the frame computation failed: err " & Trim(Str(Err.Number)) & ": " & Err.Description
 End Function
 
 ' Accept the probed source plane and publish its adaptation map: the
 ' probe-sketch translation must vanish and the normal must be parallel to
-' the source normal (either sign). Any refusal carries its reason.
+' the source normal (either sign). Every read is trapped; any refusal
+' carries its reason.
 Function AcceptAndPublish(ByVal which As String, ByRef reason As String) As Boolean
 Dim tr As Object
 Dim a As Variant
@@ -347,7 +425,7 @@ Dim vPz As Double
 Dim nPx As Double
 Dim nPy As Double
 Dim nPz As Double
-On Error Resume Next
+On Error GoTo AccFail
 AcceptAndPublish = False
 reason = ""
 Select Case which
@@ -367,24 +445,21 @@ Case Else
 reason = "unknown source plane " & which
 Exit Function
 End Select
-Err.Clear
 Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
-If Err.Number <> 0 Then
-reason = "the transform could not be read: err " & Trim(Str(Err.Number))
+If tr Is Nothing Then
+reason = "the transform is missing"
 Exit Function
 End If
-Err.Clear
 a = tr.ArrayData
-If Err.Number <> 0 Then
-reason = "ArrayData could not be read: err " & Trim(Str(Err.Number))
-Exit Function
-End If
 If Abs(a(9)) > 0.000001 Or Abs(a(10)) > 0.000001 Or Abs(a(11)) > 0.000001 Then
 reason = "the probe sketch origin is " & Vec3Text(a(9), a(10), a(11)) & ", not the model origin"
 Exit Function
 End If
 If Not PublishMap(uPx, uPy, uPz, vPx, vPy, vPz, nPx, nPy, nPz, reason) Then Exit Function
 AcceptAndPublish = True
+Exit Function
+AccFail:
+reason = "the frame read failed: err " & Trim(Str(Err.Number)) & ": " & Err.Description
 End Function
 
 ' Invalidate the map (deletion or re-probe): nothing reads a map that is
@@ -667,6 +742,8 @@ Function OpenSketchOnPlane(ByVal which As String) As Boolean
                         OpenSketchOnPlane = True
                         Exit Function
                     End If
+                    gProbeLog = gProbeLog & feat.Name & ": map refused: " & gProbeReason & " strict-match=" & CStr(SketchFrameIs(which)) & "; "
+                    If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, "minimal.swb", "the refused probe sketch could not be confirmed deleted; probed: " & gProbeLog
                 Else
                     gProbeLog = gProbeLog & feat.Name & ": " & FrameText() & " strict-match=" & CStr(SketchFrameIs(which)) & "; "
                     If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, "minimal.swb", "the probe sketch could not be confirmed deleted; probed: " & gProbeLog

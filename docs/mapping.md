@@ -197,11 +197,33 @@ currently require the identity map on the source normal side and otherwise
 fail with a named reason (their direction semantics are batches 2 and 3);
 they never report `created` on an unadapted path.
 
+**Evidence rules (batch 1):** every selection is checked (`Select` returns
+Boolean and its result is captured). `SketchAddConstraints` has **no return
+value** (API doc, `IModelDoc2.SketchAddConstraints`), so relation
+application is established behaviourally - the constraint's own predicate
+must hold on the solved geometry (levelling, coincidence, parallelism,
+perpendicularity, equal length). A relation whose predicate already held on
+the drawn coordinates is geometrically indistinguishable from a missing
+one: recorded limitation. Tangency has no cheap solved-geometry predicate
+over two lines and rests on the selection and coordinate checks. Dimension
+kinds are doubly established: the created value is matched against the
+point projections (with an explicit **refusal when the projection
+magnitudes coincide**), and the value edit must carry exactly the measured
+quantity - a wrong-kind dimension provably moves the wrong axis. Registered
+dimension slots carry their sign (`regSign`) and downstream equation
+references normalize back to source semantics through `SlotRef`, so
+parameter edits keep meaning what the source meant. The
+input-dimension-value preference is disabled with a verified readback and
+restored with one at every exit.
+
 **Solve verification (runtime):** after relations and driving dimensions are
 added, the macro reads the solved geometry back (line endpoints via
 `ISketchPoint.X/Y/Z`, circle centre/radius) and compares against the recipe's
 stored coordinates with a nominal tolerance of 1e-6 m. Every supported entity
-must read back; a missing readback can never report `created`. On any
+must read back; a missing readback can never report `created`. Deletion
+verification accepts only a **proven-empty** point collection: a failed
+query, a non-array result or an unestablishable bound refuses (a failed
+query is never proof of emptiness). On any
 relation/dimension API error or mismatch: **restore**, don't just delete —
 the map is invalidated first, the sketch contents are deleted and the
 deletion verified against the pinned point enumeration, the frame is
