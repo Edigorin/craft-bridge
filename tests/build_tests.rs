@@ -1067,9 +1067,12 @@ fn equations_use_the_seat_proven_add_shape_and_read_back() {
             body.contains("If idx < 0 Then"),
             "{helper}: the insert index lower bound is not validated"
         );
+        // The Equation(idx) readback below IS the upper-bound check: an
+        // out-of-range index raises there and lands in EqFail. The manager's
+        // Count member is unsupported on this seat (eqdiag: err 438).
         assert!(
-            body.contains("eqMgr.Count <= idx"),
-            "{helper}: the insert index upper bound is not validated"
+            !body.contains("eqMgr.Count"),
+            "{helper}: the unsupported Count member survived"
         );
         assert!(
             body.contains("eqMgr.Equation(idx) <> eqText"),

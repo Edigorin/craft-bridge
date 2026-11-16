@@ -268,4 +268,9 @@ index is valid, and reads the stored equation and its evaluated value back
 after the rebuild. This is observed late-bound behaviour on 34.3.2; the
 help pages consulted (help.solidworks.com, `Add2` 2023 and 2026, `Add`
 2025) show the two-argument `Add2` form.
+The manager's `Count` member is likewise unsupported here (runtime 438,
+confirmed by the eqdiag probe alongside working `Equation(i)`, `Value(i)`
+and `EditRebuild3`): the insert-index upper bound is checked through the
+`Equation(idx)` readback, which raises on an out-of-range index and fails
+closed while also proving the stored text.
 

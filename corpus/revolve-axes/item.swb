@@ -673,7 +673,7 @@ eqText = """" & nm & """=" & rhs
 idx = eqMgr.Add(-1, eqText)
 If idx < 0 Then gMsg = "equation failed: the equation was not accepted": GoTo EqFail
 swDoc.EditRebuild3
-If eqMgr.Count <= idx Then gMsg = "equation failed: the equation is missing after the rebuild": GoTo EqFail
+
 If eqMgr.Equation(idx) <> eqText Then gMsg = "equation failed: the stored equation reads back differently": GoTo EqFail
 If Abs(eqMgr.Value(idx) - expect) > 0.000001 Then gMsg = "equation failed: the equation value does not match": GoTo EqFail
 gMsg = "equation " & eqText
@@ -699,7 +699,7 @@ idx = eqMgr.Add(-1, eqText)
 If idx < 0 Then gMsg = "the dimension equation was not accepted": GoTo EqFail
 swDoc.EditRebuild3
 If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = "the driven value does not match": GoTo EqFail
-If eqMgr.Count <= idx Then gMsg = "the dimension equation is missing after the rebuild": GoTo EqFail
+
 If eqMgr.Equation(idx) <> eqText Then gMsg = "the stored equation reads back differently": GoTo EqFail
 If slot >= 0 Then regName(slot) = dm.Name
 AddDimEquation = True
