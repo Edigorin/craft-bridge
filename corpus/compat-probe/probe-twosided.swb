@@ -241,7 +241,7 @@ Function RunTwoCase(ByVal tag As String, ByVal isFinal As Boolean, ByVal mode As
     result = 1
     WriteLine LineFor("featureextrusion2-" & tag, 0, "", "entering: FeatureExtrusion2(False, False, False, swEndCondBlind, swEndCondBlind, 0.01, 0.03, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)")
     Err.Clear
-    Set feat = gFeatMgr.FeatureExtrusion2(False, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.01, 0.03, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)
+    Set feat = gFeatMgr.FeatureExtrusion2(False, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.01, 0.03, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)
     n = Err.Number
     d = Err.Description
     WriteLine LineFor("featureextrusion2-" & tag, n, d, "outcome")

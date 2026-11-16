@@ -87,3 +87,26 @@ snapshots. Anything the seat reports as a correction becomes a new fixture.
 - VBA intrinsic names (`Sgn`, `Val`, `Mid`, ...) cannot be identifiers:
   `Dim sgn As Double` is a compile error. Enforced offline by
   `no_identifier_shadows_a_vba_intrinsic` (tests/build_tests.rs).
+
+## Sketch API semantics (measured on the seat, 2026-11-16)
+
+- **`EditRebuild3` EXITS sketch edit mode.** Any further sketch API call
+  then silently does nothing (`CreateLine` returns Nothing,
+  `SketchAddConstraints` no-ops with no error, dimension creation fails).
+  Every mid-sketch rebuild goes through `SolveSketch` (rebuild + name-
+  selected re-entry + verification). This caused the checkpoint's first two
+  relation failures and the probe's "second CreateLine returns Nothing".
+- **`SketchAddConstraints` names are the SW2006+ table** and are silently
+  ignored when wrong: lines `sgHORIZONTAL2D`/`sgVERTICAL2D`, point pairs
+  `sgHORIZONTALPOINTS2D`/`sgVERTPOINTS2D`, coincidence `sgCOINCIDENT`,
+  equal length `sgSAMELENGTH`, `sgPARALLEL`, `sgPERPENDICULAR`, `sgTANGENT`.
+  The legacy `sgHorizontal`/`sgVertical`/`sgEqual` spellings are silent
+  no-ops. `SketchAddConstraints` has **no return value**; application is
+  established behaviourally (the constraint's own predicate on the solved
+  geometry, after `SolveSketch`).
+- **Circle radius is `GetRadius`** (a method); `ci.Radius` raises 438.
+  `GetCenterPoint2` returns the centre handle (X/Y/Z readable, Select
+  works); `GetStartPoint` on a circle returns a perimeter point (array).
+- **`Dim sgn`-style names are compile errors**: VBA intrinsic names cannot
+  be identifiers. A compile error presents as RunMacro returning failure
+  with no report at all - bisect with committed compile probes.

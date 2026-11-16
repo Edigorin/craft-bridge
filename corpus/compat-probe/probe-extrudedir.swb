@@ -250,7 +250,7 @@ Function RunBlindCase(ByVal tag As String, ByVal dirFlag As Boolean, ByVal isFin
     result = 1
     WriteLine LineFor("featureextrusion2-" & tag, 0, "", "entering: FeatureExtrusion2(True, False, " & CStr(dirFlag) & ", swEndCondBlind, swEndCondBlind, 0.012, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)")
     Err.Clear
-    Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.012, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)
+    Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.012, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)
     n = Err.Number
     d = Err.Description
     WriteLine LineFor("featureextrusion2-" & tag, n, d, "outcome")

@@ -207,7 +207,7 @@ Sub DrawGeometry1()
     Set pt1(6) = sl1(3).GetStartPoint2
     Set pt1(7) = sl1(3).GetEndPoint2
     Set ci1(0) = swSketchMgr.CreateCircleByRadius(MapU(1, 0.02, 0.04), MapV(1, 0.02, 0.04), 0#, 0.01)
-    ci1(0).Construction = True
+    ci1(0).ConstructionGeometry = True
     Set pt1(8) = ci1(0).GetCenterPoint2
     swDoc.ClearSelection2 True
 End Sub

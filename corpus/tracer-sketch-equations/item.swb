@@ -603,7 +603,7 @@ Function BuildExtrude3() As String
     dirFlag = (wantSide = TT_EX_DIR_TRUE_SIDE)
     ok = swDoc.Extension.SelectByID2(skName2, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If Not ok Then gMsg = "could not select the sketch for the extrude": GoTo ExFail
-    Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.012, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)
+    Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.012, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)
     If feat Is Nothing Then gMsg = "the extrude was not created": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
     If dm Is Nothing Then gMsg = "the extrude dimension D1 is missing": GoTo ExFail

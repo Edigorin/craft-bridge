@@ -253,7 +253,7 @@ Function RunRevolveCase(ByVal tag As String, ByVal shape As String, ByVal revFla
     End If
     WriteLine LineFor("axis-" & tag, 0, "", "endpoint order fixed: from " & Vec3Text(0#, -0.01, 0#) & " to " & Vec3Text(0#, 0.08, 0#))
     Err.Clear
-    ax.Construction = True
+    ax.ConstructionGeometry = True
     n = Err.Number
     d = Err.Description
     WriteLine LineFor("axis-construction-" & tag, n, d, "stage=assign")

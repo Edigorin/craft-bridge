@@ -1761,6 +1761,31 @@ fn distance_dims_refuse_ambiguous_kinds_and_verify_behaviour() {
 }
 
 #[test]
+fn extrude_calls_use_the_full_signature_and_construction_geometry() {
+    // Seat-proven (2026-11-16): FeatureExtrusion2 takes 23 arguments -
+    // T0/StartOffset/FlipStartOffset are NOT optional (err 449 otherwise);
+    // and the construction member is ConstructionGeometry (.Construction
+    // raises 438).
+    for (name, recipe) in [("tracer", TRACER), ("primitives", TRACER_PRIM)] {
+        let case = Case::new(recipe);
+        case.build_to("arity.swb", false).unwrap();
+        let text = fs::read_to_string(case.dir.path().join("arity.swb")).unwrap();
+        for line in text.lines() {
+            if line.contains("Set feat = gFeatMgr.FeatureExtrusion2") {
+                assert!(
+                    line.contains(", 0, 0#, False)"),
+                    "{name}: FeatureExtrusion2 call is missing T0/StartOffset/FlipStartOffset"
+                );
+            }
+        }
+        assert!(
+            !text.contains(".Construction = True"),
+            "{name}: the construction member is not ConstructionGeometry"
+        );
+    }
+}
+
+#[test]
 fn no_identifier_shadows_a_vba_intrinsic() {
     // Seat-proven compile rule: a VBA intrinsic name cannot be an
     // identifier - `Dim sgn As Double` is a compile error that RunMacro

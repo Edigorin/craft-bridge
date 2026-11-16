@@ -214,7 +214,7 @@ End Function
 
 Sub DrawGeometry0()
     Set sl0(0) = swSketchMgr.CreateLine(MapU(0, 0.0, -0.02), MapV(0, 0.0, -0.02), 0#, MapU(0, 0.0, 0.02), MapV(0, 0.0, 0.02), 0#)
-    sl0(0).Construction = True
+    sl0(0).ConstructionGeometry = True
     Set pt0(0) = sl0(0).GetStartPoint2
     Set pt0(1) = sl0(0).GetEndPoint2
     Set sl0(1) = swSketchMgr.CreateLine(MapU(0, 0.005, -0.01), MapV(0, 0.005, -0.01), 0#, MapU(0, 0.01, -0.01), MapV(0, 0.01, -0.01), 0#)
@@ -623,7 +623,7 @@ Function BuildRevolve2() As String
     swSketchMgr.InsertSketch True
     Set ax = swSketchMgr.CreateLine(MapU(0, -0.05, 0.0), MapV(0, -0.05, 0.0), 0#, MapU(0, 0.05, 0.0), MapV(0, 0.05, 0.0), 0#)
     If ax Is Nothing Then gMsg = "the revolve helper axis did not appear": GoTo ExFail
-    ax.Construction = True
+    ax.ConstructionGeometry = True
     If Not ax.Select(False) Then gMsg = "the helper axis would not select for fixing": GoTo ExFail
     swDoc.SketchAddConstraints "sgFix"
     swDoc.ClearSelection2 True

@@ -596,7 +596,7 @@ Function BuildPrim2() As String
     swSketchMgr.InsertSketch True
     ok = swDoc.Extension.SelectByID2(primName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If Not ok Then gMsg = "could not select the primitive sketch": GoTo ExFail
-    Set feat = gFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.01, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)
+    Set feat = gFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.01, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)
     If feat Is Nothing Then gMsg = "the primitive extrude was not created": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
     If dm Is Nothing Then gMsg = "the primitive height dimension is missing": GoTo ExFail
@@ -652,7 +652,7 @@ Function BuildPrim3() As String
     swSketchMgr.InsertSketch True
     ok = swDoc.Extension.SelectByID2(primName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If Not ok Then gMsg = "could not select the primitive sketch": GoTo ExFail
-    Set feat = gFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.005, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)
+    Set feat = gFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.005, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)
     If feat Is Nothing Then gMsg = "the primitive extrude was not created": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
     If dm Is Nothing Then gMsg = "the primitive height dimension is missing": GoTo ExFail

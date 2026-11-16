@@ -1477,7 +1477,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
             vba_num(mm(b[1])),
         ));
         if l.construction {
-            out.push_str(&format!("    sl{index}({i}).Construction = True\n"));
+            out.push_str(&format!("    sl{index}({i}).ConstructionGeometry = True\n"));
         }
         out.push_str(&format!(
             "    Set pt{index}({}) = sl{index}({i}).GetStartPoint2\n    Set pt{index}({}) = sl{index}({i}).GetEndPoint2\n",
@@ -1498,7 +1498,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
             vba_num(mm(c.r))
         ));
         if c.construction {
-            out.push_str(&format!("    ci{index}({j}).Construction = True\n"));
+            out.push_str(&format!("    ci{index}({j}).ConstructionGeometry = True\n"));
         }
         out.push_str(&format!(
             "    Set pt{index}({}) = ci{index}({j}).GetCenterPoint2\n",
@@ -2028,7 +2028,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
             ));
             body.push_str(&select_sketch);
             body.push_str(&format!(
-                "    Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n    If feat Is Nothing Then gMsg = \"the extrude was not created\": GoTo ExFail\n",
+                "    Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)\n    If feat Is Nothing Then gMsg = \"the extrude was not created\": GoTo ExFail\n",
                 vba_num(*depth_m)
             ));
             body.push_str(&format!(
@@ -2054,7 +2054,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
             // checkpoint-pending) and is verified by the D1 readback.
             body.push_str(&select_sketch);
             body.push_str(&format!(
-                "    Set feat = gFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondMidPlane, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n    If feat Is Nothing Then gMsg = \"the extrude was not created\": GoTo ExFail\n",
+                "    Set feat = gFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondMidPlane, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)\n    If feat Is Nothing Then gMsg = \"the extrude was not created\": GoTo ExFail\n",
                 vba_num(*total_m)
             ));
             body.push_str(&format!(
@@ -2099,7 +2099,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
                     vba_num(*second_m),
                 ));
                 body.push_str(&select_sketch);
-                body.push_str("    Set feat = gFeatMgr.FeatureExtrusion2(False, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, dA, dB, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n    If feat Is Nothing Then gMsg = \"the extrude was not created\": GoTo ExFail\n");
+                body.push_str("    Set feat = gFeatMgr.FeatureExtrusion2(False, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, dA, dB, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)\n    If feat Is Nothing Then gMsg = \"the extrude was not created\": GoTo ExFail\n");
                 body.push_str("    Set dm = swDoc.Parameter(\"D\" & Trim(Str(wFirst)) & \"@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension carrying the first depth is missing\": GoTo ExFail\n");
                 body.push_str(&format!(
                     "    If Abs(dm.SystemValue - {}) > 0.000001 Then gMsg = \"the extrude first depth does not match\": GoTo ExFail\n",
@@ -2134,7 +2134,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
                 if *negative { "-1" } else { "1" }
             ));
             body.push_str(&select_sketch);
-            body.push_str("    Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondThroughAll, swEndConditions_e.swEndCondBlind, 0#, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n    If feat Is Nothing Then gMsg = \"the extrude was not created\": GoTo ExFail\n");
+            body.push_str("    Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondThroughAll, swEndConditions_e.swEndCondBlind, 0#, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)\n    If feat Is Nothing Then gMsg = \"the extrude was not created\": GoTo ExFail\n");
             body.push_str(no_depth_note);
             "through all".to_string()
         }
@@ -2438,7 +2438,7 @@ fn emit_helper_axis(sidx: usize, axis: &AxisSel, locals: &mut String) -> String 
     out.push_str(
         "    If ax Is Nothing Then gMsg = \"the revolve helper axis did not appear\": GoTo ExFail\n",
     );
-    out.push_str("    ax.Construction = True\n");
+    out.push_str("    ax.ConstructionGeometry = True\n");
     out.push_str(
         "    If Not ax.Select(False) Then gMsg = \"the helper axis would not select for fixing\": GoTo ExFail\n",
     );
@@ -2517,7 +2517,7 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
         "    If Not ok Then gMsg = \"could not select the primitive sketch\": GoTo ExFail\n",
     );
     out.push_str(&format!(
-        "    Set feat = gFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True)\n",
+        "    Set feat = gFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)\n",
         vba_num(height)
     ));
     out.push_str("    If feat Is Nothing Then gMsg = \"the primitive extrude was not created\": GoTo ExFail\n");
