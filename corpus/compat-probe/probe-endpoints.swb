@@ -108,9 +108,8 @@ End Sub
 ' attributed to its index.
 Function PointsEnumLine() As String
     Dim sk As Object
-    Dim ps As Variant
-    Dim v As Object
-    Dim i As Long
+    Dim psA As Variant
+    Dim psB As Variant
     Dim n As Long
     Dim d As String
     Dim detail As String
@@ -124,29 +123,30 @@ Function PointsEnumLine() As String
         Exit Function
     End If
     Err.Clear
-    ps = sk.SketchPoints
+    psA = sk.SketchPoints
     n = Err.Number
     d = Err.Description
     If n <> 0 Then
         detail = "SketchPoints err=" & Trim(Str(n)) & " " & d
     Else
         detail = "SketchPoints ok"
+        WriteLine EnumSub("SketchPoints", psA)
     End If
-    WriteLine EnumSub("SketchPoints", ps)
     Err.Clear
-    ps = sk.GetSketchPoints2
+    psB = sk.GetSketchPoints2
     n = Err.Number
     d = Err.Description
     If n <> 0 Then
         detail = detail & " | GetSketchPoints2 err=" & Trim(Str(n)) & " " & d
     Else
         detail = detail & " | GetSketchPoints2 ok"
+        WriteLine EnumSub("GetSketchPoints2", psB)
     End If
-    WriteLine EnumSub("GetSketchPoints2", ps)
     PointsEnumLine = LineFor("sketchpoints", 0, "", detail)
 End Function
 
-' One collection, one record: type, bounds, per-index identity.
+' One collection, one record: type, bounds, per-index identity. Only ever
+' called with a successfully fetched collection.
 Function EnumSub(ByVal tag As String, ByVal ps As Variant) As String
     Dim v As Object
     Dim i As Long
@@ -186,8 +186,9 @@ Function EnumSub(ByVal tag As String, ByVal ps As Variant) As String
     EnumSub = LineFor("enum-" & tag, 0, "", detail)
 End Function
 
-' Type, per-component coordinates and Select result of one object, every
-' stage captured and named.
+' Type, per-component coordinates (each component its own named stage with
+' numeric error and description) and the Select result (call and conversion
+' captured separately).
 Function ObjectIdentity(ByVal v As Object) As String
     Dim n As Long
     Dim d As String
@@ -205,22 +206,28 @@ Function ObjectIdentity(ByVal v As Object) As String
     sx = v.X
     n = Err.Number
     d = Err.Description
-    If n = 0 Then
-        Err.Clear
-        sy = v.Y
-        n = Err.Number
-        d = Err.Description
-    End If
-    If n = 0 Then
-        Err.Clear
-        sz = v.Z
-        n = Err.Number
-        d = Err.Description
-    End If
-    If n = 0 Then
-        detail = detail & " xyz=" & Trim(Str(sx)) & "," & Trim(Str(sy)) & "," & Trim(Str(sz))
+    If n <> 0 Then
+        detail = detail & " | x err=" & Trim(Str(n)) & " " & d
     Else
-        detail = detail & " xyz err=" & Trim(Str(n)) & " " & d
+        detail = detail & " | x=" & Trim(Str(sx))
+    End If
+    Err.Clear
+    sy = v.Y
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        detail = detail & " | y err=" & Trim(Str(n)) & " " & d
+    Else
+        detail = detail & " | y=" & Trim(Str(sy))
+    End If
+    Err.Clear
+    sz = v.Z
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        detail = detail & " | z err=" & Trim(Str(n)) & " " & d
+    Else
+        detail = detail & " | z=" & Trim(Str(sz))
     End If
     Err.Clear
     selres = v.Select(False)
@@ -243,8 +250,9 @@ Function ObjectIdentity(ByVal v As Object) As String
 End Function
 
 ' One endpoint family: the legacy accessor, the documented *2 object form
-' and the property form - each as a Set candidate with identity, plus the
-' array form's type. Every stage captured with its candidate name.
+' and the property form (explicitly branched - VBA would look up a member
+' literally named "prop" otherwise). Every stage captured with its
+' candidate name.
 Function HandleCandidates(ByVal tag As String, ByVal ln As Object, ByVal getter As String, ByVal prop As String) As String
     Dim v As Variant
     Dim sp As Object
@@ -297,7 +305,11 @@ Function HandleCandidates(ByVal tag As String, ByVal ln As Object, ByVal getter 
         detail = detail & " | form2 " & ObjectIdentity(sp)
     End If
     Err.Clear
-    v = ln.prop
+    If prop = "StartPoint" Then
+        v = ln.StartPoint
+    Else
+        v = ln.EndPoint
+    End If
     n = Err.Number
     d = Err.Description
     If n = 0 Then
@@ -368,7 +380,11 @@ Function CentreCandidates(ByVal ci As Object) As String
     If n = 0 Then
         Err.Clear
         tmp = Trim(Str(v))
-        If Err.Number = 0 Then detail = detail & " | centerx=" & tmp Else detail = detail & " | centerx convert err"
+        If Err.Number = 0 Then
+            detail = detail & " | centerx=" & tmp
+        Else
+            detail = detail & " | centerx convert err=" & Trim(Str(Err.Number)) & " " & Err.Description
+        End If
     Else
         detail = detail & " | centerx err=" & Trim(Str(n)) & " " & d
     End If
@@ -379,7 +395,11 @@ Function CentreCandidates(ByVal ci As Object) As String
     If n = 0 Then
         Err.Clear
         tmp = Trim(Str(v))
-        If Err.Number = 0 Then detail = detail & " | centery=" & tmp Else detail = detail & " | centery convert err"
+        If Err.Number = 0 Then
+            detail = detail & " | centery=" & tmp
+        Else
+            detail = detail & " | centery convert err=" & Trim(Str(Err.Number)) & " " & Err.Description
+        End If
     Else
         detail = detail & " | centery err=" & Trim(Str(n)) & " " & d
     End If
