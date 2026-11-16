@@ -317,8 +317,10 @@ fn primitives_and_cross_references_replay() {
         "the cross-reference slot is missing"
     );
     assert!(
-        macro_text.contains("If regName(0) = \"\" Then GoTo ExFail"),
-        "the dead-slot guard is missing"
+        macro_text.contains(
+            "If regName(0) = \"\" Then gMsg = \"the parameter slot 0 is not bound (its dimension was omitted or failed)\": GoTo ExFail"
+        ),
+        "the dead-slot guard does not name the unbound slot"
     );
     assert!(
         macro_text.contains("* 2"),
@@ -850,6 +852,81 @@ fn checkpoint_tracks_the_verified_conventions() {
 }
 
 #[test]
+fn checkpoint_carries_the_map_and_classification_treatment() {
+    // The batch-1 canary contract: parallel-normal acceptance with the
+    // fail-closed map published, mapped geometry with solved-position
+    // readback, the relation classified and its kind checked, the dimension
+    // kind verified with the sign resolved, and edit-and-follow.
+    let checkpoint = include_str!("../corpus/compat-check/minimal.swb");
+    assert!(
+        checkpoint.contains("Function PlaneIsSource"),
+        "the checkpoint does not accept via parallel normal"
+    );
+    assert!(
+        checkpoint.contains("Function AcceptAndPublish"),
+        "the checkpoint does not publish the adaptation map"
+    );
+    assert!(
+        checkpoint.contains("Function MapU(") && checkpoint.contains("Function MapV("),
+        "the checkpoint does not map coordinates"
+    );
+    // Transactional publication.
+    let cleared = checkpoint
+        .find("gMapValid = False")
+        .expect("no invalidation");
+    let published = checkpoint.find("gMapValid = True").expect("no publication");
+    assert!(
+        cleared < published,
+        "checkpoint publication is not transactional"
+    );
+    // The relation is classified and its kind checked against the geometry.
+    assert!(
+        checkpoint.contains("Select Case AxisClass(True)"),
+        "the relation is not classified"
+    );
+    assert!(
+        checkpoint.contains("relation omitted"),
+        "a non-permutation map does not degrade the relation with a named reason"
+    );
+    assert!(
+        checkpoint.contains("did not level the classified axis"),
+        "the relation kind is not checked"
+    );
+    // The dimension kind is verified against the point projections and the
+    // sign is resolved into the assigned value.
+    assert!(
+        checkpoint.contains("but the line length is"),
+        "the dimension kind is not verified"
+    );
+    assert!(
+        checkpoint.contains("sgn = 1#") && checkpoint.contains("sgn = -1#"),
+        "the sign is not resolved"
+    );
+    assert!(
+        checkpoint.contains("dp.SystemValue = sgn * 0.04"),
+        "the resolved sign is not carried by the value"
+    );
+    // Edit-and-follow acceptance check.
+    assert!(
+        checkpoint.contains("dp.SystemValue = 0.05"),
+        "the checkpoint does not edit the dimension"
+    );
+    assert!(
+        checkpoint.contains("the edited dimension did not carry the geometry"),
+        "the checkpoint does not verify the edit followed"
+    );
+    // The blocking dialog toggle is saved, disabled and restored.
+    assert!(
+        checkpoint.contains("swUserPreferenceToggle_e.swInputDimValOnCreate, False"),
+        "the checkpoint does not disable the input-dimension-value dialog"
+    );
+    assert!(
+        checkpoint.contains("swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle"),
+        "the checkpoint does not restore the toggle"
+    );
+}
+
+#[test]
 fn probe_cleanup_covers_every_discard_path() {
     // The cleanup contract (plan review 2026-11-13): absence is proven by a
     // live tree walk, never inferred from a failed select; the name is
@@ -1201,6 +1278,271 @@ fn runs_close_their_own_document_by_coordinated_sequencing() {
     assert!(
         harness.contains("\"command\":\"owned-document\""),
         "the harness does not read the handoff"
+    );
+}
+
+// ---- Phase 1 batch 1: frame adaptation (offline synthetic coverage) ----
+
+/// Mirrors the emitted AxisClass VBA exactly: the SC u direction maps to
+/// sketch (s,t) as (gMap00, gMap01) and the SC v direction as (gMap10,
+/// gMap11); a signed permutation lands axis-aligned (0 = s axis, 1 = t
+/// axis), anything else is -1 and degrades with a named reason.
+fn axis_class(m: [f64; 4], is_horiz: bool) -> i32 {
+    let (c0, c1) = if is_horiz { (m[0], m[1]) } else { (m[2], m[3]) };
+    if (c0.abs() - 1.0).abs() <= 1e-6 && c1.abs() <= 1e-6 {
+        0
+    } else if (c1.abs() - 1.0).abs() <= 1e-6 && c0.abs() <= 1e-6 {
+        1
+    } else {
+        -1
+    }
+}
+
+/// Mirrors the emitted AxisSign VBA exactly.
+fn axis_sign(m: [f64; 4], is_horiz: bool, ax: i32) -> f64 {
+    let c = match (is_horiz, ax) {
+        (true, 0) => m[0],
+        (true, _) => m[1],
+        (false, 0) => m[2],
+        (false, _) => m[3],
+    };
+    if c < 0.0 {
+        -1.0
+    } else {
+        1.0
+    }
+}
+
+/// Mirrors the emitted MapU/MapV VBA exactly: s = u*gMap00 + v*gMap10,
+/// t = u*gMap01 + v*gMap11.
+fn map_uv(m: [f64; 4], u: f64, v: f64) -> (f64, f64) {
+    (u * m[0] + v * m[2], u * m[1] + v * m[3])
+}
+
+#[test]
+fn map_classifies_signed_permutations_with_signs() {
+    // [gMap00, gMap01, gMap10, gMap11]; columns = where SC u and SC v land.
+    let cases: [([f64; 4], &str); 6] = [
+        ([1.0, 0.0, 0.0, 1.0], "identity"),
+        ([0.0, 1.0, -1.0, 0.0], "quarter turn"),
+        ([-1.0, 0.0, 0.0, 1.0], "u reflected"),
+        ([1.0, 0.0, 0.0, -1.0], "v reflected"),
+        ([0.0, -1.0, 1.0, 0.0], "opposite quarter turn"),
+        ([-1.0, 0.0, 0.0, -1.0], "half turn"),
+    ];
+    for (m, name) in cases {
+        let (cu, cv) = (axis_class(m, true), axis_class(m, false));
+        assert!(cu == 0 || cu == 1, "{name}: u is not axis-aligned");
+        assert!(cv == 0 || cv == 1, "{name}: v is not axis-aligned");
+        // A permutation maps u and v onto DIFFERENT sketch axes.
+        assert_ne!(cu, cv, "{name}: u and v land on the same axis");
+        // The sign classification recovers the mapped displacement exactly:
+        // whatever the sign, the equation RHS sign times the source value is
+        // what the classified-axis projection measures.
+        for (u, v) in [(0.037, -0.011), (-0.02, 0.045)] {
+            let (s, t) = map_uv(m, u, v);
+            let proj = if cu == 0 { s } else { t };
+            let sgn = axis_sign(m, true, cu);
+            assert!(
+                (sgn * u - proj).abs() < 1e-12,
+                "{name}: sign-resolved u does not match the classified projection"
+            );
+            let proj_v = if cv == 0 { s } else { t };
+            let sgn_v = axis_sign(m, false, cv);
+            assert!(
+                (sgn_v * v - proj_v).abs() < 1e-12,
+                "{name}: sign-resolved v does not match the classified projection"
+            );
+        }
+    }
+}
+
+#[test]
+fn map_refuses_non_permutation_for_axis_work_only() {
+    // A 45-degree map: geometry still maps (isometry), but no source axis is
+    // axis-aligned - every axis-dependent relation and dimension must
+    // degrade (class -1), never guess.
+    let q = std::f64::consts::FRAC_1_SQRT_2;
+    let m = [q, q, -q, q];
+    assert_eq!(axis_class(m, true), -1, "u must not classify");
+    assert_eq!(axis_class(m, false), -1, "v must not classify");
+    // The coordinate map itself stays well-defined for geometry replay.
+    let (s, t) = map_uv(m, 1.0, 0.0);
+    assert!((s - q).abs() < 1e-12 && (t - q).abs() < 1e-12);
+}
+
+#[test]
+fn adaptation_machinery_is_wired_fail_closed() {
+    let case = Case::new(TRACER);
+    case.build_to("adapt.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("adapt.swb")).unwrap();
+    // Transactional publication: validity is cleared before any probe and
+    // set only after complete validation.
+    let cleared = text
+        .find("gMapValid(idx) = False")
+        .expect("no invalidation");
+    let published = text.find("gMapValid(idx) = True").expect("no publication");
+    assert!(cleared < published, "publication is not transactional");
+    for pin in [
+        "scale is ",
+        "is not unit",
+        "not orthogonal",
+        "the 3D frame is not right-handed",
+    ] {
+        assert!(text.contains(pin), "frame validation lost: {pin}");
+    }
+    // Acceptance: translation at the model origin and parallel normal.
+    assert!(
+        text.contains("not the model origin"),
+        "acceptance does not refuse translated probe sketches"
+    );
+    assert!(
+        text.contains("Function PlaneIsSource"),
+        "no acceptance predicate"
+    );
+    // Strict equality remains as a diagnostic only.
+    assert!(
+        text.contains("DIAGNOSTIC ONLY"),
+        "the strict predicate lost its retired marking"
+    );
+    // Per-sketch map state: two sketches keep independent maps (each step
+    // publishes and clears its own slot).
+    assert!(
+        text.contains("Dim gMap00(0 To ") && text.contains("gMap00(idx)"),
+        "map state is not indexed per sketch slot"
+    );
+    // Deferred consumers are guarded against non-identity maps: each family
+    // refuses in its own builder, before any feature is created.
+    for (fam, recipe) in [
+        ("BuildExtrude", TRACER),
+        ("BuildRevolve", TRACER_REVOLVE),
+        ("BuildPrim", TRACER_PRIM),
+    ] {
+        let case = Case::new(recipe);
+        case.build_to("guard.swb", false).unwrap();
+        let gtext = fs::read_to_string(case.dir.path().join("guard.swb")).unwrap();
+        let i = gtext
+            .find(&format!("Function {fam}"))
+            .unwrap_or_else(|| panic!("no {fam} builder"));
+        let region = &gtext[i..i + 1200.min(gtext.len() - i)];
+        assert!(
+            region.contains("MapIsIdentity("),
+            "{fam}: no non-identity map guard"
+        );
+    }
+    // The toggle dialog that blocks AddDimension2 is disabled and restored.
+    assert!(
+        text.contains("gDimToggleSaved = True")
+            && text.contains("swUserPreferenceToggle_e.swInputDimValOnCreate, False"),
+        "the input-dimension-value toggle is not saved and disabled"
+    );
+    assert!(
+        text.contains("swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle"),
+        "the input-dimension-value toggle is not restored at exit"
+    );
+}
+
+#[test]
+fn sketch_recreation_rebinds_and_reprobes() {
+    let case = Case::new(TRACER);
+    case.build_to("recreate.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("recreate.swb")).unwrap();
+    let i = text.find("Function CleanSketch2").expect("no CleanSketch2");
+    let region = &text[i..i + 2200.min(text.len() - i)];
+    // Invalidate before deletion.
+    let clear = region.find("ClearMap 2").expect("no map invalidation");
+    let delete = region.find("EditDelete").expect("no deletion");
+    assert!(clear < delete, "the map is not invalidated before deletion");
+    // Dimension slots are cleared so the redraw rebinds them.
+    assert!(
+        region.contains("regName(0) = \"\""),
+        "slot 0 is not cleared"
+    );
+    assert!(
+        region.contains("regName(1) = \"\""),
+        "slot 1 is not cleared"
+    );
+    // The deletion is verified through the pinned point enumeration.
+    assert!(
+        region.contains("GetSketchPoints2") && region.contains("points remain"),
+        "deletion is not verified against the point enumeration"
+    );
+    // The frame is re-probed and republished before any redraw.
+    assert!(
+        region.contains("AcceptAndPublish(2, \"XY\", gProbeReason)"),
+        "the frame is not republished after recreation"
+    );
+    // The sketch identity is reacquired, never assumed.
+    assert!(
+        region.contains("skName2 = skFeat.Name"),
+        "the sketch identity is not reacquired"
+    );
+    // The degrade path fails closed when recreation fails.
+    assert!(
+        text.contains("If Not CleanSketch2() Then GoTo SketchFailed"),
+        "recreation refusal does not fail the sketch"
+    );
+    // Omission is terminating: recorded with a named reason and never
+    // re-attempted as a failure (the class check is deterministic).
+    assert!(
+        text.contains("gOmit = gOmit &"),
+        "omitted work does not carry a named reason"
+    );
+}
+
+#[test]
+fn dims_verify_kind_and_resolve_signs_in_the_equation() {
+    let case = Case::new(TRACER);
+    case.build_to("dims.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("dims.swb")).unwrap();
+    let i = text.find("Function Dims2").expect("no Dims2");
+    let region = &text[i..i + 4000.min(text.len() - i)];
+    // Kind verification is observable: the created value is matched against
+    // the point projections.
+    assert!(
+        region.contains("created = dm.SystemValue"),
+        "the created value is not read back"
+    );
+    assert!(
+        region.contains("but the line length is"),
+        "the length kind is not verified against the projection"
+    );
+    // Sign resolution covers both signs and fails closed on neither.
+    assert!(region.contains("sgn = 1#") && region.contains("sgn = -1#"));
+    assert!(region.contains("but the source value is"));
+    // The sign lives in the equation RHS and the expected value - never only
+    // in the initial SystemValue - so parameter edits keep tracking.
+    assert!(
+        region.contains("AddDimEquation(dm, \"40mm\", sgn * 0.04, 0, sgn)"),
+        "the equation does not carry the runtime sign"
+    );
+    assert!(
+        text.contains("\"=\"") && text.contains("-1 * ("),
+        "AddDimEquation does not fold the sign into the stored equation text"
+    );
+}
+
+#[test]
+fn plane_name_for_keeps_its_own_capture_only() {
+    // [F6]: PlaneNameFor probes must not disturb persistent sketch state -
+    // no map publication inside it, ever.
+    let case = Case::new(TRACER);
+    case.build_to("pnf.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("pnf.swb")).unwrap();
+    let i = text.find("Function PlaneNameFor").expect("no PlaneNameFor");
+    let j = text[i..].find("End Function").unwrap() + i;
+    let region = &text[i..j];
+    assert!(
+        !region.contains("AcceptAndPublish"),
+        "PlaneNameFor publishes map state"
+    );
+    assert!(
+        !region.contains("gMapValid"),
+        "PlaneNameFor touches persistent map state"
+    );
+    assert!(
+        region.contains("DiscardProbeSketch"),
+        "PlaneNameFor does not own its probe sketch"
     );
 }
 

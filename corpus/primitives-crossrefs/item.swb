@@ -9,6 +9,13 @@ Dim reportPath As String
 Dim gMsg As String
 Dim gPlane As String
 Dim gProbeLog As String
+Dim gProbeReason As String
+Dim gMap00(0 To 30) As Double
+Dim gMap01(0 To 30) As Double
+Dim gMap10(0 To 30) As Double
+Dim gMap11(0 To 30) As Double
+Dim gMapValid(0 To 30) As Boolean
+Dim gMapSide(0 To 30) As Long
 Dim gDoc As Object
 Dim gFeatMgr As Object
 Dim regName(0 To 2) As String
@@ -37,6 +44,9 @@ Sub main()
 
     ' ---- fresh part from the default template (before recipe step 0) ----
 Set swApp = Application.SldWorks
+gDimToggle = swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate)
+gDimToggleSaved = True
+swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, False
 template = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
 If template = "" Then Err.Raise vbObjectError + 514, "craft-bridge", "no default part template is configured"
 Set swDoc = swApp.NewDocument(template, 0, 0, 0)
@@ -92,6 +102,7 @@ WriteStep stepIdx, "document.new", "created", "fresh part from the default templ
     WriteStep stepIdx, "timeline.add", st, gMsg
     If st = "failed" Then stopModel = True
 
+    If gDimToggleSaved And Not swApp Is Nothing Then swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle
     cleanupMode = CloseMode()
     If cleanupMode = "close" Then
     CloseOwnedDoc closedOk
@@ -122,6 +133,7 @@ Fail:
     If reportPath <> "" Then
         WriteStep stepIdx, "macro", "failed", "err " & Trim(Str(errNum)) & ": " & errMsg
     End If
+        If gDimToggleSaved And Not swApp Is Nothing Then swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle
     cleanupMode = CloseMode()
     If cleanupMode = "close" Then
     CloseOwnedDoc closedOk
@@ -136,7 +148,9 @@ Function BuildSketch1() As String
     On Error GoTo HardFail
     Dim ok As Boolean
     Dim skFeat As SldWorks.Feature
-    ok = OpenSketchOnPlane("XY")
+    gMsg = ""
+    gOmit = ""
+    ok = OpenSketchOnPlane(1, "XY")
     If Not ok Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo SketchFailed
     Set skFeat = swSketchMgr.ActiveSketch
     skName1 = skFeat.Name
@@ -147,17 +161,25 @@ Function BuildSketch1() As String
     swSketchMgr.InsertSketch True
     gMsg = "8 relations and 1 dimensions replayed"
     BuildSketch1 = "created"
+    If gOmit <> "" Then
+        gMsg = gMsg & " | omitted: " & gOmit
+        BuildSketch1 = "degraded"
+    End If
     Exit Function
 
 Degrade:
 ' Restore, do not merely delete relations: wipe the sketch contents,
 ' redraw at the stored coordinates, reapply driving dimensions, verify again.
-CleanSketch1
+' CleanSketch revalidates the whole cycle: map invalidated first, the
+' deletion verified, the frame re-probed and the sketch identity
+' reacquired; its refusal fails the sketch with the named reason.
+    If Not CleanSketch1() Then GoTo SketchFailed
     DrawGeometry1
     If Not Dims1() Then GoTo SketchFailed
     If Not VerifySketch1() Then GoTo SketchFailed
     swSketchMgr.InsertSketch True
     gMsg = "rebuilt as geometry plus driving dimensions"
+    If gOmit <> "" Then gMsg = gMsg & " | omitted: " & gOmit
     BuildSketch1 = "degraded"
     Exit Function
 
@@ -179,18 +201,18 @@ HardFail:
 End Function
 
 Sub DrawGeometry1()
-    Set sl1(0) = swSketchMgr.CreateLine(0.0, 0.0, 0#, 0.04, 0.0, 0#)
-    Set pt1(0) = sl1(0).GetStartPoint
-    Set pt1(1) = sl1(0).GetEndPoint
-    Set sl1(1) = swSketchMgr.CreateLine(0.04, 0.0, 0#, 0.04, 0.02, 0#)
-    Set pt1(2) = sl1(1).GetStartPoint
-    Set pt1(3) = sl1(1).GetEndPoint
-    Set sl1(2) = swSketchMgr.CreateLine(0.04, 0.02, 0#, 0.0, 0.02, 0#)
-    Set pt1(4) = sl1(2).GetStartPoint
-    Set pt1(5) = sl1(2).GetEndPoint
-    Set sl1(3) = swSketchMgr.CreateLine(0.0, 0.02, 0#, 0.0, 0.0, 0#)
-    Set pt1(6) = sl1(3).GetStartPoint
-    Set pt1(7) = sl1(3).GetEndPoint
+    Set sl1(0) = swSketchMgr.CreateLine(MapU(1, 0.0, 0.0), MapV(1, 0.0, 0.0), 0#, MapU(1, 0.04, 0.0), MapV(1, 0.04, 0.0), 0#)
+    Set pt1(0) = sl1(0).GetStartPoint2
+    Set pt1(1) = sl1(0).GetEndPoint2
+    Set sl1(1) = swSketchMgr.CreateLine(MapU(1, 0.04, 0.0), MapV(1, 0.04, 0.0), 0#, MapU(1, 0.04, 0.02), MapV(1, 0.04, 0.02), 0#)
+    Set pt1(2) = sl1(1).GetStartPoint2
+    Set pt1(3) = sl1(1).GetEndPoint2
+    Set sl1(2) = swSketchMgr.CreateLine(MapU(1, 0.04, 0.02), MapV(1, 0.04, 0.02), 0#, MapU(1, 0.0, 0.02), MapV(1, 0.0, 0.02), 0#)
+    Set pt1(4) = sl1(2).GetStartPoint2
+    Set pt1(5) = sl1(2).GetEndPoint2
+    Set sl1(3) = swSketchMgr.CreateLine(MapU(1, 0.0, 0.02), MapV(1, 0.0, 0.02), 0#, MapU(1, 0.0, 0.0), MapV(1, 0.0, 0.0), 0#)
+    Set pt1(6) = sl1(3).GetStartPoint2
+    Set pt1(7) = sl1(3).GetEndPoint2
     swDoc.ClearSelection2 True
 End Sub
 
@@ -212,78 +234,214 @@ Function Relations1() As Boolean
     pt1(7).Select True
     swDoc.SketchAddConstraints "sgCoincident"
     swDoc.ClearSelection2 True
+    Select Case AxisClass(1, True)
+    Case 0
     sl1(0).Select False
     swDoc.SketchAddConstraints "sgHorizontal"
     swDoc.ClearSelection2 True
+    Case 1
+    sl1(0).Select False
+    swDoc.SketchAddConstraints "sgVertical"
+    swDoc.ClearSelection2 True
+    Case Else
+    gOmit = gOmit & "relation line-horizontal 0: the SC u axis is not axis-aligned in this sketch frame (non-permutation map); "
+    End Select
+    Select Case AxisClass(1, False)
+    Case 0
+    sl1(1).Select False
+    swDoc.SketchAddConstraints "sgHorizontal"
+    swDoc.ClearSelection2 True
+    Case 1
     sl1(1).Select False
     swDoc.SketchAddConstraints "sgVertical"
     swDoc.ClearSelection2 True
+    Case Else
+    gOmit = gOmit & "relation line-vertical 1: the SC v axis is not axis-aligned in this sketch frame (non-permutation map); "
+    End Select
+    Select Case AxisClass(1, True)
+    Case 0
     sl1(2).Select False
     swDoc.SketchAddConstraints "sgHorizontal"
     swDoc.ClearSelection2 True
+    Case 1
+    sl1(2).Select False
+    swDoc.SketchAddConstraints "sgVertical"
+    swDoc.ClearSelection2 True
+    Case Else
+    gOmit = gOmit & "relation line-horizontal 2: the SC u axis is not axis-aligned in this sketch frame (non-permutation map); "
+    End Select
+    Select Case AxisClass(1, False)
+    Case 0
+    sl1(3).Select False
+    swDoc.SketchAddConstraints "sgHorizontal"
+    swDoc.ClearSelection2 True
+    Case 1
     sl1(3).Select False
     swDoc.SketchAddConstraints "sgVertical"
     swDoc.ClearSelection2 True
+    Case Else
+    gOmit = gOmit & "relation line-vertical 3: the SC v axis is not axis-aligned in this sketch frame (non-permutation map); "
+    End Select
     Relations1 = True
     Exit Function
 RelFail:
-    If Err.Number <> 0 Then gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description Else gMsg = "a sketch relation could not be applied"
+    If Err.Number <> 0 Then gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description
+    If gMsg = "" Then gMsg = "a sketch relation could not be applied"
     Relations1 = False
 End Function
 
 Function Dims1() As Boolean
     On Error GoTo DimFail
+    Const TOL As Double = 0.000001
+    gMsg = ""
     Dim dd As SldWorks.DisplayDimension
     Dim dm As SldWorks.Dimension
+    Dim ax As Double
+    Dim ay As Double
+    Dim bx As Double
+    Dim by As Double
+    Dim ds As Double
+    Dim dt As Double
+    Dim proj As Double
+    Dim other As Double
+    Dim created As Double
+    Dim sgn As Double
+    Dim sT As Double
+    Dim tT As Double
+    Dim mx As Double
+    Dim my As Double
+    Dim mz As Double
+    Dim axClass As Long
+    ' dimension: length line 0
+    ax = pt1(0).X
+    ay = pt1(0).Y
+    bx = pt1(1).X
+    by = pt1(1).Y
+    ds = bx - ax
+    dt = by - ay
     sl1(0).Select False
-    Set dd = swDoc.AddDimension2(0.03, 0.01, 0#)
-    If dd Is Nothing Then GoTo DimFail
+    sT = (ax + bx) / 2# + 0.01
+    tT = (ay + by) / 2# + 0.01
+    mx = SketchToModelX(1, sT, tT)
+    my = SketchToModelY(1, sT, tT)
+    mz = SketchToModelZ(1, sT, tT)
+    Set dd = swDoc.AddDimension2(mx, my, mz)
+    If dd Is Nothing Then gMsg = "the length line 0 dimension did not appear": GoTo DimFail
     Set dm = dd.GetDimension2(0)
-    If dm Is Nothing Then GoTo DimFail
-    dm.SystemValue = 0.04
-    If Not AddDimEquation(dm, """width""", 0.04, 0) Then GoTo DimFail
+    If dm Is Nothing Then gMsg = "the length line 0 dimension has no core dimension": GoTo DimFail
+    created = dm.SystemValue
+    proj = Sqr(ds * ds + dt * dt)
+    If Abs(Abs(created) - proj) > TOL Then
+    gMsg = "dimension length line 0 measures " & Trim(Str(created)) & " but the line length is " & Trim(Str(proj))
+    GoTo DimFail
+    End If
+    If Abs(created - 0.04) <= TOL Then
+    sgn = 1#
+    ElseIf Abs(created + 0.04) <= TOL Then
+    sgn = -1#
+    Else
+    gMsg = "dimension length line 0 measures " & Trim(Str(created)) & " but the source value is 0.04"
+    GoTo DimFail
+    End If
+    dm.SystemValue = sgn * 0.04
+    If Not AddDimEquation(dm, """width""", sgn * 0.04, 0, sgn) Then GoTo DimFail
     swDoc.ClearSelection2 True
     Dims1 = True
     Exit Function
 DimFail:
-    If Err.Number <> 0 Then gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description Else gMsg = "a driving dimension could not be added"
+    If Err.Number <> 0 Then gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description
+    If gMsg = "" Then gMsg = "a driving dimension could not be added"
     Dims1 = False
 End Function
 
 Function VerifySketch1() As Boolean
     Const TOL As Double = 0.000001
+    Dim v As Variant
     On Error GoTo VerifyFail
-    If Abs(pt1(0).X - 0.0) > TOL Then GoTo VerifyFail
-    If Abs(pt1(0).Y - 0.0) > TOL Then GoTo VerifyFail
-    If Abs(pt1(1).X - 0.04) > TOL Then GoTo VerifyFail
-    If Abs(pt1(1).Y - 0.0) > TOL Then GoTo VerifyFail
-    If Abs(pt1(2).X - 0.04) > TOL Then GoTo VerifyFail
-    If Abs(pt1(2).Y - 0.0) > TOL Then GoTo VerifyFail
-    If Abs(pt1(3).X - 0.04) > TOL Then GoTo VerifyFail
-    If Abs(pt1(3).Y - 0.02) > TOL Then GoTo VerifyFail
-    If Abs(pt1(4).X - 0.04) > TOL Then GoTo VerifyFail
-    If Abs(pt1(4).Y - 0.02) > TOL Then GoTo VerifyFail
-    If Abs(pt1(5).X - 0.0) > TOL Then GoTo VerifyFail
-    If Abs(pt1(5).Y - 0.02) > TOL Then GoTo VerifyFail
-    If Abs(pt1(6).X - 0.0) > TOL Then GoTo VerifyFail
-    If Abs(pt1(6).Y - 0.02) > TOL Then GoTo VerifyFail
-    If Abs(pt1(7).X - 0.0) > TOL Then GoTo VerifyFail
-    If Abs(pt1(7).Y - 0.0) > TOL Then GoTo VerifyFail
+    v = sl1(0).GetStartPoint
+    If Abs(v(0) - MapU(1, 0.0, 0.0)) > TOL Then GoTo VerifyFail
+    If Abs(v(1) - MapV(1, 0.0, 0.0)) > TOL Then GoTo VerifyFail
+    If Abs(v(2)) > TOL Then GoTo VerifyFail
+    v = sl1(0).GetEndPoint
+    If Abs(v(0) - MapU(1, 0.04, 0.0)) > TOL Then GoTo VerifyFail
+    If Abs(v(1) - MapV(1, 0.04, 0.0)) > TOL Then GoTo VerifyFail
+    If Abs(v(2)) > TOL Then GoTo VerifyFail
+    v = sl1(1).GetStartPoint
+    If Abs(v(0) - MapU(1, 0.04, 0.0)) > TOL Then GoTo VerifyFail
+    If Abs(v(1) - MapV(1, 0.04, 0.0)) > TOL Then GoTo VerifyFail
+    If Abs(v(2)) > TOL Then GoTo VerifyFail
+    v = sl1(1).GetEndPoint
+    If Abs(v(0) - MapU(1, 0.04, 0.02)) > TOL Then GoTo VerifyFail
+    If Abs(v(1) - MapV(1, 0.04, 0.02)) > TOL Then GoTo VerifyFail
+    If Abs(v(2)) > TOL Then GoTo VerifyFail
+    v = sl1(2).GetStartPoint
+    If Abs(v(0) - MapU(1, 0.04, 0.02)) > TOL Then GoTo VerifyFail
+    If Abs(v(1) - MapV(1, 0.04, 0.02)) > TOL Then GoTo VerifyFail
+    If Abs(v(2)) > TOL Then GoTo VerifyFail
+    v = sl1(2).GetEndPoint
+    If Abs(v(0) - MapU(1, 0.0, 0.02)) > TOL Then GoTo VerifyFail
+    If Abs(v(1) - MapV(1, 0.0, 0.02)) > TOL Then GoTo VerifyFail
+    If Abs(v(2)) > TOL Then GoTo VerifyFail
+    v = sl1(3).GetStartPoint
+    If Abs(v(0) - MapU(1, 0.0, 0.02)) > TOL Then GoTo VerifyFail
+    If Abs(v(1) - MapV(1, 0.0, 0.02)) > TOL Then GoTo VerifyFail
+    If Abs(v(2)) > TOL Then GoTo VerifyFail
+    v = sl1(3).GetEndPoint
+    If Abs(v(0) - MapU(1, 0.0, 0.0)) > TOL Then GoTo VerifyFail
+    If Abs(v(1) - MapV(1, 0.0, 0.0)) > TOL Then GoTo VerifyFail
+    If Abs(v(2)) > TOL Then GoTo VerifyFail
     VerifySketch1 = True
     Exit Function
 VerifyFail:
     VerifySketch1 = False
 End Function
 
-Sub CleanSketch1()
+Function CleanSketch1() As Boolean
+    On Error GoTo CleanFail
     Dim anySel As Boolean
-    If Not pt1(0) Is Nothing Then
-        pt1(0).Select False
-        anySel = True
-    End If
-    swDoc.EditDelete
+    Dim cleanOk As Boolean
+    Dim pts As Variant
+    Dim ub As Long
+    Dim skFeat As SldWorks.Feature
+    CleanSketch1 = False
+    gMsg = ""
+    ClearMap 1
+    regName(0) = ""
+    If Not sl1(0) Is Nothing Then sl1(0).Select anySel: anySel = True
+    If Not sl1(1) Is Nothing Then sl1(1).Select anySel: anySel = True
+    If Not sl1(2) Is Nothing Then sl1(2).Select anySel: anySel = True
+    If Not sl1(3) Is Nothing Then sl1(3).Select anySel: anySel = True
+    If anySel Then swDoc.EditDelete
     swDoc.ClearSelection2 True
-End Sub
+    ' Verify the deletion through the pinned point enumeration (every
+    ' line endpoint and circle centre is a sketch point): no point may
+    ' remain, and an empty or erroring collection counts as empty.
+    On Error Resume Next
+    Err.Clear
+    pts = swSketchMgr.ActiveSketch.GetSketchPoints2
+    cleanOk = (Err.Number <> 0)
+    If Not cleanOk Then
+    Err.Clear
+    ub = UBound(pts)
+    If Err.Number = 0 Then
+    If ub >= 0 Then
+    On Error GoTo CleanFail
+    gMsg = "sketch contents deletion is not verified: " & Trim(Str(ub + 1)) & " points remain"
+    GoTo CleanFail
+    End If
+    End If
+    End If
+    On Error GoTo CleanFail
+    If Not AcceptAndPublish(1, "XY", gProbeReason) Then gMsg = "the sketch frame could not be re-accepted after recreation: " & gProbeReason: GoTo CleanFail
+    Set skFeat = swSketchMgr.ActiveSketch
+    If skFeat Is Nothing Then gMsg = "the recreated sketch has no active sketch object": GoTo CleanFail
+    skName1 = skFeat.Name
+    CleanSketch1 = True
+    Exit Function
+CleanFail:
+    If Err.Number <> 0 Then gMsg = "err " & Trim(Str(Err.Number)) & ": " & Err.Description
+    CleanSketch1 = False
+End Function
 
 ' Primitive step 2: "Block"
 Function BuildPrim2() As String
@@ -297,8 +455,9 @@ Function BuildPrim2() As String
     Dim seg As Variant
     Dim sl As Object
     Dim ci As Object
-    ok = OpenSketchOnPlane("XY")
+    ok = OpenSketchOnPlane(2, "XY")
     If Not ok Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo ExFail
+    If Not MapIsIdentity(2) Then gMsg = "frame adaptation: primitive replay on a non-identity sketch map is not implemented (primitive adaptation is batch 3); refusing to report created": GoTo ExFail
     seg = swSketchMgr.CreateCornerRectangle(0.0, 0.0, 0#, 0.08, 0.02, 0#)
     Set sl = seg(0)
     sl.Select False
@@ -307,8 +466,8 @@ Function BuildPrim2() As String
     Set dm = dd.GetDimension2(0)
     If dm Is Nothing Then GoTo ExFail
     If Abs(dm.SystemValue - 0.08) > 0.000001 Then gMsg = "the box length does not match": GoTo ExFail
-    If regName(0) = "" Then GoTo ExFail
-    If Not AddDimEquation(dm, ("""" & regName(0) & """") & " * 2", 0.08, 1) Then gMsg = "the box length equation did not evaluate": GoTo ExFail
+    If regName(0) = "" Then gMsg = "the parameter slot 0 is not bound (its dimension was omitted or failed)": GoTo ExFail
+    If Not AddDimEquation(dm, ("""" & regName(0) & """") & " * 2", 0.08, 1, 1#) Then gMsg = "the box length equation did not evaluate": GoTo ExFail
     swDoc.ClearSelection2 True
     Set sl = seg(1)
     sl.Select False
@@ -362,8 +521,9 @@ Function BuildPrim3() As String
     Dim seg As Variant
     Dim sl As Object
     Dim ci As Object
-    ok = OpenSketchOnPlane("XY")
+    ok = OpenSketchOnPlane(3, "XY")
     If Not ok Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo ExFail
+    If Not MapIsIdentity(3) Then gMsg = "frame adaptation: primitive replay on a non-identity sketch map is not implemented (primitive adaptation is batch 3); refusing to report created": GoTo ExFail
     Set ci = swSketchMgr.CreateCircleByRadius(0.0, 0.0, 0#, 0.04)
     ci.Select False
     Set dd = swDoc.AddDimension2(0#, 0#, 0#)
@@ -371,7 +531,7 @@ Function BuildPrim3() As String
     Set dm = dd.GetDimension2(0)
     If dm Is Nothing Then GoTo ExFail
     If Abs(dm.SystemValue - 0.04) > 0.000001 Then gMsg = "the cylinder radius does not match": GoTo ExFail
-    If Not AddDimEquation(dm, """width""", 0.04, 2) Then gMsg = "the cylinder radius equation did not evaluate": GoTo ExFail
+    If Not AddDimEquation(dm, """width""", 0.04, 2, 1#) Then gMsg = "the cylinder radius equation did not evaluate": GoTo ExFail
     Set skFeat = swSketchMgr.ActiveSketch
     If skFeat Is Nothing Then gMsg = "the primitive sketch was not created": GoTo ExFail
     primName = skFeat.Name
@@ -422,7 +582,7 @@ End Sub
 ' silently reinterpreted (docs/mapping.md, Orientation). The probe leaves
 ' the sketch open on success. On failure the probe sketch is closed,
 ' deleted as one owned feature, and the deletion is verified.
-Function OpenSketchOnPlane(ByVal which As String) As Boolean
+Function OpenSketchOnPlane(ByVal idx As Long, ByVal which As String) As Boolean
 Dim feat As SldWorks.Feature, skFeat As SldWorks.Feature, ok As Boolean
 Set feat = swDoc.FirstFeature
 Do While Not feat Is Nothing
@@ -433,11 +593,14 @@ swSketchMgr.InsertSketch True
 Set skFeat = swSketchMgr.ActiveSketch
 If skFeat Is Nothing Then
 gProbeLog = gProbeLog & feat.Name & ": no sketch opened; "
-ElseIf SketchFrameIs(which) Then
+ElseIf PlaneIsSource(which) Then
+ClearMap idx
+If AcceptAndPublish(idx, which, gProbeReason) Then
 OpenSketchOnPlane = True
 Exit Function
+End If
 Else
-gProbeLog = gProbeLog & feat.Name & ": " & FrameText() & "; "
+gProbeLog = gProbeLog & feat.Name & ": " & FrameText() & " strict-match=" & CStr(SketchFrameIs(which)) & "; "
 If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, "craft-bridge", "the probe sketch could not be confirmed deleted; probed: " & gProbeLog
 End If
 End If
@@ -461,13 +624,13 @@ swSketchMgr.InsertSketch True
 Set skFeat = swSketchMgr.ActiveSketch
 If skFeat Is Nothing Then
 gProbeLog = gProbeLog & feat.Name & ": no sketch opened; "
-ElseIf SketchFrameIs(which) Then
-gProbeLog = gProbeLog & feat.Name & ": " & FrameText() & "; "
+ElseIf PlaneIsSource(which) Then
+gProbeLog = gProbeLog & feat.Name & ": " & FrameText() & " strict-match=" & CStr(SketchFrameIs(which)) & "; "
 If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, "craft-bridge", "the probe sketch could not be confirmed deleted; probed: " & gProbeLog
 PlaneNameFor = feat.Name
 Exit Function
 Else
-gProbeLog = gProbeLog & feat.Name & ": " & FrameText() & "; "
+gProbeLog = gProbeLog & feat.Name & ": " & FrameText() & " strict-match=" & CStr(SketchFrameIs(which)) & "; "
 If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, "craft-bridge", "the probe sketch could not be confirmed deleted; probed: " & gProbeLog
 End If
 End If
@@ -476,15 +639,15 @@ Set feat = feat.GetNextFeature
 Loop
 End Function
 
-' The sketch frame must equal the SolidCraft frame for the plane exactly:
-' u and v exactly as SolidCraft defines them for the plane (its plane.rs
-' 29-34): XZ has v = -Z, n = +Y. The sketch origin at the model origin. The model-to-sketch
-' transform is row-major with rows = model axes in sketch coordinates, so
-' the sketch axes in model coordinates are its columns - the inverse
-' transform of the sketch unit vectors: u = (a0, a3, a6),
-' v = (a1, a4, a7), n = (a2, a5, a8) - and the translation
-' (a9, a10, a11) is the model origin in sketch coordinates, which must
-' vanish. Pinned against non-symmetric frames in tests/build_tests.rs.
+' The strict frame predicate (DIAGNOSTIC ONLY): the sketch frame exactly
+' equal to the SolidCraft frame for the plane (its plane.rs 29-34): XZ has
+' v = -Z, n = +Y; the sketch origin at the model origin. RETIRED from the
+' acceptance path (owner decision 2026-11-13, frame adaptation): acceptance
+' is PlaneIsSource plus the fail-closed map validation in AcceptAndPublish.
+' This predicate remains to report how close a probed frame came to strict
+' equality. The model-to-sketch transform is row-major with rows = model
+' axes in sketch coordinates, so the sketch axes in model coordinates are
+' its columns: u = (a0, a3, a6), v = (a1, a4, a7), n = (a2, a5, a8).
 Function SketchFrameIs(ByVal which As String) As Boolean
 Dim tr As Variant, a As Variant, ok As Boolean
 On Error Resume Next
@@ -501,6 +664,43 @@ Case "YZ"
 ok = VecIs(a(0), a(3), a(6), 0#, 1#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, 1#) And VecIs(a(2), a(5), a(8), 1#, 0#, 0#)
 End Select
 SketchFrameIs = ok
+End Function
+
+' The acceptance predicate (frame adaptation): the probe sketch must sit on
+' the geometric source plane - translation at the model origin and the
+' normal parallel to the source normal (either sign: the same geometric
+' plane). Strict frame equality is no longer required (owner decision
+' 2026-11-13); the adaptation map published by AcceptAndPublish is what
+' makes that safe. Tolerance 1e-6.
+Function PlaneIsSource(ByVal which As String) As Boolean
+Dim tr As Object
+Dim a As Variant
+Dim nx As Double
+Dim ny As Double
+Dim nz As Double
+On Error Resume Next
+PlaneIsSource = False
+Err.Clear
+Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
+If Err.Number <> 0 Then Exit Function
+Err.Clear
+a = tr.ArrayData
+If Err.Number <> 0 Then Exit Function
+If Abs(a(9)) > 0.000001 Or Abs(a(10)) > 0.000001 Or Abs(a(11)) > 0.000001 Then Exit Function
+nx = a(2)
+ny = a(5)
+nz = a(8)
+Select Case which
+Case "XY"
+If Abs(Abs(nz) - 1#) > 0.000001 Then Exit Function
+Case "XZ"
+If Abs(Abs(ny) - 1#) > 0.000001 Then Exit Function
+Case "YZ"
+If Abs(Abs(nx) - 1#) > 0.000001 Then Exit Function
+Case Else
+Exit Function
+End Select
+PlaneIsSource = True
 End Function
 
 ' Direction equality with sign, on normalized vectors: the transform may
@@ -746,6 +946,251 @@ OwnedDocTitle = ""
 If swDoc Is Nothing Then Exit Function
 OwnedDocTitle = "" & swDoc.GetTitle
 End Function
+' Accept a probed origin plane and publish its adaptation map for sketch
+' slot idx: the probe-sketch translation must vanish and the normal must
+' be parallel to the source normal (either sign) - the map and side come
+' from PublishMap's fail-closed validation. Any refusal carries its reason.
+Function AcceptAndPublish(ByVal idx As Long, ByVal which As String, ByRef reason As String) As Boolean
+Dim tr As Object
+Dim a As Variant
+Dim uPx As Double
+Dim uPy As Double
+Dim uPz As Double
+Dim vPx As Double
+Dim vPy As Double
+Dim vPz As Double
+Dim nPx As Double
+Dim nPy As Double
+Dim nPz As Double
+On Error Resume Next
+AcceptAndPublish = False
+reason = ""
+Select Case which
+Case "XY"
+uPx = 1#: uPy = 0#: uPz = 0#
+vPx = 0#: vPy = 1#: vPz = 0#
+nPx = 0#: nPy = 0#: nPz = 1#
+Case "XZ"
+uPx = 1#: uPy = 0#: uPz = 0#
+vPx = 0#: vPy = 0#: vPz = -1#
+nPx = 0#: nPy = 1#: nPz = 0#
+Case "YZ"
+uPx = 0#: uPy = 1#: uPz = 0#
+vPx = 0#: vPy = 0#: vPz = 1#
+nPx = 1#: nPy = 0#: nPz = 0#
+Case Else
+reason = "unknown source plane " & which
+Exit Function
+End Select
+Err.Clear
+Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
+If Err.Number <> 0 Then
+reason = "the transform could not be read: err " & Trim(Str(Err.Number))
+Exit Function
+End If
+Err.Clear
+a = tr.ArrayData
+If Err.Number <> 0 Then
+reason = "ArrayData could not be read: err " & Trim(Str(Err.Number))
+Exit Function
+End If
+If Abs(a(9)) > 0.000001 Or Abs(a(10)) > 0.000001 Or Abs(a(11)) > 0.000001 Then
+reason = "the probe sketch origin is " & Vec3Text(a(9), a(10), a(11)) & ", not the model origin"
+Exit Function
+End If
+If Not PublishMap(idx, uPx, uPy, uPz, vPx, vPy, vPz, nPx, nPy, nPz, reason) Then Exit Function
+AcceptAndPublish = True
+End Function
+
+' Invalidate one sketch slot's map (sketch deletion or re-probe). The
+' publication is transactional: nothing reads a map that is not valid.
+Sub ClearMap(ByVal idx As Long)
+gMapValid(idx) = False
+gMapSide(idx) = 0
+End Sub
+
+\' Runtime axis classification (frame adaptation): the SC u direction maps
+' to sketch (s,t) as (gMap00, gMap01), the SC v direction as (gMap10,
+' gMap11). For a signed-permutation map each lands axis-aligned: AxisClass
+' returns 0 when it lands on the s axis, 1 on the t axis, and -1 when the
+' map is not a permutation (bounded support: this seat only exhibits
+' permutation frames). AxisSign is the sign of the landed component.
+Function AxisClass(ByVal idx As Long, ByVal isHoriz As Boolean) As Long
+Dim c0 As Double
+Dim c1 As Double
+If isHoriz Then
+c0 = gMap00(idx)
+c1 = gMap01(idx)
+Else
+c0 = gMap10(idx)
+c1 = gMap11(idx)
+End If
+AxisClass = -1
+If Abs(Abs(c0) - 1#) <= 0.000001 And Abs(c1) <= 0.000001 Then AxisClass = 0
+If Abs(Abs(c1) - 1#) <= 0.000001 And Abs(c0) <= 0.000001 Then AxisClass = 1
+End Function
+
+Function AxisSign(ByVal idx As Long, ByVal isHoriz As Boolean, ByVal ax As Long) As Double
+Dim c As Double
+If isHoriz Then
+If ax = 0 Then c = gMap00(idx) Else c = gMap01(idx)
+Else
+If ax = 0 Then c = gMap10(idx) Else c = gMap11(idx)
+End If
+AxisSign = 1#
+If c < 0 Then AxisSign = -1#
+End Function
+
+\' The dimension text position is MODEL space (Phase 0, owner-verified):
+' convert a sketch (s,t) position through the stored frame to (X,Y,Z).
+Function SketchToModelX(ByVal idx As Long, ByVal s As Double, ByVal t As Double) As Double
+SketchToModelX = gFrame(idx, 9) + s * gFrame(idx, 0) + t * gFrame(idx, 3)
+End Function
+
+Function SketchToModelY(ByVal idx As Long, ByVal s As Double, ByVal t As Double) As Double
+SketchToModelY = gFrame(idx, 10) + s * gFrame(idx, 1) + t * gFrame(idx, 4)
+End Function
+
+Function SketchToModelZ(ByVal idx As Long, ByVal s As Double, ByVal t As Double) As Double
+SketchToModelZ = gFrame(idx, 11) + s * gFrame(idx, 2) + t * gFrame(idx, 5)
+End Function
+
+\' Feature guards (batch boundary): extrude, revolve and primitive replay
+' still assume the identity map on the source normal side - batches 2 and 3
+' replace this with the direction truth table and primitive adaptation.
+' Anything else is refused with a named reason and never reports created.
+Function MapIsIdentity(ByVal idx As Long) As Boolean
+MapIsIdentity = False
+If Not gMapValid(idx) Then Exit Function
+If gMapSide(idx) <> 1 Then Exit Function
+If Abs(gMap00(idx) - 1#) > 0.000001 Then Exit Function
+If Abs(gMap11(idx) - 1#) > 0.000001 Then Exit Function
+If Abs(gMap01(idx)) > 0.000001 Then Exit Function
+If Abs(gMap10(idx)) > 0.000001 Then Exit Function
+MapIsIdentity = True
+End Function
+
+' Frame adaptation map (owner decision 2026-11-13): each sketch step
+' publishes its own 2x2 map after its probe validates the frame; features
+' referencing an earlier sketch restore that sketch's state first. MapU/
+' MapV express SC (u,v) in the sketch's own (s,t): s = u(u_P.u') + v(v_P.u'),
+' t = u(u_P.v') + v(v_P.v'), as stored by PublishMap.
+Function MapU(ByVal idx As Long, ByVal u As Double, ByVal v As Double) As Double
+MapU = u * gMap00(idx) + v * gMap10(idx)
+End Function
+
+Function MapV(ByVal idx As Long, ByVal u As Double, ByVal v As Double) As Double
+MapV = u * gMap01(idx) + v * gMap11(idx)
+End Function
+
+' Publish the map for sketch slot idx from the probed frame. Fail-closed
+' and transactional: validity is cleared first and set only after the
+' complete validation passes - finite entries, scale ~ 1 (entry 12), unit
+' axes, mutual orthogonality, and a right-handed 3D frame (u x v = n). A
+' proper 3D frame may still give an improper 2D map when the normal
+' opposes the source normal - that is supported and recorded in gMapSide.
+' Tolerances: 1e-6 on all checks.
+Function PublishMap(ByVal idx As Long, ByVal uPx As Double, ByVal uPy As Double, ByVal uPz As Double, ByVal vPx As Double, ByVal vPy As Double, ByVal vPz As Double, ByVal nPx As Double, ByVal nPy As Double, ByVal nPz As Double, ByRef reason As String) As Boolean
+Dim tr As Object
+Dim a As Variant
+Dim ux As Double
+Dim uy As Double
+Dim uz As Double
+Dim vx As Double
+Dim vy As Double
+Dim vz As Double
+Dim nx As Double
+Dim ny As Double
+Dim nz As Double
+Dim sc As Double
+Dim ub As Long
+Dim i As Long
+On Error Resume Next
+PublishMap = False
+reason = ""
+gMapValid(idx) = False
+Err.Clear
+Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
+If Err.Number <> 0 Then
+reason = "the transform could not be read: err " & Trim(Str(Err.Number))
+Exit Function
+End If
+Err.Clear
+a = tr.ArrayData
+If Err.Number <> 0 Then
+reason = "ArrayData could not be read: err " & Trim(Str(Err.Number))
+Exit Function
+End If
+Err.Clear
+ub = UBound(a)
+If Err.Number <> 0 Then
+reason = "ArrayData bounds could not be read: err " & Trim(Str(Err.Number))
+Exit Function
+End If
+If ub < 12 Then
+reason = "ArrayData has only " & Trim(Str(ub + 1)) & " entries; scale is missing"
+Exit Function
+End If
+For i = 0 To ub
+If Not IsNumeric(a(i)) Then
+reason = "entry " & Trim(Str(i)) & " is not numeric"
+Exit Function
+End If
+Next i
+ux = a(0)
+uy = a(3)
+uz = a(6)
+vx = a(1)
+vy = a(4)
+vz = a(7)
+nx = a(2)
+ny = a(5)
+nz = a(8)
+sc = a(12)
+If Abs(sc - 1#) > 0.000001 Then
+reason = "scale is " & Trim(Str(sc)) & ", not 1"
+Exit Function
+End If
+If Abs(Sqr(ux * ux + uy * uy + uz * uz) - 1#) > 0.000001 Then reason = "u is not unit": Exit Function
+If Abs(Sqr(vx * vx + vy * vy + vz * vz) - 1#) > 0.000001 Then reason = "v is not unit": Exit Function
+If Abs(Sqr(nx * nx + ny * ny + nz * nz) - 1#) > 0.000001 Then reason = "n is not unit": Exit Function
+If Abs(ux * vx + uy * vy + uz * vz) > 0.000001 Then reason = "u and v are not orthogonal": Exit Function
+If Abs(ux * nx + uy * ny + uz * nz) > 0.000001 Then reason = "u and n are not orthogonal": Exit Function
+If Abs(vx * nx + vy * ny + vz * nz) > 0.000001 Then reason = "v and n are not orthogonal": Exit Function
+If Abs((uy * vz - uz * vy) - nx) > 0.000001 Then reason = "u x v does not equal n (x) - the 3D frame is not right-handed": Exit Function
+If Abs((uz * vx - ux * vz) - ny) > 0.000001 Then reason = "u x v does not equal n (y) - the 3D frame is not right-handed": Exit Function
+If Abs((ux * vy - uy * vx) - nz) > 0.000001 Then reason = "u x v does not equal n (z) - the 3D frame is not right-handed": Exit Function
+gMap00(idx) = uPx * ux + uPy * uy + uPz * uz
+gMap10(idx) = vPx * ux + vPy * uy + vPz * uz
+gMap01(idx) = uPx * vx + uPy * vy + uPz * vz
+gMap11(idx) = vPx * vx + vPy * vy + vPz * vz
+If Abs(nx * nPx + ny * nPy + nz * nPz) > 0 Then
+gMapSide(idx) = 1
+If nx * nPx + ny * nPy + nz * nPz < 0 Then gMapSide(idx) = -1
+Else
+reason = "the normal is perpendicular to the source normal"
+Exit Function
+End If
+If Abs(nx * nPx + ny * nPy + nz * nPz) < 0.999999 Then
+reason = "the normal is only " & Trim(Str(nx * nPx + ny * nPy + nz * nPz)) & " parallel to the source normal"
+Exit Function
+End If
+gFrame(idx, 0) = ux
+gFrame(idx, 1) = uy
+gFrame(idx, 2) = uz
+gFrame(idx, 3) = vx
+gFrame(idx, 4) = vy
+gFrame(idx, 5) = vz
+gFrame(idx, 6) = nx
+gFrame(idx, 7) = ny
+gFrame(idx, 8) = nz
+gFrame(idx, 9) = a(9)
+gFrame(idx, 10) = a(10)
+gFrame(idx, 11) = a(11)
+gMapValid(idx) = True
+PublishMap = True
+End Function
+
 ' The report path travels in a one-line file under the TEMP directory that
 ' the host rewrites before every run: preferred over CRAFT_BRIDGE_REPORT,
 ' because the macro runs inside the SolidWorks process, which may be an
@@ -840,14 +1285,18 @@ End Function
 ' Add an equation driving a dimension and verify it evaluated: the
 ' dimension name is captured at runtime, the value must match the
 ' expectation after a rebuild. Never presence alone.
-Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long) As Boolean
+Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long, ByVal sgn As Double) As Boolean
 On Error GoTo EqFail
 Dim eqMgr As Object
 Dim eqText As String
 Dim idx As Long
 Set eqMgr = swDoc.GetEquationMgr
 If eqMgr Is Nothing Then gMsg = "the equation manager is missing": GoTo EqFail
+If sgn < 0 Then
+eqText = """" & dm.Name & """=-1 * (" & rhs & ")"
+Else
 eqText = """" & dm.Name & """=" & rhs
+End If
 idx = eqMgr.Add(-1, eqText)
 If idx < 0 Then gMsg = "the dimension equation was not accepted": GoTo EqFail
 swDoc.EditRebuild3

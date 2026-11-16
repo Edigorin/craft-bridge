@@ -1,4 +1,4 @@
-sha256=384315e61acf08e2eb9d22246cf740a4c251aaa11e22345ff73fb273988d901e
+sha256=5046dcce884238fd0610bd1b49529750d2f392f1e2dacd7d3c231404a204abc3
 min_features=3
 volume_compare=skip
 # reference.step is a placeholder body: mass comparison activates when

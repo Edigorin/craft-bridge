@@ -186,7 +186,15 @@ pub fn emit(
     out.push_str("Dim reportPath As String\n");
     out.push_str("Dim gMsg As String\n");
     out.push_str("Dim gPlane As String\n");
-    out.push_str("Dim gProbeLog As String\n");
+    out.push_str("Dim gProbeLog As String\nDim gProbeReason As String\n");
+    out.push_str(
+        "Dim gMap00(0 To 30) As Double
+Dim gMap01(0 To 30) As Double
+Dim gMap10(0 To 30) As Double
+Dim gMap11(0 To 30) As Double
+Dim gMapValid(0 To 30) As Boolean
+Dim gMapSide(0 To 30) As Long\n",
+    );
     out.push_str("Dim gDoc As Object\n");
     out.push_str("Dim gFeatMgr As Object\n");
     let max_slot = steps
@@ -260,6 +268,9 @@ pub fn emit(
     out.push_str(
         "\n    ' ---- fresh part from the default template (before recipe step 0) ----\n\
          Set swApp = Application.SldWorks\n\
+         gDimToggle = swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate)\n\
+         gDimToggleSaved = True\n\
+         swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, False\n\
          template = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)\n\
          If template = \"\" Then Err.Raise vbObjectError + 514, \"craft-bridge\", \"no default part template is configured\"\n\
          Set swDoc = swApp.NewDocument(template, 0, 0, 0)\n\
@@ -398,7 +409,8 @@ pub fn emit(
         }
     }
 
-    out.push_str("    cleanupMode = CloseMode()\n    If cleanupMode = \"close\" Then\n    CloseOwnedDoc closedOk\n    If closedOk Then\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"ok\"\"}\"\n    Else\n    WriteStep stepIdx, \"close\", \"failed\", \"the owned document could not be confirmed closed\"\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"failed\"\"}\"\n    End If\n    ElseIf cleanupMode = \"keep\" Then\n    WriteStep stepIdx, \"owned-document\", \"kept-open\", OwnedDocTitle()\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"ok\"\"}\"\n    Else\n    WriteStep stepIdx, \"close-mode\", \"failed\", \"the cleanup mode could not be established\"\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"failed\"\"}\"\n    End If\n");
+    out.push_str("    If gDimToggleSaved And Not swApp Is Nothing Then swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle
+    cleanupMode = CloseMode()\n    If cleanupMode = \"close\" Then\n    CloseOwnedDoc closedOk\n    If closedOk Then\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"ok\"\"}\"\n    Else\n    WriteStep stepIdx, \"close\", \"failed\", \"the owned document could not be confirmed closed\"\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"failed\"\"}\"\n    End If\n    ElseIf cleanupMode = \"keep\" Then\n    WriteStep stepIdx, \"owned-document\", \"kept-open\", OwnedDocTitle()\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"ok\"\"}\"\n    Else\n    WriteStep stepIdx, \"close-mode\", \"failed\", \"the cleanup mode could not be established\"\n    WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"failed\"\"}\"\n    End If\n");
     out.push_str("    Exit Sub\n\n");
     out.push_str("Fail:\n");
     out.push_str("    ' Capture the error FIRST: executing On Error resets Err.\n");
@@ -411,7 +423,8 @@ pub fn emit(
     out.push_str("    If reportPath <> \"\" Then\n");
     out.push_str("        WriteStep stepIdx, \"macro\", \"failed\", \"err \" & Trim(Str(errNum)) & \": \" & errMsg\n");
 
-    out.push_str("    End If\n    cleanupMode = CloseMode()\n    If cleanupMode = \"close\" Then\n    CloseOwnedDoc closedOk\n    End If\n    If reportPath <> \"\" Then\n        WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"failed\"\"}\"\n    End If\nEnd Sub\n\n");
+    out.push_str("    End If\n        If gDimToggleSaved And Not swApp Is Nothing Then swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle
+    cleanupMode = CloseMode()\n    If cleanupMode = \"close\" Then\n    CloseOwnedDoc closedOk\n    End If\n    If reportPath <> \"\" Then\n        WriteLine \"{\"\"type\"\":\"\"summary\"\",\"\"status\"\":\"\"failed\"\"}\"\n    End If\nEnd Sub\n\n");
 
     // ---- per-sketch builders ----
     for (index, sk) in &sketches {
@@ -504,7 +517,7 @@ pub fn emit(
          ' silently reinterpreted (docs/mapping.md, Orientation). The probe leaves\n\
          ' the sketch open on success. On failure the probe sketch is closed,\n\
          ' deleted as one owned feature, and the deletion is verified.\n\
-         Function OpenSketchOnPlane(ByVal which As String) As Boolean\n\
+         Function OpenSketchOnPlane(ByVal idx As Long, ByVal which As String) As Boolean\n\
              Dim feat As SldWorks.Feature, skFeat As SldWorks.Feature, ok As Boolean\n\
              Set feat = swDoc.FirstFeature\n\
              Do While Not feat Is Nothing\n\
@@ -515,11 +528,14 @@ pub fn emit(
                          Set skFeat = swSketchMgr.ActiveSketch\n\
                          If skFeat Is Nothing Then\n\
                              gProbeLog = gProbeLog & feat.Name & \": no sketch opened; \"\n\
-                         ElseIf SketchFrameIs(which) Then\n\
-                             OpenSketchOnPlane = True\n\
-                             Exit Function\n\
+                         ElseIf PlaneIsSource(which) Then\n\
+                             ClearMap idx
+If AcceptAndPublish(idx, which, gProbeReason) Then
+OpenSketchOnPlane = True
+Exit Function
+End If\n\
                          Else\n\
-                             gProbeLog = gProbeLog & feat.Name & \": \" & FrameText() & \"; \"\n\
+                             gProbeLog = gProbeLog & feat.Name & \": \" & FrameText() & \" strict-match=\" & CStr(SketchFrameIs(which)) & \"; \"\n\
                              If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, \"craft-bridge\", \"the probe sketch could not be confirmed deleted; probed: \" & gProbeLog\n\
                          End If\n\
                      End If\n\
@@ -543,13 +559,13 @@ pub fn emit(
                          Set skFeat = swSketchMgr.ActiveSketch\n\
                          If skFeat Is Nothing Then\n\
                              gProbeLog = gProbeLog & feat.Name & \": no sketch opened; \"\n\
-                         ElseIf SketchFrameIs(which) Then\n\
-                             gProbeLog = gProbeLog & feat.Name & \": \" & FrameText() & \"; \"\n\
+                         ElseIf PlaneIsSource(which) Then\n\
+                             gProbeLog = gProbeLog & feat.Name & \": \" & FrameText() & \" strict-match=\" & CStr(SketchFrameIs(which)) & \"; \"\n\
                              If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, \"craft-bridge\", \"the probe sketch could not be confirmed deleted; probed: \" & gProbeLog\n\
                              PlaneNameFor = feat.Name\n\
                              Exit Function\n\
                          Else\n\
-                             gProbeLog = gProbeLog & feat.Name & \": \" & FrameText() & \"; \"\n\
+                             gProbeLog = gProbeLog & feat.Name & \": \" & FrameText() & \" strict-match=\" & CStr(SketchFrameIs(which)) & \"; \"\n\
                              If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, \"craft-bridge\", \"the probe sketch could not be confirmed deleted; probed: \" & gProbeLog\n\
                          End If\n\
                      End If\n\
@@ -558,32 +574,69 @@ pub fn emit(
              Loop\n\
          End Function\n\
 \n\
-         ' The sketch frame must equal the SolidCraft frame for the plane exactly:\n\
-         ' u and v exactly as SolidCraft defines them for the plane (its plane.rs\n\
-         ' 29-34): XZ has v = -Z, n = +Y. The sketch origin at the model origin. The model-to-sketch\n\
-         ' transform is row-major with rows = model axes in sketch coordinates, so\n\
-         ' the sketch axes in model coordinates are its columns - the inverse\n\
-         ' transform of the sketch unit vectors: u = (a0, a3, a6),\n\
-         ' v = (a1, a4, a7), n = (a2, a5, a8) - and the translation\n\
-         ' (a9, a10, a11) is the model origin in sketch coordinates, which must\n\
-         ' vanish. Pinned against non-symmetric frames in tests/build_tests.rs.\n\
-         Function SketchFrameIs(ByVal which As String) As Boolean\n\
-             Dim tr As Variant, a As Variant, ok As Boolean\n\
-             On Error Resume Next\n\
-             Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform\n\
-             If Err.Number <> 0 Then Exit Function\n\
-             a = tr.ArrayData\n\
-             If Abs(a(9)) > 0.000001 Or Abs(a(10)) > 0.000001 Or Abs(a(11)) > 0.000001 Then Exit Function\n\
-             Select Case which\n\
-                 Case \"XY\"\n\
-                     ok = VecIs(a(0), a(3), a(6), 1#, 0#, 0#) And VecIs(a(1), a(4), a(7), 0#, 1#, 0#) And VecIs(a(2), a(5), a(8), 0#, 0#, 1#)\n\
-                 Case \"XZ\"\n\
-                     ok = VecIs(a(0), a(3), a(6), 1#, 0#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, -1#) And VecIs(a(2), a(5), a(8), 0#, 1#, 0#)\n\
-                 Case \"YZ\"\n\
-                     ok = VecIs(a(0), a(3), a(6), 0#, 1#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, 1#) And VecIs(a(2), a(5), a(8), 1#, 0#, 0#)\n\
-             End Select\n\
-             SketchFrameIs = ok\n\
-         End Function\n\
+         ' The strict frame predicate (DIAGNOSTIC ONLY): the sketch frame exactly
+' equal to the SolidCraft frame for the plane (its plane.rs 29-34): XZ has
+' v = -Z, n = +Y; the sketch origin at the model origin. RETIRED from the
+' acceptance path (owner decision 2026-11-13, frame adaptation): acceptance
+' is PlaneIsSource plus the fail-closed map validation in AcceptAndPublish.
+' This predicate remains to report how close a probed frame came to strict
+' equality. The model-to-sketch transform is row-major with rows = model
+' axes in sketch coordinates, so the sketch axes in model coordinates are
+' its columns: u = (a0, a3, a6), v = (a1, a4, a7), n = (a2, a5, a8).
+Function SketchFrameIs(ByVal which As String) As Boolean
+Dim tr As Variant, a As Variant, ok As Boolean
+On Error Resume Next
+Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
+If Err.Number <> 0 Then Exit Function
+a = tr.ArrayData
+If Abs(a(9)) > 0.000001 Or Abs(a(10)) > 0.000001 Or Abs(a(11)) > 0.000001 Then Exit Function
+Select Case which
+Case \"XY\"
+ok = VecIs(a(0), a(3), a(6), 1#, 0#, 0#) And VecIs(a(1), a(4), a(7), 0#, 1#, 0#) And VecIs(a(2), a(5), a(8), 0#, 0#, 1#)
+Case \"XZ\"
+ok = VecIs(a(0), a(3), a(6), 1#, 0#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, -1#) And VecIs(a(2), a(5), a(8), 0#, 1#, 0#)
+Case \"YZ\"
+ok = VecIs(a(0), a(3), a(6), 0#, 1#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, 1#) And VecIs(a(2), a(5), a(8), 1#, 0#, 0#)
+End Select
+SketchFrameIs = ok
+End Function
+
+' The acceptance predicate (frame adaptation): the probe sketch must sit on
+' the geometric source plane - translation at the model origin and the
+' normal parallel to the source normal (either sign: the same geometric
+' plane). Strict frame equality is no longer required (owner decision
+' 2026-11-13); the adaptation map published by AcceptAndPublish is what
+' makes that safe. Tolerance 1e-6.
+Function PlaneIsSource(ByVal which As String) As Boolean
+Dim tr As Object
+Dim a As Variant
+Dim nx As Double
+Dim ny As Double
+Dim nz As Double
+On Error Resume Next
+PlaneIsSource = False
+Err.Clear
+Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
+If Err.Number <> 0 Then Exit Function
+Err.Clear
+a = tr.ArrayData
+If Err.Number <> 0 Then Exit Function
+If Abs(a(9)) > 0.000001 Or Abs(a(10)) > 0.000001 Or Abs(a(11)) > 0.000001 Then Exit Function
+nx = a(2)
+ny = a(5)
+nz = a(8)
+Select Case which
+Case \"XY\"
+If Abs(Abs(nz) - 1#) > 0.000001 Then Exit Function
+Case \"XZ\"
+If Abs(Abs(ny) - 1#) > 0.000001 Then Exit Function
+Case \"YZ\"
+If Abs(Abs(nx) - 1#) > 0.000001 Then Exit Function
+Case Else
+Exit Function
+End Select
+PlaneIsSource = True
+End Function\n\
 \n\
          ' Direction equality with sign, on normalized vectors: the transform may\n\
          ' carry a uniform scale, the axes must still be exactly the expected ones.\n\
@@ -830,6 +883,251 @@ If swDoc Is Nothing Then Exit Function
 OwnedDocTitle = \"\" & swDoc.GetTitle
 End Function\n\
 
+' Accept a probed origin plane and publish its adaptation map for sketch
+' slot idx: the probe-sketch translation must vanish and the normal must
+' be parallel to the source normal (either sign) - the map and side come
+' from PublishMap's fail-closed validation. Any refusal carries its reason.
+Function AcceptAndPublish(ByVal idx As Long, ByVal which As String, ByRef reason As String) As Boolean
+Dim tr As Object
+Dim a As Variant
+Dim uPx As Double
+Dim uPy As Double
+Dim uPz As Double
+Dim vPx As Double
+Dim vPy As Double
+Dim vPz As Double
+Dim nPx As Double
+Dim nPy As Double
+Dim nPz As Double
+On Error Resume Next
+AcceptAndPublish = False
+reason = \"\"
+Select Case which
+Case \"XY\"
+uPx = 1#: uPy = 0#: uPz = 0#
+vPx = 0#: vPy = 1#: vPz = 0#
+nPx = 0#: nPy = 0#: nPz = 1#
+Case \"XZ\"
+uPx = 1#: uPy = 0#: uPz = 0#
+vPx = 0#: vPy = 0#: vPz = -1#
+nPx = 0#: nPy = 1#: nPz = 0#
+Case \"YZ\"
+uPx = 0#: uPy = 1#: uPz = 0#
+vPx = 0#: vPy = 0#: vPz = 1#
+nPx = 1#: nPy = 0#: nPz = 0#
+Case Else
+reason = \"unknown source plane \" & which
+Exit Function
+End Select
+Err.Clear
+Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
+If Err.Number <> 0 Then
+reason = \"the transform could not be read: err \" & Trim(Str(Err.Number))
+Exit Function
+End If
+Err.Clear
+a = tr.ArrayData
+If Err.Number <> 0 Then
+reason = \"ArrayData could not be read: err \" & Trim(Str(Err.Number))
+Exit Function
+End If
+If Abs(a(9)) > 0.000001 Or Abs(a(10)) > 0.000001 Or Abs(a(11)) > 0.000001 Then
+reason = \"the probe sketch origin is \" & Vec3Text(a(9), a(10), a(11)) & \", not the model origin\"
+Exit Function
+End If
+If Not PublishMap(idx, uPx, uPy, uPz, vPx, vPy, vPz, nPx, nPy, nPz, reason) Then Exit Function
+AcceptAndPublish = True
+End Function
+
+' Invalidate one sketch slot's map (sketch deletion or re-probe). The
+' publication is transactional: nothing reads a map that is not valid.
+Sub ClearMap(ByVal idx As Long)
+gMapValid(idx) = False
+gMapSide(idx) = 0
+End Sub
+
+\\' Runtime axis classification (frame adaptation): the SC u direction maps
+' to sketch (s,t) as (gMap00, gMap01), the SC v direction as (gMap10,
+' gMap11). For a signed-permutation map each lands axis-aligned: AxisClass
+' returns 0 when it lands on the s axis, 1 on the t axis, and -1 when the
+' map is not a permutation (bounded support: this seat only exhibits
+' permutation frames). AxisSign is the sign of the landed component.
+Function AxisClass(ByVal idx As Long, ByVal isHoriz As Boolean) As Long
+Dim c0 As Double
+Dim c1 As Double
+If isHoriz Then
+c0 = gMap00(idx)
+c1 = gMap01(idx)
+Else
+c0 = gMap10(idx)
+c1 = gMap11(idx)
+End If
+AxisClass = -1
+If Abs(Abs(c0) - 1#) <= 0.000001 And Abs(c1) <= 0.000001 Then AxisClass = 0
+If Abs(Abs(c1) - 1#) <= 0.000001 And Abs(c0) <= 0.000001 Then AxisClass = 1
+End Function
+
+Function AxisSign(ByVal idx As Long, ByVal isHoriz As Boolean, ByVal ax As Long) As Double
+Dim c As Double
+If isHoriz Then
+If ax = 0 Then c = gMap00(idx) Else c = gMap01(idx)
+Else
+If ax = 0 Then c = gMap10(idx) Else c = gMap11(idx)
+End If
+AxisSign = 1#
+If c < 0 Then AxisSign = -1#
+End Function
+
+\\' The dimension text position is MODEL space (Phase 0, owner-verified):
+' convert a sketch (s,t) position through the stored frame to (X,Y,Z).
+Function SketchToModelX(ByVal idx As Long, ByVal s As Double, ByVal t As Double) As Double
+SketchToModelX = gFrame(idx, 9) + s * gFrame(idx, 0) + t * gFrame(idx, 3)
+End Function
+
+Function SketchToModelY(ByVal idx As Long, ByVal s As Double, ByVal t As Double) As Double
+SketchToModelY = gFrame(idx, 10) + s * gFrame(idx, 1) + t * gFrame(idx, 4)
+End Function
+
+Function SketchToModelZ(ByVal idx As Long, ByVal s As Double, ByVal t As Double) As Double
+SketchToModelZ = gFrame(idx, 11) + s * gFrame(idx, 2) + t * gFrame(idx, 5)
+End Function
+
+\\' Feature guards (batch boundary): extrude, revolve and primitive replay
+' still assume the identity map on the source normal side - batches 2 and 3
+' replace this with the direction truth table and primitive adaptation.
+' Anything else is refused with a named reason and never reports created.
+Function MapIsIdentity(ByVal idx As Long) As Boolean
+MapIsIdentity = False
+If Not gMapValid(idx) Then Exit Function
+If gMapSide(idx) <> 1 Then Exit Function
+If Abs(gMap00(idx) - 1#) > 0.000001 Then Exit Function
+If Abs(gMap11(idx) - 1#) > 0.000001 Then Exit Function
+If Abs(gMap01(idx)) > 0.000001 Then Exit Function
+If Abs(gMap10(idx)) > 0.000001 Then Exit Function
+MapIsIdentity = True
+End Function
+
+' Frame adaptation map (owner decision 2026-11-13): each sketch step
+' publishes its own 2x2 map after its probe validates the frame; features
+' referencing an earlier sketch restore that sketch's state first. MapU/
+' MapV express SC (u,v) in the sketch's own (s,t): s = u(u_P.u') + v(v_P.u'),
+' t = u(u_P.v') + v(v_P.v'), as stored by PublishMap.
+Function MapU(ByVal idx As Long, ByVal u As Double, ByVal v As Double) As Double
+MapU = u * gMap00(idx) + v * gMap10(idx)
+End Function
+
+Function MapV(ByVal idx As Long, ByVal u As Double, ByVal v As Double) As Double
+MapV = u * gMap01(idx) + v * gMap11(idx)
+End Function
+
+' Publish the map for sketch slot idx from the probed frame. Fail-closed
+' and transactional: validity is cleared first and set only after the
+' complete validation passes - finite entries, scale ~ 1 (entry 12), unit
+' axes, mutual orthogonality, and a right-handed 3D frame (u x v = n). A
+' proper 3D frame may still give an improper 2D map when the normal
+' opposes the source normal - that is supported and recorded in gMapSide.
+' Tolerances: 1e-6 on all checks.
+Function PublishMap(ByVal idx As Long, ByVal uPx As Double, ByVal uPy As Double, ByVal uPz As Double, ByVal vPx As Double, ByVal vPy As Double, ByVal vPz As Double, ByVal nPx As Double, ByVal nPy As Double, ByVal nPz As Double, ByRef reason As String) As Boolean
+Dim tr As Object
+Dim a As Variant
+Dim ux As Double
+Dim uy As Double
+Dim uz As Double
+Dim vx As Double
+Dim vy As Double
+Dim vz As Double
+Dim nx As Double
+Dim ny As Double
+Dim nz As Double
+Dim sc As Double
+Dim ub As Long
+Dim i As Long
+On Error Resume Next
+PublishMap = False
+reason = \"\"
+gMapValid(idx) = False
+Err.Clear
+Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
+If Err.Number <> 0 Then
+reason = \"the transform could not be read: err \" & Trim(Str(Err.Number))
+Exit Function
+End If
+Err.Clear
+a = tr.ArrayData
+If Err.Number <> 0 Then
+reason = \"ArrayData could not be read: err \" & Trim(Str(Err.Number))
+Exit Function
+End If
+Err.Clear
+ub = UBound(a)
+If Err.Number <> 0 Then
+reason = \"ArrayData bounds could not be read: err \" & Trim(Str(Err.Number))
+Exit Function
+End If
+If ub < 12 Then
+reason = \"ArrayData has only \" & Trim(Str(ub + 1)) & \" entries; scale is missing\"
+Exit Function
+End If
+For i = 0 To ub
+If Not IsNumeric(a(i)) Then
+reason = \"entry \" & Trim(Str(i)) & \" is not numeric\"
+Exit Function
+End If
+Next i
+ux = a(0)
+uy = a(3)
+uz = a(6)
+vx = a(1)
+vy = a(4)
+vz = a(7)
+nx = a(2)
+ny = a(5)
+nz = a(8)
+sc = a(12)
+If Abs(sc - 1#) > 0.000001 Then
+reason = \"scale is \" & Trim(Str(sc)) & \", not 1\"
+Exit Function
+End If
+If Abs(Sqr(ux * ux + uy * uy + uz * uz) - 1#) > 0.000001 Then reason = \"u is not unit\": Exit Function
+If Abs(Sqr(vx * vx + vy * vy + vz * vz) - 1#) > 0.000001 Then reason = \"v is not unit\": Exit Function
+If Abs(Sqr(nx * nx + ny * ny + nz * nz) - 1#) > 0.000001 Then reason = \"n is not unit\": Exit Function
+If Abs(ux * vx + uy * vy + uz * vz) > 0.000001 Then reason = \"u and v are not orthogonal\": Exit Function
+If Abs(ux * nx + uy * ny + uz * nz) > 0.000001 Then reason = \"u and n are not orthogonal\": Exit Function
+If Abs(vx * nx + vy * ny + vz * nz) > 0.000001 Then reason = \"v and n are not orthogonal\": Exit Function
+If Abs((uy * vz - uz * vy) - nx) > 0.000001 Then reason = \"u x v does not equal n (x) - the 3D frame is not right-handed\": Exit Function
+If Abs((uz * vx - ux * vz) - ny) > 0.000001 Then reason = \"u x v does not equal n (y) - the 3D frame is not right-handed\": Exit Function
+If Abs((ux * vy - uy * vx) - nz) > 0.000001 Then reason = \"u x v does not equal n (z) - the 3D frame is not right-handed\": Exit Function
+gMap00(idx) = uPx * ux + uPy * uy + uPz * uz
+gMap10(idx) = vPx * ux + vPy * uy + vPz * uz
+gMap01(idx) = uPx * vx + uPy * vy + uPz * vz
+gMap11(idx) = vPx * vx + vPy * vy + vPz * vz
+If Abs(nx * nPx + ny * nPy + nz * nPz) > 0 Then
+gMapSide(idx) = 1
+If nx * nPx + ny * nPy + nz * nPz < 0 Then gMapSide(idx) = -1
+Else
+reason = \"the normal is perpendicular to the source normal\"
+Exit Function
+End If
+If Abs(nx * nPx + ny * nPy + nz * nPz) < 0.999999 Then
+reason = \"the normal is only \" & Trim(Str(nx * nPx + ny * nPy + nz * nPz)) & \" parallel to the source normal\"
+Exit Function
+End If
+gFrame(idx, 0) = ux
+gFrame(idx, 1) = uy
+gFrame(idx, 2) = uz
+gFrame(idx, 3) = vx
+gFrame(idx, 4) = vy
+gFrame(idx, 5) = vz
+gFrame(idx, 6) = nx
+gFrame(idx, 7) = ny
+gFrame(idx, 8) = nz
+gFrame(idx, 9) = a(9)
+gFrame(idx, 10) = a(10)
+gFrame(idx, 11) = a(11)
+gMapValid(idx) = True
+PublishMap = True
+End Function
+
 ' The report path travels in a one-line file under the TEMP directory that
 ' the host rewrites before every run: preferred over CRAFT_BRIDGE_REPORT,
 ' because the macro runs inside the SolidWorks process, which may be an
@@ -924,14 +1222,18 @@ End Function\n\
          ' Add an equation driving a dimension and verify it evaluated: the\n\
          ' dimension name is captured at runtime, the value must match the\n\
          ' expectation after a rebuild. Never presence alone.\n\
-         Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long) As Boolean
+         Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long, ByVal sgn As Double) As Boolean
 On Error GoTo EqFail
 Dim eqMgr As Object
 Dim eqText As String
 Dim idx As Long
 Set eqMgr = swDoc.GetEquationMgr
 If eqMgr Is Nothing Then gMsg = \"the equation manager is missing\": GoTo EqFail
+If sgn < 0 Then
+eqText = \"\"\"\" & dm.Name & \"\"\"=-1 * (\" & rhs & \")\"
+Else
 eqText = \"\"\"\" & dm.Name & \"\"\"=\" & rhs
+End If
 idx = eqMgr.Add(-1, eqText)
 If idx < 0 Then gMsg = \"the dimension equation was not accepted\": GoTo EqFail
 swDoc.EditRebuild3
@@ -972,10 +1274,11 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     };
     out.push_str(&format!("' Sketch step {index}: {}\n", vb_lit(&sk.name)));
     out.push_str(&format!(
-        "Function BuildSketch{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim skFeat As SldWorks.Feature\n"
+        "Function BuildSketch{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim skFeat As SldWorks.Feature\n    gMsg = \"\"\n    gOmit = \"\"\n"
     ));
     out.push_str(&format!(
-        "    ok = OpenSketchOnPlane({})\n",
+        "    ok = OpenSketchOnPlane({}, {})\n",
+        index,
         vb_lit(plane_code(sk.plane))
     ));
     out.push_str(&format!(
@@ -992,7 +1295,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     ));
     out.push_str("    swSketchMgr.InsertSketch True\n");
     out.push_str(&format!(
-        "    gMsg = {}\n    BuildSketch{index} = \"{}\"\n    Exit Function\n\n",
+        "    gMsg = {}\n    BuildSketch{index} = \"{}\"\n    If gOmit <> \"\" Then\n        gMsg = gMsg & \" | omitted: \" & gOmit\n        BuildSketch{index} = \"degraded\"\n    End If\n    Exit Function\n\n",
         vb_lit(&initial_msg),
         initial_status
     ));
@@ -1000,14 +1303,16 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
         "Degrade:\n\
              ' Restore, do not merely delete relations: wipe the sketch contents,\n\
              ' redraw at the stored coordinates, reapply driving dimensions, verify again.\n\
-             CleanSketch",
+             ' CleanSketch revalidates the whole cycle: map invalidated first, the\n\
+             ' deletion verified, the frame re-probed and the sketch identity\n\
+             ' reacquired; its refusal fails the sketch with the named reason.\n",
     );
     out.push_str(&format!(
-        "{index}\n    DrawGeometry{index}\n    If Not Dims{index}() Then GoTo SketchFailed\n    If Not VerifySketch{index}() Then GoTo SketchFailed\n"
+        "    If Not CleanSketch{index}() Then GoTo SketchFailed\n    DrawGeometry{index}\n    If Not Dims{index}() Then GoTo SketchFailed\n    If Not VerifySketch{index}() Then GoTo SketchFailed\n"
     ));
     out.push_str("    swSketchMgr.InsertSketch True\n");
     out.push_str(&format!(
-        "    gMsg = \"rebuilt as geometry plus driving dimensions\"\n    BuildSketch{index} = \"degraded\"\n    Exit Function\n\n"
+        "    gMsg = \"rebuilt as geometry plus driving dimensions\"\n    If gOmit <> \"\" Then gMsg = gMsg & \" | omitted: \" & gOmit\n    BuildSketch{index} = \"degraded\"\n    Exit Function\n\n"
     ));
     out.push_str("SketchFailed:\n    On Error Resume Next\n    CloseSketchIfOpen\n");
     out.push_str(&format!(
@@ -1016,21 +1321,34 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
 
     // DrawGeometry
     out.push_str(&format!("Sub DrawGeometry{index}()\n"));
+    // Coordinates go through the sketch's own adaptation map (frame
+    // adaptation): SC (u,v) -> (s,t) at runtime. Point handles use the
+    // object-returning GetStartPoint2/GetEndPoint2/GetCenterPoint2 forms
+    // the seat pinned - the legacy forms return Double() arrays and cannot
+    // be selected.
     for (i, l) in sk.lines.iter().enumerate() {
         let a = sk.points[l.a];
         let b = sk.points[l.b];
         out.push_str(&format!(
-            "    Set sl{index}({i}) = swSketchMgr.CreateLine({}, {}, 0#, {}, {}, 0#)\n",
+            "    Set sl{index}({i}) = swSketchMgr.CreateLine(MapU({}, {}, {}), MapV({}, {}, {}), 0#, MapU({}, {}, {}), MapV({}, {}, {}), 0#)\n",
+            index,
             vba_num(mm(a[0])),
             vba_num(mm(a[1])),
+            index,
+            vba_num(mm(a[0])),
+            vba_num(mm(a[1])),
+            index,
             vba_num(mm(b[0])),
-            vba_num(mm(b[1]))
+            vba_num(mm(b[1])),
+            index,
+            vba_num(mm(b[0])),
+            vba_num(mm(b[1])),
         ));
         if l.construction {
             out.push_str(&format!("    sl{index}({i}).Construction = True\n"));
         }
         out.push_str(&format!(
-            "    Set pt{index}({}) = sl{index}({i}).GetStartPoint\n    Set pt{index}({}) = sl{index}({i}).GetEndPoint\n",
+            "    Set pt{index}({}) = sl{index}({i}).GetStartPoint2\n    Set pt{index}({}) = sl{index}({i}).GetEndPoint2\n",
             2 * i,
             2 * i + 1
         ));
@@ -1038,7 +1356,11 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     for (j, c) in sk.circles.iter().enumerate() {
         let ctr = sk.points[c.c];
         out.push_str(&format!(
-            "    Set ci{index}({j}) = swSketchMgr.CreateCircleByRadius({}, {}, 0#, {})\n",
+            "    Set ci{index}({j}) = swSketchMgr.CreateCircleByRadius(MapU({}, {}, {}), MapV({}, {}, {}), 0#, {})\n",
+            index,
+            vba_num(mm(ctr[0])),
+            vba_num(mm(ctr[1])),
+            index,
             vba_num(mm(ctr[0])),
             vba_num(mm(ctr[1])),
             vba_num(mm(c.r))
@@ -1047,7 +1369,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
             out.push_str(&format!("    ci{index}({j}).Construction = True\n"));
         }
         out.push_str(&format!(
-            "    Set pt{index}({}) = ci{index}({j}).GetCenterPoint\n",
+            "    Set pt{index}({}) = ci{index}({j}).GetCenterPoint2\n",
             2 * sk.lines.len() + j
         ));
     }
@@ -1061,33 +1383,49 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
         out.push_str(&emit_relation(index, rel));
     }
     out.push_str(&format!(
-        "    Relations{index} = True\n    Exit Function\nRelFail:\n    If Err.Number <> 0 Then gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description Else gMsg = \"a sketch relation could not be applied\"\n    Relations{index} = False\nEnd Function\n\n"
+        "    Relations{index} = True\n    Exit Function\nRelFail:\n    If Err.Number <> 0 Then gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description\n    If gMsg = \"\" Then gMsg = \"a sketch relation could not be applied\"\n    Relations{index} = False\nEnd Function\n\n"
     ));
 
     // Dimensions
     out.push_str(&format!(
-        "Function Dims{index}() As Boolean\n    On Error GoTo DimFail\n    Dim dd As SldWorks.DisplayDimension\n    Dim dm As SldWorks.Dimension\n"
+        "Function Dims{index}() As Boolean\n    On Error GoTo DimFail\n    Const TOL As Double = 0.000001\n    gMsg = \"\"\n    Dim dd As SldWorks.DisplayDimension\n    Dim dm As SldWorks.Dimension\n    Dim ax As Double\n    Dim ay As Double\n    Dim bx As Double\n    Dim by As Double\n    Dim ds As Double\n    Dim dt As Double\n    Dim proj As Double\n    Dim other As Double\n    Dim created As Double\n    Dim sgn As Double\n    Dim sT As Double\n    Dim tT As Double\n    Dim mx As Double\n    Dim my As Double\n    Dim mz As Double\n    Dim axClass As Long\n"
     ));
     for (di, dim) in sk.dimensions.iter().enumerate() {
         out.push_str(&emit_dimension(index, dim, sk, equation_for(sk, di)));
     }
     out.push_str(&format!(
-        "    Dims{index} = True\n    Exit Function\nDimFail:\n    If Err.Number <> 0 Then gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description Else gMsg = \"a driving dimension could not be added\"\n    Dims{index} = False\nEnd Function\n\n"
+        "    Dims{index} = True\n    Exit Function\nDimFail:\n    If Err.Number <> 0 Then gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description\n    If gMsg = \"\" Then gMsg = \"a driving dimension could not be added\"\n    Dims{index} = False\nEnd Function\n\n"
     ));
 
     // Verify
     out.push_str(&format!(
-        "Function VerifySketch{index}() As Boolean\n    Const TOL As Double = 0.000001\n    On Error GoTo VerifyFail\n"
+        "Function VerifySketch{index}() As Boolean\n    Const TOL As Double = 0.000001\n    Dim v As Variant\n    On Error GoTo VerifyFail\n"
     ));
-    for slot in 0..sk.slot_count() {
-        let c = sk.slot_coord(slot);
-        out.push_str(&format!(
-            "    If Abs(pt{index}({slot}).X - {}) > TOL Then GoTo VerifyFail\n    If Abs(pt{index}({slot}).Y - {}) > TOL Then GoTo VerifyFail\n",
-            vba_num(mm(c[0])),
-            vba_num(mm(c[1]))
-        ));
+    // Fresh three-component readback in sketch space (the seat pinned the
+    // legacy forms as Double() arrays of (u,v,0) here): all three
+    // components are checked - z must vanish - against the mapped values.
+    for (i, l) in sk.lines.iter().enumerate() {
+        for (getter, p) in [
+            ("GetStartPoint", sk.points[l.a]),
+            ("GetEndPoint", sk.points[l.b]),
+        ] {
+            out.push_str(&format!(
+                "    v = sl{index}({i}).{getter}\n    If Abs(v(0) - MapU({index}, {u}, {vv})) > TOL Then GoTo VerifyFail\n    If Abs(v(1) - MapV({index}, {u}, {vv})) > TOL Then GoTo VerifyFail\n    If Abs(v(2)) > TOL Then GoTo VerifyFail\n",
+                getter = getter,
+                index = index,
+                u = vba_num(mm(p[0])),
+                vv = vba_num(mm(p[1])),
+            ));
+        }
     }
     for (j, c) in sk.circles.iter().enumerate() {
+        let ctr = sk.points[c.c];
+        out.push_str(&format!(
+            "    v = ci{index}({j}).GetStartPoint\n    If Abs(v(0) - MapU({index}, {u}, {vv})) > TOL Then GoTo VerifyFail\n    If Abs(v(1) - MapV({index}, {u}, {vv})) > TOL Then GoTo VerifyFail\n    If Abs(v(2)) > TOL Then GoTo VerifyFail\n",
+            index = index,
+            u = vba_num(mm(ctr[0])),
+            vv = vba_num(mm(ctr[1])),
+        ));
         out.push_str(&format!(
             "    If Abs(ci{index}({j}).Radius - {}) > TOL Then GoTo VerifyFail\n",
             vba_num(mm(c.r))
@@ -1097,14 +1435,43 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
         "    VerifySketch{index} = True\n    Exit Function\nVerifyFail:\n    VerifySketch{index} = False\nEnd Function\n\n"
     ));
 
-    // CleanSketch
+    // CleanSketch: verified deletion-and-recreation (folded design 35f04a3f
+    // item 4). The map is invalidated first, every created entity joins one
+    // deletion whose result is verified through the pinned point
+    // enumeration, the frame is re-probed and republished before any
+    // redraw, and the sketch identity is reacquired. The dimension slots
+    // this sketch registered are cleared so the redraw rebinds them under
+    // fresh runtime names.
     out.push_str(&format!(
-        "Sub CleanSketch{index}()\n    Dim anySel As Boolean\n"
+        "Function CleanSketch{index}() As Boolean\n    On Error GoTo CleanFail\n    Dim anySel As Boolean\n    Dim cleanOk As Boolean\n    Dim pts As Variant\n    Dim ub As Long\n    Dim skFeat As SldWorks.Feature\n    CleanSketch{index} = False\n    gMsg = \"\"\n    ClearMap {index}\n"
     ));
+    for (_, eq) in &sk.dim_equations {
+        out.push_str(&format!("    regName({}) = \"\"\n", eq.slot));
+    }
+    for i in 0..sk.lines.len() {
+        out.push_str(&format!(
+            "    If Not sl{index}({i}) Is Nothing Then sl{index}({i}).Select anySel: anySel = True\n"
+        ));
+    }
+    for j in 0..sk.circles.len() {
+        out.push_str(&format!(
+            "    If Not ci{index}({j}) Is Nothing Then ci{index}({j}).Select anySel: anySel = True\n"
+        ));
+    }
+    out.push_str("    If anySel Then swDoc.EditDelete\n    swDoc.ClearSelection2 True\n");
+    out.push_str(
+        "    \' Verify the deletion through the pinned point enumeration (every\n    \' line endpoint and circle centre is a sketch point): no point may\n    \' remain, and an empty or erroring collection counts as empty.\n    On Error Resume Next\n    Err.Clear\n    pts = swSketchMgr.ActiveSketch.GetSketchPoints2\n    cleanOk = (Err.Number <> 0)\n    If Not cleanOk Then\n    Err.Clear\n    ub = UBound(pts)\n    If Err.Number = 0 Then\n    If ub >= 0 Then\n    On Error GoTo CleanFail\n    gMsg = \"sketch contents deletion is not verified: \" & Trim(Str(ub + 1)) & \" points remain\"\n    GoTo CleanFail\n    End If\n    End If\n    End If\n    On Error GoTo CleanFail\n",
+    );
     out.push_str(&format!(
-        "    If Not pt{index}(0) Is Nothing Then\n        pt{index}(0).Select False\n        anySel = True\n    End If\n"
+        "    If Not AcceptAndPublish({index}, {}, gProbeReason) Then gMsg = \"the sketch frame could not be re-accepted after recreation: \" & gProbeReason: GoTo CleanFail\n",
+        vb_lit(plane_code(sk.plane))
     ));
-    out.push_str("    swDoc.EditDelete\n    swDoc.ClearSelection2 True\nEnd Sub\n\n");
+    out.push_str(
+        "    Set skFeat = swSketchMgr.ActiveSketch\n    If skFeat Is Nothing Then gMsg = \"the recreated sketch has no active sketch object\": GoTo CleanFail\n",
+    );
+    out.push_str(&format!(
+        "    skName{index} = skFeat.Name\n    CleanSketch{index} = True\n    Exit Function\nCleanFail:\n    If Err.Number <> 0 Then gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description\n    CleanSketch{index} = False\nEnd Function\n\n"
+    ));
     out
 }
 
@@ -1124,18 +1491,49 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
     let call = |c: &str| {
         format!("    swDoc.SketchAddConstraints \"{c}\"\n    swDoc.ClearSelection2 True\n")
     };
+    // Axis-dependent relations are classified at runtime against the
+    // sketch's adaptation map: for a signed permutation the SC direction
+    // lands on the sketch s or t axis and the constraint kind follows it
+    // there (signs do not affect h/v relations). A non-permutation map
+    // OMITS the relation with a named reason - terminating by construction,
+    // never re-attempted as a failure (folded design 35f04a3f item 3).
+    let classified = |axis_h: bool, sel: String, label: &str| {
+        let is_horiz = if axis_h { "True" } else { "False" };
+        let dir_name = if axis_h { "u" } else { "v" };
+        let mut out = format!("    Select Case AxisClass({index}, {is_horiz})\n    Case 0\n");
+        out.push_str(&sel);
+        out.push_str(
+            "    swDoc.SketchAddConstraints \"sgHorizontal\"\n    swDoc.ClearSelection2 True\n    Case 1\n",
+        );
+        out.push_str(&sel);
+        out.push_str(
+            "    swDoc.SketchAddConstraints \"sgVertical\"\n    swDoc.ClearSelection2 True\n    Case Else\n",
+        );
+        out.push_str(&format!(
+            "    gOmit = gOmit & \"relation {label}: the SC {dir_name} axis is not axis-aligned in this sketch frame (non-permutation map); \"\n    End Select\n"
+        ));
+        out
+    };
     match *rel {
         RelationT::PointsCoincident(a, b) => {
             select_point(a, false) + &select_point(b, true) + &call("sgCoincident")
         }
-        RelationT::PointsHorizontal(a, b) => {
-            select_point(a, false) + &select_point(b, true) + &call("sgHorizontal")
+        RelationT::PointsHorizontal(a, b) => classified(
+            true,
+            select_point(a, false) + &select_point(b, true),
+            &format!("points-horizontal {a}-{b}"),
+        ),
+        RelationT::PointsVertical(a, b) => classified(
+            false,
+            select_point(a, false) + &select_point(b, true),
+            &format!("points-vertical {a}-{b}"),
+        ),
+        RelationT::LineHorizontal(l) => {
+            classified(true, select_line(l, false), &format!("line-horizontal {l}"))
         }
-        RelationT::PointsVertical(a, b) => {
-            select_point(a, false) + &select_point(b, true) + &call("sgVertical")
+        RelationT::LineVertical(l) => {
+            classified(false, select_line(l, false), &format!("line-vertical {l}"))
         }
-        RelationT::LineHorizontal(l) => select_line(l, false) + &call("sgHorizontal"),
-        RelationT::LineVertical(l) => select_line(l, false) + &call("sgVertical"),
         RelationT::LinesParallel(a, b) => {
             select_line(a, false) + &select_line(b, true) + &call("sgParallel")
         }
@@ -1165,72 +1563,155 @@ fn emit_dimension(
     equation: Option<&crate::replay::DimEquation>,
 ) -> String {
     let mut out = String::new();
-    // Selection of the referents.
-    match dim.kind {
-        DimKind::Length => out.push_str(&format!("    sl{index}({}).Select False\n", dim.a)),
-        DimKind::Radius | DimKind::Diameter => {
-            out.push_str(&format!("    ci{index}({}).Select False\n", dim.a))
-        }
-        DimKind::Angle => out.push_str(&format!(
-            "    sl{index}({}).Select False\n    sl{index}({}).Select True\n",
-            dim.a,
-            dim.b.unwrap_or(0)
-        )),
-        _ => out.push_str(&format!(
-            "    pt{index}({}).Select False\n    pt{index}({}).Select True\n",
-            dim.a,
-            dim.b.unwrap_or(0)
-        )),
-    }
-    // Where the dimension is placed decides horizontal/vertical/aligned for
-    // point pairs (documented in docs/mapping.md, pending seat verification).
-    let (px, py): (f64, f64) = match dim.kind {
-        DimKind::Length => {
-            let a = sk.slot_coord(dim.a * 2);
-            let b = sk.slot_coord(dim.a * 2 + 1);
-            (
-                mm((a[0] + b[0]) / 2.0) + 0.01,
-                mm((a[1] + b[1]) / 2.0) + 0.01,
-            )
-        }
-        DimKind::Radius | DimKind::Diameter => {
-            let c = sk.points[sk.circles[dim.a].c];
-            let r = sk.circles[dim.a].r;
-            (mm(c[0] + r * 0.75), mm(c[1] + r * 0.75))
-        }
-        DimKind::Angle => (0.01, 0.01),
-        _ => {
-            let a = sk.slot_coord(dim.a);
-            let b = sk.slot_coord(dim.b.unwrap_or(0));
-            let (ax, ay) = (mm(a[0]), mm(a[1]));
-            let (bx, by) = (mm(b[0]), mm(b[1]));
-            match dim.kind {
-                DimKind::DistanceX => ((ax + bx) / 2.0, ay - 0.01),
-                DimKind::DistanceY => (ax + 0.01, (ay + by) / 2.0),
-                _ => ((ax + bx) / 2.0 + 0.01, (ay + by) / 2.0 + 0.01),
-            }
-        }
-    };
-    out.push_str(&format!(
-        "    Set dd = swDoc.AddDimension2({}, {}, 0#)\n    If dd Is Nothing Then GoTo DimFail\n    Set dm = dd.GetDimension2(0)\n    If dm Is Nothing Then GoTo DimFail\n",
-        vba_num(px),
-        vba_num(py)
-    ));
     let si = match dim.kind {
         DimKind::Angle => dim.value, // already radians
         _ => mm(dim.value),
     };
-    out.push_str(&format!("    dm.SystemValue = {}\n", vba_num(si)));
+    let label = match dim.kind {
+        DimKind::Length => format!("length line {}", dim.a),
+        DimKind::Distance => format!("distance {}-{}", dim.a, dim.b.unwrap_or(0)),
+        DimKind::DistanceX => format!("DistanceX {}-{}", dim.a, dim.b.unwrap_or(0)),
+        DimKind::DistanceY => format!("DistanceY {}-{}", dim.a, dim.b.unwrap_or(0)),
+        DimKind::Radius => format!("radius circle {}", dim.a),
+        DimKind::Diameter => format!("diameter circle {}", dim.a),
+        DimKind::Angle => format!("angle lines {}-{}", dim.a, dim.b.unwrap_or(0)),
+    };
+    out.push_str(&format!("    ' dimension: {label}\n"));
+    // Referent coordinates come from the live handles at runtime, so the
+    // placement and the kind check follow the actual sketch, not the source
+    // coordinates. The text position is MODEL space (Phase 0): SketchToModel
+    // converts the sketch-space heuristic position through the stored frame.
+    let mut coords = String::new();
+    let select;
+    let placement;
+    let mut kindcheck = String::new();
+    match dim.kind {
+        DimKind::Length => {
+            let (a, b) = (2 * dim.a, 2 * dim.a + 1);
+            coords = format!(
+                "    ax = pt{index}({a}).X\n    ay = pt{index}({a}).Y\n    bx = pt{index}({b}).X\n    by = pt{index}({b}).Y\n    ds = bx - ax\n    dt = by - ay\n"
+            );
+            select = format!("    sl{index}({}).Select False\n", dim.a);
+            placement =
+                "    sT = (ax + bx) / 2# + 0.01\n    tT = (ay + by) / 2# + 0.01\n".to_string();
+            kindcheck = format!(
+                "    proj = Sqr(ds * ds + dt * dt)\n    If Abs(Abs(created) - proj) > TOL Then\n    gMsg = \"dimension {label} measures \" & Trim(Str(created)) & \" but the line length is \" & Trim(Str(proj))\n    GoTo DimFail\n    End If\n"
+            );
+        }
+        DimKind::Radius | DimKind::Diameter => {
+            let cslot = 2 * sk.lines.len() + dim.a;
+            coords = format!("    ax = pt{index}({cslot}).X\n    ay = pt{index}({cslot}).Y\n");
+            select = format!("    ci{index}({}).Select False\n", dim.a);
+            placement = format!(
+                "    sT = ax + 0.75 * ci{index}({}).Radius\n    tT = ay + 0.75 * ci{index}({}).Radius\n",
+                dim.a, dim.a
+            );
+            let (what, expr) = if matches!(dim.kind, DimKind::Radius) {
+                ("the circle radius", format!("ci{index}({}).Radius", dim.a))
+            } else {
+                (
+                    "twice the circle radius",
+                    format!("2# * ci{index}({}).Radius", dim.a),
+                )
+            };
+            kindcheck = format!(
+                "    proj = {expr}\n    If Abs(Abs(created) - proj) > TOL Then\n    gMsg = \"dimension {label} measures \" & Trim(Str(created)) & \" but {what} is \" & Trim(Str(proj))\n    GoTo DimFail\n    End If\n"
+            );
+        }
+        DimKind::Angle => {
+            select = format!(
+                "    sl{index}({}).Select False\n    sl{index}({}).Select True\n",
+                dim.a,
+                dim.b.unwrap_or(0)
+            );
+            placement = "    sT = 0.01\n    tT = 0.01\n".to_string();
+            // No projection check applies to an angle; the value match below
+            // is the observable contract.
+        }
+        _ => {
+            // Distance, DistanceX, DistanceY: two point slots.
+            let (a, b) = (dim.a, dim.b.unwrap_or(0));
+            coords = format!(
+                "    ax = pt{index}({a}).X\n    ay = pt{index}({a}).Y\n    bx = pt{index}({b}).X\n    by = pt{index}({b}).Y\n    ds = bx - ax\n    dt = by - ay\n"
+            );
+            select = format!("    pt{index}({a}).Select False\n    pt{index}({b}).Select True\n");
+            match dim.kind {
+                DimKind::DistanceX | DimKind::DistanceY => {
+                    // The placed side decides the dimension kind: offset the
+                    // text perpendicular to the classified axis so the kind
+                    // measures that axis. Sign handling is below, in the
+                    // equation RHS and the expected value.
+                    placement = "    If axClass = 0 Then\n    proj = ds\n    other = dt\n    sT = (ax + bx) / 2#\n    tT = ay - 0.01\n    Else\n    proj = dt\n    other = ds\n    sT = ax + 0.01\n    tT = (ay + by) / 2#\n    End If\n".to_string();
+                }
+                _ => {
+                    placement = "    sT = (ax + bx) / 2# + 0.01\n    tT = (ay + by) / 2# + 0.01\n"
+                        .to_string();
+                }
+            }
+            kindcheck = format!(
+                "    proj = Sqr(ds * ds + dt * dt)\n    If Abs(Abs(created) - proj) > TOL Then\n    gMsg = \"dimension {label} measures \" & Trim(Str(created)) & \" but the point distance is \" & Trim(Str(proj))\n    GoTo DimFail\n    End If\n"
+            );
+            if matches!(dim.kind, DimKind::DistanceX | DimKind::DistanceY) {
+                // Replace the aligned check with the classified-axis check:
+                // |SystemValue| must match the classified-axis projection
+                // (|ds| horizontal, |dt| vertical), and must NOT be the other
+                // axis - that would mean the placed kind came out wrong.
+                kindcheck = format!(
+                    "    If Abs(Abs(created) - Abs(proj)) > TOL Then\n    gMsg = \"dimension {label} measures \" & Trim(Str(created)) & \" but the classified-axis displacement is \" & Trim(Str(proj))\n    GoTo DimFail\n    End If\n    If Abs(other) > TOL Then\n    If Abs(Abs(created) - Abs(other)) <= TOL And Abs(Abs(proj) - Abs(other)) > TOL Then\n    gMsg = \"dimension {label} landed on the wrong axis kind (measures \" & Trim(Str(created)) & \")\"\n    GoTo DimFail\n    End If\n    End If\n"
+                );
+            }
+        }
+    }
+    // The create/check/equation tail is common. The sign is resolved from
+    // what the dimension actually measures against the source value (+-si):
+    // it is written into the equation RHS and the expected value so later
+    // parameter edits keep tracking (never only the initial SystemValue).
+    let mut tail = String::new();
+    tail.push_str(&format!(
+        "    mx = SketchToModelX({index}, sT, tT)\n    my = SketchToModelY({index}, sT, tT)\n    mz = SketchToModelZ({index}, sT, tT)\n    Set dd = swDoc.AddDimension2(mx, my, mz)\n    If dd Is Nothing Then gMsg = \"the {label} dimension did not appear\": GoTo DimFail\n    Set dm = dd.GetDimension2(0)\n    If dm Is Nothing Then gMsg = \"the {label} dimension has no core dimension\": GoTo DimFail\n    created = dm.SystemValue\n"
+    ));
+    tail.push_str(&kindcheck);
+    tail.push_str(&format!(
+        "    If Abs(created - {}) <= TOL Then\n    sgn = 1#\n    ElseIf Abs(created + {}) <= TOL Then\n    sgn = -1#\n    Else\n    gMsg = \"dimension {label} measures \" & Trim(Str(created)) & \" but the source value is {}\"\n    GoTo DimFail\n    End If\n",
+        vba_num(si),
+        vba_num(si),
+        vba_num(si)
+    ));
+    tail.push_str(&format!("    dm.SystemValue = sgn * {}\n", vba_num(si)));
     if let Some(equation) = equation {
-        out.push_str(&slot_guards(equation, "DimFail"));
-        out.push_str(&format!(
-            "    If Not AddDimEquation(dm, {}, {}, {}) Then GoTo DimFail\n",
+        tail.push_str(&slot_guards(equation, "DimFail"));
+        tail.push_str(&format!(
+            "    If Not AddDimEquation(dm, {}, sgn * {}, {}, sgn) Then GoTo DimFail\n",
             rhs_vba(equation),
             vba_num(equation.expect_si),
             equation.slot
         ));
     }
-    out.push_str("    swDoc.ClearSelection2 True\n");
+    tail.push_str("    swDoc.ClearSelection2 True\n");
+
+    out.push_str(&coords);
+    match dim.kind {
+        DimKind::DistanceX | DimKind::DistanceY => {
+            let (is_horiz, dir_name) = if matches!(dim.kind, DimKind::DistanceX) {
+                ("True", "u")
+            } else {
+                ("False", "v")
+            };
+            out.push_str(&format!("    axClass = AxisClass({index}, {is_horiz})\n"));
+            out.push_str(&format!(
+                "    If axClass < 0 Then\n    gOmit = gOmit & \"dimension {label}: the SC {dir_name} axis is not axis-aligned in this sketch frame (non-permutation map); \"\n    Else\n"
+            ));
+            out.push_str(&select);
+            out.push_str(&placement);
+            out.push_str(&tail);
+            out.push_str("    End If\n");
+        }
+        _ => {
+            out.push_str(&select);
+            out.push_str(&placement);
+            out.push_str(&tail);
+        }
+    }
     out
 }
 
@@ -1240,6 +1721,10 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
     out.push_str(&format!("' Extrude step {index}: {}\n", vb_lit(&ex.name)));
     out.push_str(&format!(
         "Function BuildExtrude{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n"
+    ));
+    out.push_str(&format!(
+        "    If Not MapIsIdentity({}) Then gMsg = \"frame adaptation: extrude replay on a non-identity sketch map is not implemented (direction semantics are batch 2); refusing to report created\": GoTo ExFail\n",
+        ex.sketch_step
     ));
     out.push_str(&format!(
         "    ok = swDoc.Extension.SelectByID2(skName{}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n",
@@ -1305,7 +1790,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
     for eq in &ex.equations {
         out.push_str(&slot_guards(eq, "ExFail"));
         out.push_str(&format!(
-            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
+            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, 1#) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
             eq.which,
             eq.which,
             rhs_vba(eq),
@@ -1331,6 +1816,10 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep) -> String {
     out.push_str(&format!("' Revolve step {index}: {}\n", vb_lit(&rv.name)));
     out.push_str(&format!(
         "Function BuildRevolve{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n    Dim ax As Object\n"
+    ));
+    out.push_str(&format!(
+        "    If Not MapIsIdentity({}) Then gMsg = \"frame adaptation: revolve replay on a non-identity sketch map is not implemented (direction semantics are batch 2); refusing to report created\": GoTo ExFail\n",
+        rv.sketch_step
     ));
     out.push_str(&format!(
         "    ok = swDoc.Extension.SelectByID2(skName{}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n",
@@ -1431,7 +1920,7 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep) -> String {
     for eq in equations {
         out.push_str(&slot_guards(eq, "ExFail"));
         out.push_str(&format!(
-            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the revolve angle dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}) Then gMsg = \"the revolve angle equation did not evaluate\": GoTo ExFail\n",
+            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the revolve angle dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, 1#) Then gMsg = \"the revolve angle equation did not evaluate\": GoTo ExFail\n",
             eq.which,
             eq.which,
             rhs_vba(eq),
@@ -1457,8 +1946,11 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
     out.push_str(&format!(
         "Function BuildPrim{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim skFeat As SldWorks.Feature\n    Dim primName As String\n    Dim dm As SldWorks.Dimension\n    Dim dd As SldWorks.DisplayDimension\n    Dim seg As Variant\n    Dim sl As Object\n    Dim ci As Object\n"
     ));
-    out.push_str("    ok = OpenSketchOnPlane(\"XY\")\n");
+    out.push_str(&format!("    ok = OpenSketchOnPlane({}, \"XY\")\n", index));
     out.push_str("    If Not ok Then gMsg = \"no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: \" & gProbeLog & \"; tree scan saw: \" & TreeSummary(): GoTo ExFail\n");
+    out.push_str(&format!(
+        "    If Not MapIsIdentity({index}) Then gMsg = \"frame adaptation: primitive replay on a non-identity sketch map is not implemented (primitive adaptation is batch 3); refusing to report created\": GoTo ExFail\n"
+    ));
     let (ox, oy) = (pr.origin[0] / 1000.0, pr.origin[1] / 1000.0);
     match pr.kind {
         PrimKind::Box => {
@@ -1538,7 +2030,7 @@ fn emit_size_eq(size: &crate::replay::PrimSize, what: &str) -> String {
         Some(eq) => {
             let mut out = slot_guards(eq, "ExFail");
             out.push_str(&format!(
-            "    If Not AddDimEquation(dm, {}, {}, {}) Then gMsg = \"{} equation did not evaluate\": GoTo ExFail\n",
+            "    If Not AddDimEquation(dm, {}, {}, {}, 1#) Then gMsg = \"{} equation did not evaluate\": GoTo ExFail\n",
             rhs_vba(eq),
             vba_num(eq.expect_si),
             eq.slot,
@@ -1575,7 +2067,7 @@ fn slot_guards(eq: &crate::replay::DimEquation, fail_label: &str) -> String {
     for seg in &eq.segs {
         if let RhsSeg::Slot(slot) = seg {
             out.push_str(&format!(
-                "    If regName({slot}) = \"\" Then GoTo {fail_label}\n"
+                "    If regName({slot}) = \"\" Then gMsg = \"the parameter slot {slot} is not bound (its dimension was omitted or failed)\": GoTo {fail_label}\n"
             ));
         }
     }
@@ -1675,7 +2167,7 @@ fn emit_mod_subs(index: usize, md: &crate::replay::ModStep) -> String {
     for eq in &md.equations {
         out.push_str(&slot_guards(eq, "ExFail"));
         out.push_str(&format!(
-            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}) Then gMsg = \"the equation did not evaluate\": GoTo ExFail\n",
+            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, 1#) Then gMsg = \"the equation did not evaluate\": GoTo ExFail\n",
             eq.which,
             eq.which,
             rhs_vba(eq),

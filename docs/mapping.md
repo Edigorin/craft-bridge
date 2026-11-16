@@ -119,17 +119,17 @@ solved value with the binding reported as a degrade trigger.
 | SolidCraft | SolidWorks API | Checkpoint-verified |
 |---|---|---|
 | `type: "sketch"`, `plane: {type:"origin", name:"XY"\|"XZ"\|"YZ"}` | probe for the origin plane carrying the SolidCraft frame (see Orientation), `SketchManager.InsertSketch True` on it | partial |
-| `points[]`: `{"id", "pos": [u, v] (mm), "fixed"}` | entity endpoints drawn at `u/1000, v/1000, 0` metres | yes |
+| `points[]`: `{"id", "pos": [u, v] (mm), "fixed"}` | entity endpoints drawn at the **mapped** `MapU(u/1000, v/1000), MapV(...), 0` (see Frame adaptation) | yes |
 | `curves[]` line: `{"id","type":"line","a","b","construction"}` (a/b: **indices into points[]**) | `SketchManager.CreateLine(x1,y1,0,x2,y2,0)` | yes |
 | `curves[]` circle: `{"id","type":"circle","c","r","construction"}` | `SketchManager.CreateCircleByRadius(cx,cy,0,r)` | yes |
 | constraint `coincident` `{"p","q"}` | select both `ISketchPoint`s → `SketchAddConstraints "sgCoincident"` | pending |
-| `horizontal` / `vertical` `{"l"}` | select the line segment → `"sgHorizontal"` / `"sgVertical"` | pending (checkpoint covers horizontal) |
+| `horizontal` / `vertical` `{"l"}` | **classified at runtime** against the sketch map: the SC axis lands on the sketch s or t axis and the constraint becomes `"sgHorizontal"` / `"sgVertical"` there; a non-permutation map omits it with a named reason | pending (checkpoint covers the classified form) |
 | `parallel` `{"a","b"}` | select both segments → `"sgParallel"` | pending |
 | `perpendicular` `{"a","b"}` | select both → `"sgPerpendicular"` | pending |
 | `tangent` `{"a","b"}` | select both → `"sgTangent"` | pending |
 | `equal` `{"a","b"}` | select both → `"sgEqual"` | pending |
-| dimension `length` `{"l","value"(mm),"param"?}` | `AddDimension2` on the segment; `Parameter(...).SystemValue = value/1000` | pending (checkpoint covers it) |
-| `distance`/`distance_x`/`distance_y` `{"p","q","value"(mm)}` | `AddDimension2` on the two points | pending |
+| dimension `length` `{"l","value"(mm),"param"?}` | `AddDimension2` on the segment (text position in **model space**); kind verified against the point projections; sign resolved into the value and the equation RHS | pending (checkpoint covers it) |
+| `distance`/`distance_x`/`distance_y` `{"p","q","value"(mm)}` | `AddDimension2` on the two points; `distance_x/y` are **classified at runtime** like the axis relations; a non-permutation map omits them with a named reason and a dead equation slot | pending |
 | `radius` / `diameter` `{"c","value"(mm)}` | `AddDimension2` on the circle | pending |
 | `angle` `{"a","b","value"(rad)}` | `AddDimension2` on the two segments (radians) | pending |
 | any other relation type (`pattern_point`, `point_along`, `pierce`, `symmetric`, `arc_sweep`, …) | **degrade trigger**: recorded, never silently dropped | n/a |
@@ -142,9 +142,14 @@ plane is found by **probing**, never by name, role or tree position: the
 macro opens a throwaway sketch on each plane-like feature and reads its
 frame from `ModelToSketchTransform` (the sketch axes in model coordinates
 are the columns of the rotation; the translation is the model origin in
-sketch coordinates). The plane is accepted only when that frame **exactly
-equals** the SolidCraft frame for the plane — axes, signs, and sketch origin
-at the model origin:
+sketch coordinates). Since the frame-adaptation batch (owner decision
+2026-11-13) the plane is accepted when the probe sketch sits on the
+**geometric source plane** — translation at the model origin and normal
+**parallel** to the source normal (either sign) — and the probed frame then
+publishes a per-sketch **adaptation map** that puts (u, v) coordinates where
+they belong. Strict frame equality is retired from the acceptance path and
+remains only as a report diagnostic (`SketchFrameIs`, how close a probed
+frame came to strict equality). The source frames it compares against are:
 
 | SolidCraft plane | sketch u | sketch v | normal (u x v) |
 |---|---|---|---|
@@ -158,15 +163,39 @@ repository), never inferred from the plane-name letters. The XY row is
 seat-verified behaviour; the XZ and YZ rows are source-verified semantics
 whose seat compatibility awaits its first corpus item.
 
-That equality is what "verbatim (u, v)" promises: coordinates land where
-they land in SolidCraft. A plane with the right normal but a different
-in-plane orientation, or an offset origin, is **refused** and the step fails
-closed; the report names every probed plane's observed frame so the mismatch
-is legible. Coordinates are never silently reinterpreted, and full
-coordinate equivalence is never claimed beyond this verified frame (plan
-review 2026-11: the earlier role-matching text conflicted with the probe
-and is gone). Preserving the original *view* orientation in SolidWorks is a
-later nicety, not part of fidelity.
+An offset origin is still **refused** and the step fails closed; the report
+names every probed plane's observed frame (with its strict-match diagnostic)
+so a mismatch is legible. Preserving the original *view* orientation in
+SolidWorks is a later nicety, not part of fidelity.
+
+**Frame adaptation (the map):** each accepted probe publishes a 2x2 map from
+the probed transform: SC `(u, v)` is drawn at sketch `(s, t)` with
+`s = u*gMap00 + v*gMap10`, `t = u*gMap01 + v*gMap11` (the sketch axes in
+model coordinates are the transform's columns). Publication is fail-closed
+and transactional — validity is cleared before every probe and set only
+after the complete validation passes: finite entries, 16-entry `ArrayData`
+with scale 1 (entry 12), unit axes, mutual orthogonality, and a
+right-handed 3D frame `u x v = n`; all tolerances 1e-6. A proper 3D frame
+with the normal **opposing** the source normal yields an improper 2D map —
+supported, recorded in the map's side flag. Per-sketch map state: a feature
+that references an earlier sketch runs against that sketch's map; probe
+sketches (`PlaneNameFor`) never touch persistent state; sketch deletion
+invalidates the entry before deletion, verifies the deletion against the
+pinned point enumeration, re-probes and rebinds.
+
+Axis-dependent work (the `horizontal`/`vertical` relations and the
+`distance_x/y` dimensions) is **classified at runtime**: for a
+signed-permutation map the SC axis lands on the sketch s or t axis and the
+constraint kind follows it there (signs never affect h/v relations); the
+dimension sign is resolved from what the dimension measures against the
+source value and written into the assigned value **and the equation RHS**,
+so later parameter edits keep tracking. A non-permutation map **omits** the
+affected relation or dimension with a named reason and a dead equation slot
+(terminating: never re-attempted as a failure) — bounded support, this seat
+only exhibits permutation frames. Extrude, revolve and primitive steps
+currently require the identity map on the source normal side and otherwise
+fail with a named reason (their direction semantics are batches 2 and 3);
+they never report `created` on an unadapted path.
 
 **Solve verification (runtime):** after relations and driving dimensions are
 added, the macro reads the solved geometry back (line endpoints via
@@ -174,13 +203,17 @@ added, the macro reads the solved geometry back (line endpoints via
 stored coordinates with a nominal tolerance of 1e-6 m. Every supported entity
 must read back; a missing readback can never report `created`. On any
 relation/dimension API error or mismatch: **restore**, don't just delete —
-the sketch is deleted and recreated from the stored coordinates, driving
-dimensions are reapplied, and the result is verified again and reported
-`degraded` (or `failed` if the clean rebuild also mismatches). Deleting
-relations alone is not a degrade path: the solver may already have moved
-entities. A representative parameter-change check (edit a driving dimension,
-see the geometry follow) is an owner-seat acceptance item
-(`docs/seat-acceptance.md`), not something the offline tests can prove.
+the map is invalidated first, the sketch contents are deleted and the
+deletion verified against the pinned point enumeration, the frame is
+re-probed and the map republished, the geometry is redrawn from the stored
+coordinates, driving dimensions are reapplied (their registry slots cleared
+and rebound), and the result is verified again and reported `degraded` (or
+`failed` if the clean rebuild also mismatches). Deleting relations alone is
+not a degrade path: the solver may already have moved entities. A
+representative parameter-change check (edit a driving dimension, see the
+geometry follow) runs in the checkpoint (`sketch.edit-follow`) as an
+owner-seat acceptance item (`docs/seat-acceptance.md`); the offline tests
+pin its text, not its behaviour.
 
 ## Extrude (tracer phase)
 
