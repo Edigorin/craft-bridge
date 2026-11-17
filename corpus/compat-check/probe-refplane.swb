@@ -166,7 +166,7 @@ Sub main()
         If dp Is Nothing Then
             names = names & "(no core dim); "
         Else
-            names = names & dp.Name & " ";
+            names = names & dp.Name & " "
         End If
         Err.Clear
         Set dd = feat.GetNextDisplayDimension(dd)
