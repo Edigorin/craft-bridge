@@ -265,20 +265,22 @@ Fail:
 End Sub
 
 ' Rebuild and stay in sketch edit (seat-proven 2026-11-16: EditRebuild3
-' EXITS sketch edit - sketch API calls then silently do nothing). The
-' rebuild is required before any behavioural readback of a constraint;
-' re-entry is required before any further sketch API call.
+' EXITS sketch edit - sketch API calls then silently do nothing, and its
+' Boolean return is NOT a gate: it returns False in working flows). The
+' final state is verified; the refusal is raised only AFTER error handling
+' is restored, so it cannot be swallowed.
 Sub SolveSketch()
     Dim sk As Object
     swDoc.EditRebuild3
     On Error Resume Next
     Set sk = swSketchMgr.ActiveSketch
-    If Not sk Is Nothing Then Exit Sub
-    Err.Clear
-    swDoc.Extension.SelectByID2 skName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault
-    If Err.Number <> 0 Then Err.Raise vbObjectError + 529, "minimal.swb", "the sketch could not be selected for re-entry: err " & Trim(Str(Err.Number))
-    swSketchMgr.InsertSketch True
-    Set sk = swSketchMgr.ActiveSketch
+    If sk Is Nothing Then
+        Err.Clear
+        swDoc.Extension.SelectByID2 skName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault
+        swSketchMgr.InsertSketch True
+        Set sk = swSketchMgr.ActiveSketch
+    End If
+    On Error GoTo 0
     If sk Is Nothing Then Err.Raise vbObjectError + 529, "minimal.swb", "sketch edit could not be re-entered"
 End Sub
 

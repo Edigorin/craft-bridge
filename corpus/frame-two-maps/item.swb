@@ -1201,7 +1201,7 @@ Function BuildExtrude3() As String
     wantSide = 1 * gMapSide(1)
     dirFlag = (wantSide = TT_EX_DIR_TRUE_SIDE)
     ok = swDoc.Extension.SelectByID2(skName1, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-    If Not ok Then gMsg = "could not select the sketch for the extrude": GoTo ExFail
+    If Not ok Then gMsg = "could not select the sketch for the extrude: name=<" & skName1 & ">": GoTo ExFail
     Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.03, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)
     If feat Is Nothing Then gMsg = "the extrude was not created": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
@@ -1742,20 +1742,24 @@ MapIsIdentity = True
 End Function
 
 ' Rebuild and stay in sketch edit (seat-proven 2026-11-16: EditRebuild3
-' EXITS sketch edit - sketch API calls then silently do nothing). The
+' EXITS sketch edit - sketch API calls then silently do nothing, and its
+' Boolean return is NOT a gate: it returns False in working flows). The
 ' rebuild is required before any behavioural readback of a constraint;
-' re-entry is required before any further sketch API call.
+' re-entry is required before any further sketch API call. The final state
+' is verified; the refusal is raised only AFTER error handling is restored,
+' so it cannot be swallowed.
 Sub SolveSketch(ByVal nm As String)
 Dim sk As Object
 swDoc.EditRebuild3
 On Error Resume Next
 Set sk = swSketchMgr.ActiveSketch
-If Not sk Is Nothing Then Exit Sub
+If sk Is Nothing Then
 Err.Clear
 swDoc.Extension.SelectByID2 nm, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault
-If Err.Number <> 0 Then Err.Raise vbObjectError + 529, "craft-bridge", "the sketch " & nm & " could not be selected for re-entry: err " & Trim(Str(Err.Number))
 swSketchMgr.InsertSketch True
 Set sk = swSketchMgr.ActiveSketch
+End If
+On Error GoTo 0
 If sk Is Nothing Then Err.Raise vbObjectError + 529, "craft-bridge", "sketch edit could not be re-entered for " & nm
 End Sub
 
@@ -2033,7 +2037,7 @@ Else
 eqText = """" & dm.Name & """=" & rhs
 End If
 idx = eqMgr.Add(-1, eqText)
-If idx < 0 Then gMsg = "the dimension equation was not accepted": GoTo EqFail
+If idx < 0 Then gMsg = "the dimension equation was not accepted: " & eqText: GoTo EqFail
 swDoc.EditRebuild3
 If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = "the driven value does not match": GoTo EqFail
 

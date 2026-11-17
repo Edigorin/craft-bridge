@@ -1069,20 +1069,24 @@ MapIsIdentity = True
 End Function
 
 ' Rebuild and stay in sketch edit (seat-proven 2026-11-16: EditRebuild3
-' EXITS sketch edit - sketch API calls then silently do nothing). The
+' EXITS sketch edit - sketch API calls then silently do nothing, and its
+' Boolean return is NOT a gate: it returns False in working flows). The
 ' rebuild is required before any behavioural readback of a constraint;
-' re-entry is required before any further sketch API call.
+' re-entry is required before any further sketch API call. The final state
+' is verified; the refusal is raised only AFTER error handling is restored,
+' so it cannot be swallowed.
 Sub SolveSketch(ByVal nm As String)
 Dim sk As Object
 swDoc.EditRebuild3
 On Error Resume Next
 Set sk = swSketchMgr.ActiveSketch
-If Not sk Is Nothing Then Exit Sub
+If sk Is Nothing Then
 Err.Clear
 swDoc.Extension.SelectByID2 nm, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault
-If Err.Number <> 0 Then Err.Raise vbObjectError + 529, \"craft-bridge\", \"the sketch \" & nm & \" could not be selected for re-entry: err \" & Trim(Str(Err.Number))
 swSketchMgr.InsertSketch True
 Set sk = swSketchMgr.ActiveSketch
+End If
+On Error GoTo 0
 If sk Is Nothing Then Err.Raise vbObjectError + 529, \"craft-bridge\", \"sketch edit could not be re-entered for \" & nm
 End Sub
 
@@ -1360,7 +1364,7 @@ Else
 eqText = \"\"\"\" & dm.Name & \"\"\"=\" & rhs
 End If
 idx = eqMgr.Add(-1, eqText)
-If idx < 0 Then gMsg = \"the dimension equation was not accepted\": GoTo EqFail
+If idx < 0 Then gMsg = \"the dimension equation was not accepted: \" & eqText: GoTo EqFail
 swDoc.EditRebuild3
 If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = \"the driven value does not match\": GoTo EqFail
 
@@ -2014,7 +2018,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
         "    If Not gMapValid({sk}) Then gMsg = \"frame adaptation: the profile sketch carries no valid adaptation map; refusing to report created\": GoTo ExFail\n"
     ));
     let select_sketch = format!(
-        "    ok = swDoc.Extension.SelectByID2(skName{sk}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n    If Not ok Then gMsg = \"could not select the sketch for the extrude\": GoTo ExFail\n"
+        "    ok = swDoc.Extension.SelectByID2(skName{sk}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n    If Not ok Then gMsg = \"could not select the sketch for the extrude: name=<\" & skName{sk} & \">\": GoTo ExFail\n"
     );
     let no_depth_note =
         "    ' through-all: the end condition is the geometry; depth readback does not apply\n";
@@ -2267,7 +2271,7 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep, sk: Option<&SketchStep>) ->
     )
     };
     let select_sketch = format!(
-        "    ok = swDoc.Extension.SelectByID2(skName{sidx}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n    If Not ok Then gMsg = \"could not select the profile sketch\": GoTo ExFail\n"
+        "    ok = swDoc.Extension.SelectByID2(skName{sidx}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n    If Not ok Then gMsg = \"could not select the profile sketch: name=<\" & skName{sidx} & \">\": GoTo ExFail\n"
     );
     if let Some(reason) = refusal {
         body.push_str(&format!(

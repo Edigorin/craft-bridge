@@ -1041,10 +1041,9 @@ Function SolveSketch(ByRef reason As String) As Boolean
         reason = "editrebuild3 err " & Trim(Str(Err.Number)) & " " & Err.Description
         Exit Function
     End If
-    If Not rebuilt Then
-        reason = "editrebuild3 returned false"
-        Exit Function
-    End If
+    ' The rebuild Boolean is informational only (seat evidence: False in
+    ' working flows); the verified re-entry below is the gate.
+    If Not rebuilt Then reason = "editrebuild3 returned false (informational); "
     Err.Clear
     Set sk = swSketchMgr.ActiveSketch
     If Err.Number <> 0 Then
