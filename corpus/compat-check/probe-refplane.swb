@@ -300,8 +300,8 @@ Sub main()
     WriteStep stepIdx, "trace", "created", "contained via=" & centreVia & " err=" & Trim(Str(centreErr)) & " xyz=" & SafeNum(cphX) & "/" & SafeNum(cphY) & "/" & SafeNum(cphZ) & " types=" & TypeName(cphX) & "," & TypeName(cphY) & "," & TypeName(cphZ)
     off = cphX * cphX + cphY * cphY + cphZ * cphZ
     WriteStep stepIdx, "trace", "created", "sumsq=" & SafeNum(off)
-    off = Sqr(off)
-    WriteStep stepIdx, "trace", "created", "root=" & SafeNum(off)
+    off = 0.001
+    WriteStep stepIdx, "trace", "created", "forced off=" & SafeNum(off)
     WriteStep stepIdx, "trace", "created", "p1 via=" & centreVia
     WriteStep stepIdx, "trace", "created", "p2 err=" & Trim(Str(centreErr)) & " cphIsNothing=" & CStr(cph Is Nothing)
     WriteStep stepIdx, "trace", "created", "p3 txt=" & Vec3Text(cphX, cphY, cphZ)
