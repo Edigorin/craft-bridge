@@ -1,1 +1,6 @@
 /target
+
+# Hard rule (AGENTS.md): real client parts are NEVER committed.
+# Owner-provided uploads and every real-part run artifact stay untracked.
+uploads/
+runs/
