@@ -104,7 +104,7 @@ fn sign_chain_equations_flow_through_slotrefs() {
     // branches and the seat check (expect.txt) reads the stored equation.
     assert!(
         text.contains(
-            "If Not AddDimEquation(dm, \"40mm\", signVal * 0.04, 0, signVal) Then GoTo DimFail"
+            "If Not AddDimEquation(dm, \"40mm\", signVal * 0.04, 0, signVal, skName"
         ),
         "the upstream dimension does not register its slot with the runtime sign"
     );
@@ -123,11 +123,11 @@ fn sign_chain_equations_flow_through_slotrefs() {
     // Downstream equations reference the upstream slots through SlotRef -
     // two hops: slot 0 -> slot 1 -> slot 2.
     assert!(
-        text.contains("AddDimEquation(dm, SlotRef(0) & \" * 2\", signVal * 0.08, 1, signVal)"),
+        text.contains("AddDimEquation(dm, SlotRef(0) & \" * 2\", signVal * 0.08, 1, signVal, skName"),
         "the first downstream equation does not reference the upstream slot"
     );
     assert!(
-        text.contains("AddDimEquation(dm, SlotRef(1) & \" / 8\", signVal * 0.01, 2, signVal)"),
+        text.contains("AddDimEquation(dm, SlotRef(1) & \" / 8\", signVal * 0.01, 2, signVal, skName"),
         "the second downstream equation does not reference the mid-chain slot"
     );
     // SlotRef normalizes the upstream sign back to source semantics, so a

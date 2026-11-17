@@ -1635,7 +1635,7 @@ fn dims_verify_kind_and_resolve_signs_in_the_equation() {
     // The sign lives in the equation RHS and the expected value - never only
     // in the initial SystemValue - so parameter edits keep tracking.
     assert!(
-        region.contains("AddDimEquation(dm, \"40mm\", signVal * 0.04, 0, signVal, skName{index})"),
+        region.contains("AddDimEquation(dm, \"40mm\", signVal * 0.04, 0, signVal, skName2)"),
         "the equation does not carry the runtime sign"
     );
     assert!(
