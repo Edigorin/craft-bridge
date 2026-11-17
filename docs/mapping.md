@@ -42,10 +42,62 @@ the first unmapped step. API members: `ImportFile` and `EditDelete`
 
 ## Primitives (box, cylinder)
 
-Replayed as generated sketches on the Front plane plus a blind extrude.
-Placement must be literal and on the base plane; sizes keep their
-parametrisation through dimension equations. Off-plane placement and non-Z
-axes stop (they need extrude start-offset work).
+Replayed as generated sketches on the plane carrying the XY source frame
+plus a blind extrude whose side resolves through the direction truth table.
+The profile maps through `MapU`/`MapV` **like sketch geometry**: the box is
+four `CreateLine` segments between mapped corners in deterministic source
+order (ln0 is the SC-u edge from the corner and carries the length
+dimension, ln1 the SC-v edge and the width dimension - the equation-to-edge
+binding never depends on a host segment order), and the cylinder is a
+mapped base centre with its radius unchanged (the map is a validated
+isometry, so sizes stay SI metres). Placement must be literal and on the
+base plane; sizes keep their parametrisation through dimension equations
+under the sign contract (the sign resolved from the dimension readback
+into `AddDimEquation`'s `signVal` and `regSign`; `SlotRef` normalizes
+downstream references). Off-plane placement and non-Z axes stop (they need
+extrude start-offset work); a cylinder radius at or below 2e-6 m stops at
+plan time (see the circle-size kind below).
+
+The map class is **signed permutations only** (bounded support - this seat
+only exhibits permutation frames): `MapIsPermutation` refuses anything else
+with a named reason before any drawing. The map's orientation (`gMapSide`)
+is unconstrained - the truth table composes it.
+
+The generated box carries its **shape contract** explicitly - no automatic
+relation is assumed: `sgCOINCIDENT` closes the four corners, classified
+`sgHORIZONTAL2D`/`sgVERTICAL2D` relations (runtime `AxisClass`) pin
+rectangularity and the edge directions, and `sgFix` on the corner point
+anchors the literal placement (the cylinder centre is anchored the same
+way). Creation-time application is behaviourally indistinguishable from a
+pre-held predicate (the recorded limitation class); the parameter-edit
+behaviour is pinned by `probe-primorient`'s `box-edit-follow` case and
+remains an owner-seat acceptance check, like `sketch.edit-follow`.
+
+The **circle-size dimension kind** (radius- vs diameter-kind reading of
+`SystemValue`) must be unambiguous before the value is written and the
+dimension registered: the plan refuses a radius at or below 2e-6 m (there
+the two candidate readings coincide within the 1e-6 m verification
+tolerance and a halved driven radius would pass the geometry check), and
+the runtime check refuses the ambiguous scale and the diameter-kind reading
+outright - the sign contract carries a sign, never a factor of two.
+`probe-primorient`'s cylinder case pins what the seat creates (evidence for
+the sketch family's radius dimensions too).
+
+`AddDimEquation` ends in `EditRebuild3`, which **exits sketch edit**
+(seat-measured): every primitive dimension equation is followed by a
+`SolveSketch` re-entry before any further sketch API call, and the solved
+profile placement is read back against the mapped coordinates afterwards
+(evidence, not assumption - the revolve helper-axis standard).
+
+The **operation orientation**: the SolidCraft height extends toward +Z,
+the XY source normal (source-pinned kernel semantics: the box spans
+`corner.z..corner.z + height`, the cylinder `base..base + height * axis`
+with the axis pinned to +Z and sizes positive), so its end sits toward
+`+1 * gMapSide` in sketch-normal units and the call flag is
+`dirFlag = (wantSide = TT_PRIM_DIR_TRUE_SIDE)` - the extrude family's
+composition. `TT_PRIM_DIR_TRUE_SIDE` is **UNMEASURED (0)** until
+`probe-primorient` reports; while it reads 0 every primitive step fails
+with a named reason naming its probe and never reports `created`.
 
 ## Modifications (fillet, chamfer, shell, draft, hole)
 
@@ -196,9 +248,12 @@ only exhibits permutation frames. Extrude and revolve replay runs through
 the **direction truth table** on ANY valid adaptation map (the extrude side
 decisions use only the map's orientation `gMapSide`; the revolve axis is
 mapped like geometry and its sweep factor passes through the map unchanged
-- see "Direction truth table"). Primitive steps still require the identity
-map on the source normal side until batch 3 and otherwise fail with a named
-reason; nothing ever reports `created` on an unestablished path.
+- see "Direction truth table"). Primitive steps (batch 3) draw their
+profiles and sizes through the same map on signed-permutation frames and
+resolve the extrude side through the direction truth table's own cell
+(`TT_PRIM_DIR_TRUE_SIDE`, probe-primorient); while that cell is unmeasured
+every primitive step fails with a named reason naming its probe, and
+nothing ever reports `created` on an unestablished path.
 
 **Evidence rules (batch 1):** every selection is checked (`Select` returns
 Boolean and its result is captured). `SketchAddConstraints` has **no return
@@ -288,6 +343,7 @@ semantics cannot be established fails and never reports `created`.
 | `TT_REV_SENSE = +1` | with the blind revolve call shape (`ReverseDir=False`), the sweep is the right-hand rotation by +angle about the drawn axis direction (start to end) when +1 | probe-revolvedir blind-270 cases: ReverseDir=False's centroid at (u,n) = (-0.0046, -0.0046) = mid-angle -135 deg = toward MINUS the normal first = right-hand +angle about the drawn +t axis (t_hat x u_hat = -n_hat); ReverseDir=True mirrored. Centroids via MassProperty `centerofmass` (American spelling; `centreofmass` raises 438) |
 | `TT_REV_TWO_FIRST_SIDE = +1` | with the two-sided revolve call shape (`ReverseDir=False`), the first angle sweeps with right-hand sense TT about the drawn axis direction | probe-revolvedir twosided-100-150: D1 = 100 deg, D2 = 150 deg (radian identities), centroid at mid-angle +24.6 deg -> span [-100, +150]: the first angle on the MINUS-normal side = the same right-hand +angle sense as the blind form (two independent measurements agreeing) |
 | `TT_REV_PROBE_CHIRALITY = -1` | the evidence-scope gate: the configuration chirality sign((drawn axis direction x profile radial side) . sketch normal) the probe establishes | probe-revolvedir's pinned setup: drawn axis (0,-0.010)->(0,0.080) = +t, profile on the +u side, n_sk = +X -> (t_hat x u_hat).n_hat = -1 |
+| `TT_PRIM_DIR_TRUE_SIDE = 0` | the primitive blind call shape (byte-identical to the extrude blind form): the height extends toward TT * n_sk for `Dir=True` | UNMEASURED - `probe-primorient` must establish it. Its box cases run the emitter's exact call shape and mapped profile on the XY plane's non-identity map and cross-check `TT_EX_DIR_TRUE_SIDE` on a second frame. A fill-in is evidence for the measured positive-normal configuration only - never proof of the reflected case (see the primitive rows below) |
 
 The revolve rows are read under two candidate structural laws (the flag
 selects an absolute side in units of the normal, or a right-hand sense
@@ -336,6 +392,24 @@ Source-side rules the adaptation applies on top of the constants
   an opposite-sided pair; symmetric splits the angle either side "whichever
   way the axis points"; a full turn (360 deg) is convention-free and
   consults no cell.
+- **Primitive height** (batch 3; source-pinned kernel semantics): the
+  SolidCraft box spans `corner.z..corner.z + height` and the cylinder
+  `base..base + height * axis` with the axis pinned to +Z and sizes
+  positive (`parse_prim`), so on the base plane the height extends toward
+  the XY source normal. In units of `n_sk` its end sits toward
+  `+1 * gMapSide` and the call flag is
+  `dirFlag = (wantSide = TT_PRIM_DIR_TRUE_SIDE)` - the extrude blind
+  composition, on a call shape byte-identical to the extrude family's.
+  The cell is UNMEASURED until probe-primorient reports and every
+  primitive refuses with a named reason naming its probe until then. The
+  probe measures the XY plane's positive-normal configuration on this seat:
+  it cannot distinguish a transform-relative sketch normal from a
+  host-canonicalized normal that agrees there, and `gMapSide = -1` is
+  unreachable on the owner's seat (every origin plane publishes a
+  permutation map with side +1). Filling the cell is evidence for the
+  measured configuration only - never proof of the reflected case, which
+  stays an accepted residual under the seat-acceptance outer guard like
+  the extrude family's composition on unmeasured frames.
 - **Direction-free forms**: symmetric (mid-plane) extrude and revolve and
   full-turn revolves span both sides, so no direction decision exists -
   their builders never consult the truth table. Their single argument is

@@ -26,7 +26,7 @@ Dim gFeatMgr As Object
 Dim regName(0 To 0) As String
 Dim regSign(0 To 0) As Double
 
-' ---- extrude/revolve direction truth table (measured on the seat) ----
+' ---- extrude/revolve/primitive direction truth table (measured on the seat) ----
 ' Each constant comes from a direction probe's runtime report (corpus/
 ' compat-probe); 0 = UNMEASURED and every decision that consults it
 ' refuses with a named reason - never a silent guess, never 'created'.
@@ -36,6 +36,7 @@ Const TT_EX_THROUGH_ALL_DIR As Long = -1    ' probe-throughall: the through-all 
 Const TT_REV_SENSE As Long = 1             ' probe-revolvedir: ReverseDir=False sweeps the right-hand +angle sense about the drawn axis when +1
 Const TT_REV_TWO_FIRST_SIDE As Long = 1    ' probe-revolvedir: the two-sided first angle sweeps right-hand sense TT about the drawn axis
 Const TT_REV_PROBE_CHIRALITY As Long = -1   ' the configuration chirality the revolve evidence establishes (probe-revolvedir: one directed axis and one profile side)
+Const TT_PRIM_DIR_TRUE_SIDE As Long = 0   ' probe-primorient: the primitive height extends toward TT * the sketch normal for Dir=True (0 = unmeasured)
 Dim feat1 As SldWorks.Feature
 Dim feat2 As SldWorks.Feature
 Dim skName0 As String
@@ -1176,20 +1177,32 @@ Function SketchToModelZ(ByVal idx As Long, ByVal s As Double, ByVal t As Double)
 SketchToModelZ = gFrame(idx, 11) + s * gFrame(idx, 2) + t * gFrame(idx, 5)
 End Function
 
-' Feature guards (batch boundary): primitive replay still assumes the
-' identity map - batch 3 replaces this with primitive adaptation. Extrude
-' and revolve replay runs through the direction truth table on any valid
-' map (batch 2). Anything else is refused with a named reason and never
-' reports created.
-Function MapIsIdentity(ByVal idx As Long) As Boolean
-MapIsIdentity = False
+' Frame adaptation (batch 3): primitive replay supports signed-
+' permutation maps (bounded support - this seat only exhibits permutation
+' frames): each map entry is 0 or +-1 with exactly one nonzero per row and
+' per column. The map's orientation (gMapSide) is unconstrained - the
+' direction truth table composes it. Anything else is refused with a named
+' reason and never reports created (docs/mapping.md, Primitives).
+Function MapIsPermutation(ByVal idx As Long) As Boolean
+Dim m00 As Double
+Dim m01 As Double
+Dim m10 As Double
+Dim m11 As Double
+MapIsPermutation = False
 If Not gMapValid(idx) Then Exit Function
-If gMapSide(idx) <> 1 Then Exit Function
-If Abs(gMap00(idx) - 1#) > 0.000001 Then Exit Function
-If Abs(gMap11(idx) - 1#) > 0.000001 Then Exit Function
-If Abs(gMap01(idx)) > 0.000001 Then Exit Function
-If Abs(gMap10(idx)) > 0.000001 Then Exit Function
-MapIsIdentity = True
+m00 = Abs(gMap00(idx))
+m01 = Abs(gMap01(idx))
+m10 = Abs(gMap10(idx))
+m11 = Abs(gMap11(idx))
+If m00 > 0.000001 And Abs(m00 - 1#) > 0.000001 Then Exit Function
+If m01 > 0.000001 And Abs(m01 - 1#) > 0.000001 Then Exit Function
+If m10 > 0.000001 And Abs(m10 - 1#) > 0.000001 Then Exit Function
+If m11 > 0.000001 And Abs(m11 - 1#) > 0.000001 Then Exit Function
+If Abs(m00 + m10 - 1#) > 0.000001 Then Exit Function
+If Abs(m01 + m11 - 1#) > 0.000001 Then Exit Function
+If Abs(m00 + m01 - 1#) > 0.000001 Then Exit Function
+If Abs(m10 + m11 - 1#) > 0.000001 Then Exit Function
+MapIsPermutation = True
 End Function
 
 ' Rebuild and stay in sketch edit (seat-proven 2026-11-16: EditRebuild3

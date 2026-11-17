@@ -229,13 +229,15 @@ pub fn emit(
         "Dim regSign(0 To {}) As Double\n",
         max_slot.unwrap_or(0)
     ));
-    // ---- extrude/revolve direction truth table (Phase 1 batch 2) ----
+    // ---- extrude/revolve/primitive direction truth table (Phase 1 batch 2/3) ----
     // Every constant is measured on the seat from a direction probe's
     // runtime report; 0 means UNMEASURED and every decision that consults
     // it refuses with a named reason - a step whose direction semantics
     // cannot be established fails and never reports created
     // (docs/mapping.md, "Direction truth table").
-    out.push_str("\n' ---- extrude/revolve direction truth table (measured on the seat) ----\n");
+    out.push_str(
+        "\n' ---- extrude/revolve/primitive direction truth table (measured on the seat) ----\n",
+    );
     out.push_str("' Each constant comes from a direction probe's runtime report (corpus/\n");
     out.push_str("' compat-probe); 0 = UNMEASURED and every decision that consults it\n");
     out.push_str("' refuses with a named reason - never a silent guess, never 'created'.\n");
@@ -262,6 +264,10 @@ pub fn emit(
     out.push_str(&format!(
         "Const TT_REV_PROBE_CHIRALITY As Long = {}   ' the configuration chirality the revolve evidence establishes (probe-revolvedir: one directed axis and one profile side)\n",
         crate::truth::TT_REV_PROBE_CHIRALITY
+    ));
+    out.push_str(&format!(
+        "Const TT_PRIM_DIR_TRUE_SIDE As Long = {}   ' probe-primorient: the primitive height extends toward TT * the sketch normal for Dir=True (0 = unmeasured)\n",
+        crate::truth::TT_PRIM_DIR_TRUE_SIDE
     ));
     for s in steps {
         if matches!(
@@ -1052,20 +1058,32 @@ Function SketchToModelZ(ByVal idx As Long, ByVal s As Double, ByVal t As Double)
 SketchToModelZ = gFrame(idx, 11) + s * gFrame(idx, 2) + t * gFrame(idx, 5)
 End Function
 
-' Feature guards (batch boundary): primitive replay still assumes the
-' identity map - batch 3 replaces this with primitive adaptation. Extrude
-' and revolve replay runs through the direction truth table on any valid
-' map (batch 2). Anything else is refused with a named reason and never
-' reports created.
-Function MapIsIdentity(ByVal idx As Long) As Boolean
-MapIsIdentity = False
+' Frame adaptation (batch 3): primitive replay supports signed-
+' permutation maps (bounded support - this seat only exhibits permutation
+' frames): each map entry is 0 or +-1 with exactly one nonzero per row and
+' per column. The map's orientation (gMapSide) is unconstrained - the
+' direction truth table composes it. Anything else is refused with a named
+' reason and never reports created (docs/mapping.md, Primitives).
+Function MapIsPermutation(ByVal idx As Long) As Boolean
+Dim m00 As Double
+Dim m01 As Double
+Dim m10 As Double
+Dim m11 As Double
+MapIsPermutation = False
 If Not gMapValid(idx) Then Exit Function
-If gMapSide(idx) <> 1 Then Exit Function
-If Abs(gMap00(idx) - 1#) > 0.000001 Then Exit Function
-If Abs(gMap11(idx) - 1#) > 0.000001 Then Exit Function
-If Abs(gMap01(idx)) > 0.000001 Then Exit Function
-If Abs(gMap10(idx)) > 0.000001 Then Exit Function
-MapIsIdentity = True
+m00 = Abs(gMap00(idx))
+m01 = Abs(gMap01(idx))
+m10 = Abs(gMap10(idx))
+m11 = Abs(gMap11(idx))
+If m00 > 0.000001 And Abs(m00 - 1#) > 0.000001 Then Exit Function
+If m01 > 0.000001 And Abs(m01 - 1#) > 0.000001 Then Exit Function
+If m10 > 0.000001 And Abs(m10 - 1#) > 0.000001 Then Exit Function
+If m11 > 0.000001 And Abs(m11 - 1#) > 0.000001 Then Exit Function
+If Abs(m00 + m10 - 1#) > 0.000001 Then Exit Function
+If Abs(m01 + m11 - 1#) > 0.000001 Then Exit Function
+If Abs(m00 + m01 - 1#) > 0.000001 Then Exit Function
+If Abs(m10 + m11 - 1#) > 0.000001 Then Exit Function
+MapIsPermutation = True
 End Function
 
 ' Rebuild and stay in sketch edit (seat-proven 2026-11-16: EditRebuild3
@@ -2474,73 +2492,199 @@ fn emit_helper_axis(sidx: usize, axis: &AxisSel, locals: &mut String) -> String 
     out
 }
 
-/// Primitive builder: a generated sketch (rectangle or circle) on the Front
-/// plane (XY) with driving dimensions and equations, then a blind extrude.
-/// Placement is literal by design (this phase); sizes keep their parametrisation
-/// through dimension equations.
+/// Primitive builder: a generated sketch on the plane carrying the XY
+/// source frame, drawn MAPPED through MapU/MapV like sketch geometry (the
+/// box as four segments in deterministic source order - the u edge from the
+/// corner carries the length dimension, the v edge the width; the cylinder
+/// as a mapped centre with its radius unchanged, the map being an
+/// isometry), sizes in SI metres with their dimension equations under the
+/// sign contract, then a blind extrude whose side resolves through the
+/// direction truth table (wantSide = +1 * gMapSide: the SolidCraft height
+/// extends toward +Z, the XY source normal - source-pinned kernel
+/// semantics). Fail-closed before any drawing: the map must be valid and a
+/// signed permutation (bounded support), and the orientation cell must be
+/// measured (probe-primorient). Everything unestablished fails with a
+/// named reason and never reports created.
 fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
     use crate::replay::PrimKind;
     let mut out = String::new();
     out.push_str(&format!("' Primitive step {index}: {}\n", vb_lit(&pr.name)));
+    let entity_decls = match pr.kind {
+        PrimKind::Box => {
+            "    Dim ln0 As Object\n    Dim ln1 As Object\n    Dim ln2 As Object\n    Dim ln3 As Object\n"
+        }
+        PrimKind::Cylinder => "    Dim ci As Object\n",
+    };
     out.push_str(&format!(
-        "Function BuildPrim{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim skFeat As SldWorks.Feature\n    Dim primName As String\n    Dim dm As SldWorks.Dimension\n    Dim dd As SldWorks.DisplayDimension\n    Dim seg As Variant\n    Dim sl As Object\n    Dim ci As Object\n"
+        "Function BuildPrim{index}() As String\n    On Error GoTo HardFail\n    Const TOL As Double = 0.000001\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim skFeat As SldWorks.Feature\n    Dim primName As String\n    Dim dm As SldWorks.Dimension\n    Dim dd As SldWorks.DisplayDimension\n    Dim created As Double\n    Dim signVal As Double\n    Dim chk As Double\n    Dim v As Variant\n    Dim v2 As Variant\n    Dim wantSide As Long\n    Dim dirFlag As Boolean\n    Dim axClassU As Long\n    Dim axClassV As Long\n    Dim nameU As String\n    Dim nameV As String\n    Dim pA As Object\n    Dim pB As Object\n{entity_decls}"
     ));
     out.push_str(&format!("    ok = OpenSketchOnPlane({}, \"XY\")\n", index));
     out.push_str("    If Not ok Then gMsg = \"no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: \" & gProbeLog & \"; tree scan saw: \" & TreeSummary(): GoTo ExFail\n");
+    // Fail-closed guards before any drawing: the map validity, the bounded
+    // map class (signed permutations, plan scope F5), and the orientation
+    // cell (probe-primorient). Nothing downstream of an unestablished
+    // orientation is ever claimed as created.
     out.push_str(&format!(
-        "    If Not MapIsIdentity({index}) Then gMsg = \"frame adaptation: primitive replay on a non-identity sketch map is not implemented (primitive adaptation is batch 3); refusing to report created\": GoTo ExFail\n"
+        "    If Not gMapValid({index}) Then gMsg = \"frame adaptation: the primitive sketch carries no valid adaptation map; refusing to report created\": GoTo ExFail\n"
     ));
+    out.push_str(&format!(
+        "    If Not MapIsPermutation({index}) Then gMsg = \"frame adaptation: the primitive profile requires a signed-permutation sketch map (bounded support, this seat only exhibits permutation frames); refusing to report created\": GoTo ExFail\n"
+    ));
+    out.push_str("    If TT_PRIM_DIR_TRUE_SIDE = 0 Then gMsg = \"the primitive direction truth table is unmeasured: probe-primorient has not established which physical side the primitive height extends toward on this sketch map; refusing to report created\": GoTo ExFail\n");
     let (ox, oy) = (pr.origin[0] / 1000.0, pr.origin[1] / 1000.0);
     match pr.kind {
         PrimKind::Box => {
             let l = pr.sizes[0].value / 1000.0;
             let w = pr.sizes[1].value / 1000.0;
-            out.push_str(&format!(
-                "    seg = swSketchMgr.CreateCornerRectangle({}, {}, 0#, {}, {}, 0#)\n",
-                vba_num(ox),
-                vba_num(oy),
-                vba_num(ox + l),
-                vba_num(oy + w)
-            ));
-            out.push_str("    Set sl = seg(0)\n    sl.Select False\n");
-            out.push_str("    Set dd = swDoc.AddDimension2(0#, 0#, 0#)\n    If dd Is Nothing Then GoTo ExFail\n    Set dm = dd.GetDimension2(0)\n    If dm Is Nothing Then GoTo ExFail\n");
-            out.push_str(&emit_size(1, &pr.sizes[0], "the box length"));
-            out.push_str(
-                "    swDoc.ClearSelection2 True\n    Set sl = seg(1)\n    sl.Select False\n",
-            );
-            out.push_str("    Set dd = swDoc.AddDimension2(0#, 0#, 0#)\n    If dd Is Nothing Then GoTo ExFail\n    Set dm = dd.GetDimension2(0)\n    If dm Is Nothing Then GoTo ExFail\n");
-            out.push_str(&emit_size(2, &pr.sizes[1], "the box width"));
+            // The four corners in source order; each edge is drawn between
+            // MAPPED corners exactly like sketch geometry. Edge identity is
+            // deterministic by construction (never a host segment order):
+            // ln0 is the u edge from the corner (the length dimension), ln1
+            // the v edge from its far corner (the width dimension).
+            let corners = [(ox, oy), (ox + l, oy), (ox + l, oy + w), (ox, oy + w)];
+            let edges = [
+                ("ln0", 0, 1, "the box length edge"),
+                ("ln1", 1, 2, "the box width edge"),
+                ("ln2", 2, 3, "the box length edge"),
+                ("ln3", 3, 0, "the box width edge"),
+            ];
+            for (handle, a, b, what) in edges {
+                let (x1, y1) = corners[a];
+                let (x2, y2) = corners[b];
+                out.push_str(&format!(
+                    "    Set {handle} = swSketchMgr.CreateLine(MapU({index}, {}, {}), MapV({index}, {}, {}), 0#, MapU({index}, {}, {}), MapV({index}, {}, {}), 0#)\n    If {handle} Is Nothing Then gMsg = \"{what} did not appear\": GoTo ExFail\n",
+                    vba_num(x1),
+                    vba_num(y1),
+                    vba_num(x1),
+                    vba_num(y1),
+                    vba_num(x2),
+                    vba_num(y2),
+                    vba_num(x2),
+                    vba_num(y2),
+                ));
+            }
         }
         PrimKind::Cylinder => {
             let r = pr.sizes[0].value / 1000.0;
             out.push_str(&format!(
-                "    Set ci = swSketchMgr.CreateCircleByRadius({}, {}, 0#, {})\n",
+                "    Set ci = swSketchMgr.CreateCircleByRadius(MapU({index}, {}, {}), MapV({index}, {}, {}), 0#, {})\n    If ci Is Nothing Then gMsg = \"the cylinder profile circle did not appear\": GoTo ExFail\n",
+                vba_num(ox),
+                vba_num(oy),
                 vba_num(ox),
                 vba_num(oy),
                 vba_num(r)
             ));
-            out.push_str("    ci.Select False\n");
-            out.push_str("    Set dd = swDoc.AddDimension2(0#, 0#, 0#)\n    If dd Is Nothing Then GoTo ExFail\n    Set dm = dd.GetDimension2(0)\n    If dm Is Nothing Then GoTo ExFail\n");
-            out.push_str(&emit_size(1, &pr.sizes[0], "the cylinder radius"));
+        }
+    }
+    // The sketch name is captured before any equation rebuild: SolveSketch
+    // re-enters the sketch by name after AddDimEquation's EditRebuild3
+    // exits sketch edit (seat-measured semantics).
+    out.push_str("    Set skFeat = swSketchMgr.ActiveSketch\n    If skFeat Is Nothing Then gMsg = \"the primitive sketch was not created\": GoTo ExFail\n    primName = skFeat.Name\n");
+    match pr.kind {
+        PrimKind::Box => {
+            // The shape contract (parameter-edit safety): coincident
+            // corners close the contour, classified horizontal/vertical
+            // relations pin rectangularity and edge directions, and a fix on
+            // the corner point anchors the literal placement. No automatic
+            // relation is assumed; the edit-follow behaviour is pinned by
+            // probe-primorient's box-edit-follow case (docs/mapping.md,
+            // Primitives).
+            for (ha, hb) in [
+                ("ln0", "ln1"),
+                ("ln1", "ln2"),
+                ("ln2", "ln3"),
+                ("ln3", "ln0"),
+            ] {
+                out.push_str(&format!(
+                    "    Set pA = {ha}.GetEndPoint2\n    Set pB = {hb}.GetStartPoint2\n    If pA Is Nothing Or pB Is Nothing Then gMsg = \"the box corner handles are missing\": GoTo ExFail\n    If Not pA.Select(False) Then gMsg = \"the box corner point would not select\": GoTo ExFail\n    If Not pB.Select(True) Then gMsg = \"the box corner point would not select\": GoTo ExFail\n    swDoc.SketchAddConstraints \"sgCOINCIDENT\"\n    swDoc.ClearSelection2 True\n"
+                ));
+            }
+            out.push_str(&format!(
+                "    axClassU = AxisClass({index}, True)\n    axClassV = AxisClass({index}, False)\n    If axClassU < 0 Or axClassV < 0 Then gMsg = \"the primitive profile axes are not axis-aligned in this sketch frame (non-permutation map); refusing to report created\": GoTo ExFail\n    If axClassU = 0 Then nameU = \"sgHORIZONTAL2D\" Else nameU = \"sgVERTICAL2D\"\n    If axClassV = 0 Then nameV = \"sgHORIZONTAL2D\" Else nameV = \"sgVERTICAL2D\"\n"
+            ));
+            for (handle, name, what) in [
+                ("ln0", "nameU", "the box length edge"),
+                ("ln2", "nameU", "the box length edge"),
+                ("ln1", "nameV", "the box width edge"),
+                ("ln3", "nameV", "the box width edge"),
+            ] {
+                out.push_str(&format!(
+                    "    If Not {handle}.Select(False) Then gMsg = \"{what} would not select\": GoTo ExFail\n    swDoc.SketchAddConstraints {name}\n    swDoc.ClearSelection2 True\n"
+                ));
+            }
+            out.push_str("    Set pA = ln0.GetStartPoint2\n    If pA Is Nothing Then gMsg = \"the box corner handle is missing\": GoTo ExFail\n    If Not pA.Select(False) Then gMsg = \"the box corner anchor would not select\": GoTo ExFail\n    swDoc.SketchAddConstraints \"sgFix\"\n    swDoc.ClearSelection2 True\n");
+        }
+        PrimKind::Cylinder => {
+            // The centre anchor: placement is literal, so the fix keeps it
+            // under parameter edits (same anchoring vocabulary and posture
+            // as the revolve helper axis).
+            out.push_str("    Set pA = ci.GetCenterPoint2\n    If pA Is Nothing Then gMsg = \"the cylinder centre handle is missing\": GoTo ExFail\n    If Not pA.Select(False) Then gMsg = \"the cylinder centre anchor would not select\": GoTo ExFail\n    swDoc.SketchAddConstraints \"sgFix\"\n    swDoc.ClearSelection2 True\n");
+        }
+    }
+    match pr.kind {
+        PrimKind::Box => {
+            out.push_str(&emit_size("ln0", &pr.sizes[0], "the box length", false));
+            out.push_str(&emit_size("ln1", &pr.sizes[1], "the box width", false));
+        }
+        PrimKind::Cylinder => {
+            out.push_str(&emit_size("ci", &pr.sizes[0], "the cylinder radius", true));
+        }
+    }
+    // Mapped-placement verification (evidence, not assumption - the revolve
+    // helper-axis standard): after the solve the drawn geometry must sit
+    // exactly where the map put it. The eight edge endpoints against the
+    // four mapped corners also prove the contour stayed closed.
+    out.push_str("    SolveSketch primName\n");
+    match pr.kind {
+        PrimKind::Box => {
+            let l = pr.sizes[0].value / 1000.0;
+            let w = pr.sizes[1].value / 1000.0;
+            let corners = [(ox, oy), (ox + l, oy), (ox + l, oy + w), (ox, oy + w)];
+            for (handle, a, b) in [("ln0", 0, 1), ("ln1", 1, 2), ("ln2", 2, 3), ("ln3", 3, 0)] {
+                for (which, at) in [("Start", a), ("End", b)] {
+                    let (x, y) = corners[at];
+                    out.push_str(&format!(
+                        "    v = {handle}.Get{which}Point\n    If Abs(v(0) - MapU({index}, {}, {})) > TOL Then gMsg = \"the {handle} {which} point does not sit where the map put it\": GoTo ExFail\n    If Abs(v(1) - MapV({index}, {}, {})) > TOL Then gMsg = \"the {handle} {which} point does not sit where the map put it\": GoTo ExFail\n    If Abs(v(2)) > TOL Then gMsg = \"the {handle} {which} point is off the sketch plane\": GoTo ExFail\n",
+                        vba_num(x),
+                        vba_num(y),
+                        vba_num(x),
+                        vba_num(y)
+                    ));
+                }
+            }
+        }
+        PrimKind::Cylinder => {
+            let r = pr.sizes[0].value / 1000.0;
+            out.push_str(&format!(
+                "    Set pA = ci.GetCenterPoint2\n    If pA Is Nothing Then gMsg = \"the cylinder centre handle is missing\": GoTo ExFail\n    If Abs(pA.X - MapU({index}, {}, {})) > TOL Then gMsg = \"the cylinder centre does not sit where the map put it\": GoTo ExFail\n    If Abs(pA.Y - MapV({index}, {}, {})) > TOL Then gMsg = \"the cylinder centre does not sit where the map put it\": GoTo ExFail\n    If Abs(pA.Z) > TOL Then gMsg = \"the cylinder centre is off the sketch plane\": GoTo ExFail\n    chk = ci.GetRadius\n    If Abs(chk - {}) > TOL Then gMsg = \"the cylinder radius does not sit where the draw put it\": GoTo ExFail\n",
+                vba_num(ox),
+                vba_num(oy),
+                vba_num(ox),
+                vba_num(oy),
+                vba_num(r)
+            ));
         }
     }
     out.push_str(
-        "    Set skFeat = swSketchMgr.ActiveSketch\n    If skFeat Is Nothing Then gMsg = \"the primitive sketch was not created\": GoTo ExFail\n    primName = skFeat.Name\n    swDoc.ClearSelection2 True\n    swSketchMgr.InsertSketch True\n",
+        "    Set skFeat = swSketchMgr.ActiveSketch\n    If skFeat Is Nothing Then gMsg = \"the primitive sketch was not open at closing\": GoTo ExFail\n    swDoc.ClearSelection2 True\n    swSketchMgr.InsertSketch True\n",
     );
     // The blind extrude carries the last size (height).
     let height = pr.sizes.last().map(|s| s.value / 1000.0).unwrap_or(0.0);
     out.push_str("    ok = swDoc.Extension.SelectByID2(primName, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n");
     out.push_str(
-        "    If Not ok Then gMsg = \"could not select the primitive sketch\": GoTo ExFail\n",
+        "    If Not ok Then gMsg = \"could not select the primitive sketch: name=<\" & primName & \">\": GoTo ExFail\n",
     );
+    // The operation orientation: the SolidCraft height extends toward +Z
+    // (the XY source normal), so its end sits toward +1 * gMapSide in
+    // sketch-normal units and the Dir flag resolves through the measured
+    // cell - the same composition as the extrude family.
     out.push_str(&format!(
-        "    Set feat = gFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)\n",
+        "    wantSide = 1 * gMapSide({index})\n    dirFlag = (wantSide = TT_PRIM_DIR_TRUE_SIDE)\n    Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)\n    If feat Is Nothing Then gMsg = \"the primitive extrude was not created\": GoTo ExFail\n",
         vba_num(height)
     ));
-    out.push_str("    If feat Is Nothing Then gMsg = \"the primitive extrude was not created\": GoTo ExFail\n");
     out.push_str("    Set dm = swDoc.Parameter(\"D1@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the primitive height dimension is missing\": GoTo ExFail\n");
     out.push_str(&format!(
-        "    If Abs(dm.SystemValue - {}) > 0.000001 Then gMsg = \"the primitive height does not match\": GoTo ExFail\n",
+        "    If Abs(dm.SystemValue - {}) > TOL Then gMsg = \"the primitive height does not match\": GoTo ExFail\n",
         vba_num(height)
     ));
     if let Some(last) = pr.sizes.last() {
@@ -2552,15 +2696,54 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
     out
 }
 
-/// Verify one primitive sketch size (dm already set) and attach its equation.
-fn emit_size(_which: usize, size: &crate::replay::PrimSize, what: &str) -> String {
-    let mm = size.value / 1000.0;
-    let mut out = format!(
-        "    If Abs(dm.SystemValue - {}) > 0.000001 Then gMsg = \"{} does not match\": GoTo ExFail\n",
-        vba_num(mm),
-        what
-    );
-    out.push_str(&emit_size_eq(size, what));
+/// One primitive sketch-size dimension on the named entity (the handle the
+/// builder holds). The kind is established UNAMBIGUOUSLY before the value
+/// is written and the dimension registered: a circle dimension whose
+/// radius- and diameter-kind readings coincide within tolerance is refused
+/// (parse_prim refuses sizes at that scale too), and a diameter-kind
+/// reading is refused outright - the sign contract carries a sign, never a
+/// factor of two (docs/mapping.md, Primitives). The sign is resolved from
+/// the readback and travels through AddDimEquation's signVal into regSign,
+/// so downstream SlotRef references normalize back to source semantics.
+/// Every equation is followed by a SolveSketch re-entry: AddDimEquation's
+/// EditRebuild3 exits sketch edit (seat-measured).
+fn emit_size(entity: &str, size: &crate::replay::PrimSize, what: &str, circle: bool) -> String {
+    let m = size.value / 1000.0;
+    let mn = vba_num(m);
+    let mut out = String::new();
+    out.push_str(&format!(
+        "    If Not {entity}.Select(False) Then gMsg = \"{what} would not select\": GoTo ExFail\n    Set dd = swDoc.AddDimension2(0#, 0#, 0#)\n    If dd Is Nothing Then gMsg = \"{what} dimension did not appear\": GoTo ExFail\n    Set dm = dd.GetDimension2(0)\n    If dm Is Nothing Then gMsg = \"{what} dimension has no core dimension\": GoTo ExFail\n    created = dm.SystemValue\n"
+    ));
+    if circle {
+        out.push_str(&format!(
+            "    chk = Abs(created)\n    If Abs(chk - {mn}) <= TOL And Abs(chk - 2# * {mn}) <= TOL Then gMsg = \"{what} dimension kind cannot be established at this scale (the radius- and diameter-kind readings coincide within tolerance)\": GoTo ExFail\n    If Abs(chk - 2# * {mn}) <= TOL Then gMsg = \"{what} dimension reads the diameter (\" & Trim(Str(created)) & \"); the radius equation needs the radius-kind reading pinned by probe-primorient\": GoTo ExFail\n    If Abs(chk - {mn}) > TOL Then gMsg = \"{what} dimension measures \" & Trim(Str(created)) & \" but the source value is {mn}\": GoTo ExFail\n    If Abs(created - {mn}) <= TOL Then\n    signVal = 1#\n    Else\n    signVal = -1#\n    End If\n"
+        ));
+    } else {
+        out.push_str(&format!(
+            "    If Abs(created - {mn}) <= TOL Then\n    signVal = 1#\n    ElseIf Abs(created + {mn}) <= TOL Then\n    signVal = -1#\n    Else\n    gMsg = \"{what} dimension measures \" & Trim(Str(created)) & \" but the source value is {mn}\": GoTo ExFail\n    End If\n"
+        ));
+    }
+    out.push_str(&format!("    dm.SystemValue = signVal * {mn}\n"));
+    // Behavioural kind evidence: the value edit must carry exactly the
+    // measured quantity (docs/mapping.md, Evidence rules).
+    if circle {
+        out.push_str(&format!(
+            "    chk = {entity}.GetRadius\n    If Abs(chk - {mn}) > TOL Then gMsg = \"{what} geometry did not follow the value edit (radius \" & Trim(Str(chk)) & \")\": GoTo ExFail\n    swDoc.ClearSelection2 True\n"
+        ));
+    } else {
+        out.push_str(&format!(
+            "    v = {entity}.GetStartPoint\n    v2 = {entity}.GetEndPoint\n    chk = Sqr((v2(0) - v(0)) ^ 2 + (v2(1) - v(1)) ^ 2)\n    If Abs(chk - {mn}) > TOL Then gMsg = \"{what} geometry did not follow the value edit (length \" & Trim(Str(chk)) & \")\": GoTo ExFail\n    swDoc.ClearSelection2 True\n"
+        ));
+    }
+    if let Some(eq) = &size.equation {
+        out.push_str(&slot_guards(eq, "ExFail"));
+        out.push_str(&format!(
+            "    If Not AddDimEquation(dm, {}, signVal * {}, {}, signVal) Then gMsg = \"{what} equation did not evaluate\": GoTo ExFail\n    SolveSketch primName\n",
+            rhs_vba(eq),
+            mn,
+            eq.slot
+        ));
+    }
     out
 }
 

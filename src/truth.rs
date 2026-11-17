@@ -92,6 +92,35 @@ pub const TT_REV_TWO_FIRST_SIDE: i32 = 1;
 /// outer guard for the residual structural hypotheses.
 pub const TT_REV_PROBE_CHIRALITY: i32 = -1;
 
+/// With the primitive blind extrude call shape (byte-identical to the
+/// extrude family's blind form), `Dir=True` sends the primitive's height
+/// toward this many times the profile sketch normal `n_sk` (`+1` = toward
+/// `n_sk`).
+///
+/// UNMEASURED (`0`) until `probe-primorient` runs on the seat. The
+/// composition it pins: the SolidCraft primitive extends toward +Z (the XY
+/// source normal) from the base plane - source-pinned from the SolidCraft
+/// kernel (`box_solid(corner, corner + (l, w, h))`,
+/// `cylinder(base, +Z, r, h)`, with `parse_prim` forcing a base-plane
+/// placement, a +Z axis and positive sizes) - so the height's end sits
+/// toward `+1 * gMapSide` in `n_sk` units and the call flag is
+/// `dirFlag = (wantSide = TT_PRIM_DIR_TRUE_SIDE)` (the same composition as
+/// the extrude family, `truth::extrude_dir_flag`).
+///
+/// Evidence scope (kept narrow on purpose): `probe-primorient` measures the
+/// flag on the XY plane's positive-normal configuration on this seat. That
+/// pins the observed configuration and cross-checks
+/// [`TT_EX_DIR_TRUE_SIDE`] on a second frame (the call shapes are
+/// identical); it does NOT distinguish a transform-relative sketch normal
+/// from a host-canonicalized normal when both agree there, and it can never
+/// cover an opposing-normal map (`gMapSide = -1` is unreachable on the
+/// owner's seat: every origin plane publishes a permutation map with side
+/// +1). Filling this cell is evidence for the measured configuration only -
+/// never proof of the reflected case, which stays an accepted residual
+/// under the seat-acceptance outer guard, exactly like the extrude
+/// family's composition on unmeasured frames.
+pub const TT_PRIM_DIR_TRUE_SIDE: i32 = 0;
+
 /// The evidence-scope check for a directional revolve: `None` while the
 /// chirality cell is unmeasured, `true` inside the probe's scope.
 pub fn revolve_in_evidence_scope(

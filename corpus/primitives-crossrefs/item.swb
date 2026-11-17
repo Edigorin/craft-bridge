@@ -26,7 +26,7 @@ Dim gFeatMgr As Object
 Dim regName(0 To 2) As String
 Dim regSign(0 To 2) As Double
 
-' ---- extrude/revolve direction truth table (measured on the seat) ----
+' ---- extrude/revolve/primitive direction truth table (measured on the seat) ----
 ' Each constant comes from a direction probe's runtime report (corpus/
 ' compat-probe); 0 = UNMEASURED and every decision that consults it
 ' refuses with a named reason - never a silent guess, never 'created'.
@@ -36,6 +36,7 @@ Const TT_EX_THROUGH_ALL_DIR As Long = -1    ' probe-throughall: the through-all 
 Const TT_REV_SENSE As Long = 1             ' probe-revolvedir: ReverseDir=False sweeps the right-hand +angle sense about the drawn axis when +1
 Const TT_REV_TWO_FIRST_SIDE As Long = 1    ' probe-revolvedir: the two-sided first angle sweeps right-hand sense TT about the drawn axis
 Const TT_REV_PROBE_CHIRALITY As Long = -1   ' the configuration chirality the revolve evidence establishes (probe-revolvedir: one directed axis and one profile side)
+Const TT_PRIM_DIR_TRUE_SIDE As Long = 0   ' probe-primorient: the primitive height extends toward TT * the sketch normal for Dir=True (0 = unmeasured)
 Dim feat2 As SldWorks.Feature
 Dim feat3 As SldWorks.Feature
 Dim skName1 As String
@@ -568,48 +569,183 @@ End Function
 ' Primitive step 2: "Block"
 Function BuildPrim2() As String
     On Error GoTo HardFail
+    Const TOL As Double = 0.000001
     Dim ok As Boolean
     Dim feat As SldWorks.Feature
     Dim skFeat As SldWorks.Feature
     Dim primName As String
     Dim dm As SldWorks.Dimension
     Dim dd As SldWorks.DisplayDimension
-    Dim seg As Variant
-    Dim sl As Object
-    Dim ci As Object
+    Dim created As Double
+    Dim signVal As Double
+    Dim chk As Double
+    Dim v As Variant
+    Dim v2 As Variant
+    Dim wantSide As Long
+    Dim dirFlag As Boolean
+    Dim axClassU As Long
+    Dim axClassV As Long
+    Dim nameU As String
+    Dim nameV As String
+    Dim pA As Object
+    Dim pB As Object
+    Dim ln0 As Object
+    Dim ln1 As Object
+    Dim ln2 As Object
+    Dim ln3 As Object
     ok = OpenSketchOnPlane(2, "XY")
     If Not ok Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo ExFail
-    If Not MapIsIdentity(2) Then gMsg = "frame adaptation: primitive replay on a non-identity sketch map is not implemented (primitive adaptation is batch 3); refusing to report created": GoTo ExFail
-    seg = swSketchMgr.CreateCornerRectangle(0.0, 0.0, 0#, 0.08, 0.02, 0#)
-    Set sl = seg(0)
-    sl.Select False
-    Set dd = swDoc.AddDimension2(0#, 0#, 0#)
-    If dd Is Nothing Then GoTo ExFail
-    Set dm = dd.GetDimension2(0)
-    If dm Is Nothing Then GoTo ExFail
-    If Abs(dm.SystemValue - 0.08) > 0.000001 Then gMsg = "the box length does not match": GoTo ExFail
-    If regName(0) = "" Then gMsg = "the parameter slot 0 is not bound (its dimension was omitted or failed)": GoTo ExFail
-    If Not AddDimEquation(dm, SlotRef(0) & " * 2", 0.08, 1, 1#) Then gMsg = "the box length equation did not evaluate": GoTo ExFail
-    swDoc.ClearSelection2 True
-    Set sl = seg(1)
-    sl.Select False
-    Set dd = swDoc.AddDimension2(0#, 0#, 0#)
-    If dd Is Nothing Then GoTo ExFail
-    Set dm = dd.GetDimension2(0)
-    If dm Is Nothing Then GoTo ExFail
-    If Abs(dm.SystemValue - 0.02) > 0.000001 Then gMsg = "the box width does not match": GoTo ExFail
+    If Not gMapValid(2) Then gMsg = "frame adaptation: the primitive sketch carries no valid adaptation map; refusing to report created": GoTo ExFail
+    If Not MapIsPermutation(2) Then gMsg = "frame adaptation: the primitive profile requires a signed-permutation sketch map (bounded support, this seat only exhibits permutation frames); refusing to report created": GoTo ExFail
+    If TT_PRIM_DIR_TRUE_SIDE = 0 Then gMsg = "the primitive direction truth table is unmeasured: probe-primorient has not established which physical side the primitive height extends toward on this sketch map; refusing to report created": GoTo ExFail
+    Set ln0 = swSketchMgr.CreateLine(MapU(2, 0.0, 0.0), MapV(2, 0.0, 0.0), 0#, MapU(2, 0.08, 0.0), MapV(2, 0.08, 0.0), 0#)
+    If ln0 Is Nothing Then gMsg = "the box length edge did not appear": GoTo ExFail
+    Set ln1 = swSketchMgr.CreateLine(MapU(2, 0.08, 0.0), MapV(2, 0.08, 0.0), 0#, MapU(2, 0.08, 0.02), MapV(2, 0.08, 0.02), 0#)
+    If ln1 Is Nothing Then gMsg = "the box width edge did not appear": GoTo ExFail
+    Set ln2 = swSketchMgr.CreateLine(MapU(2, 0.08, 0.02), MapV(2, 0.08, 0.02), 0#, MapU(2, 0.0, 0.02), MapV(2, 0.0, 0.02), 0#)
+    If ln2 Is Nothing Then gMsg = "the box length edge did not appear": GoTo ExFail
+    Set ln3 = swSketchMgr.CreateLine(MapU(2, 0.0, 0.02), MapV(2, 0.0, 0.02), 0#, MapU(2, 0.0, 0.0), MapV(2, 0.0, 0.0), 0#)
+    If ln3 Is Nothing Then gMsg = "the box width edge did not appear": GoTo ExFail
     Set skFeat = swSketchMgr.ActiveSketch
     If skFeat Is Nothing Then gMsg = "the primitive sketch was not created": GoTo ExFail
     primName = skFeat.Name
+    Set pA = ln0.GetEndPoint2
+    Set pB = ln1.GetStartPoint2
+    If pA Is Nothing Or pB Is Nothing Then gMsg = "the box corner handles are missing": GoTo ExFail
+    If Not pA.Select(False) Then gMsg = "the box corner point would not select": GoTo ExFail
+    If Not pB.Select(True) Then gMsg = "the box corner point would not select": GoTo ExFail
+    swDoc.SketchAddConstraints "sgCOINCIDENT"
+    swDoc.ClearSelection2 True
+    Set pA = ln1.GetEndPoint2
+    Set pB = ln2.GetStartPoint2
+    If pA Is Nothing Or pB Is Nothing Then gMsg = "the box corner handles are missing": GoTo ExFail
+    If Not pA.Select(False) Then gMsg = "the box corner point would not select": GoTo ExFail
+    If Not pB.Select(True) Then gMsg = "the box corner point would not select": GoTo ExFail
+    swDoc.SketchAddConstraints "sgCOINCIDENT"
+    swDoc.ClearSelection2 True
+    Set pA = ln2.GetEndPoint2
+    Set pB = ln3.GetStartPoint2
+    If pA Is Nothing Or pB Is Nothing Then gMsg = "the box corner handles are missing": GoTo ExFail
+    If Not pA.Select(False) Then gMsg = "the box corner point would not select": GoTo ExFail
+    If Not pB.Select(True) Then gMsg = "the box corner point would not select": GoTo ExFail
+    swDoc.SketchAddConstraints "sgCOINCIDENT"
+    swDoc.ClearSelection2 True
+    Set pA = ln3.GetEndPoint2
+    Set pB = ln0.GetStartPoint2
+    If pA Is Nothing Or pB Is Nothing Then gMsg = "the box corner handles are missing": GoTo ExFail
+    If Not pA.Select(False) Then gMsg = "the box corner point would not select": GoTo ExFail
+    If Not pB.Select(True) Then gMsg = "the box corner point would not select": GoTo ExFail
+    swDoc.SketchAddConstraints "sgCOINCIDENT"
+    swDoc.ClearSelection2 True
+    axClassU = AxisClass(2, True)
+    axClassV = AxisClass(2, False)
+    If axClassU < 0 Or axClassV < 0 Then gMsg = "the primitive profile axes are not axis-aligned in this sketch frame (non-permutation map); refusing to report created": GoTo ExFail
+    If axClassU = 0 Then nameU = "sgHORIZONTAL2D" Else nameU = "sgVERTICAL2D"
+    If axClassV = 0 Then nameV = "sgHORIZONTAL2D" Else nameV = "sgVERTICAL2D"
+    If Not ln0.Select(False) Then gMsg = "the box length edge would not select": GoTo ExFail
+    swDoc.SketchAddConstraints nameU
+    swDoc.ClearSelection2 True
+    If Not ln2.Select(False) Then gMsg = "the box length edge would not select": GoTo ExFail
+    swDoc.SketchAddConstraints nameU
+    swDoc.ClearSelection2 True
+    If Not ln1.Select(False) Then gMsg = "the box width edge would not select": GoTo ExFail
+    swDoc.SketchAddConstraints nameV
+    swDoc.ClearSelection2 True
+    If Not ln3.Select(False) Then gMsg = "the box width edge would not select": GoTo ExFail
+    swDoc.SketchAddConstraints nameV
+    swDoc.ClearSelection2 True
+    Set pA = ln0.GetStartPoint2
+    If pA Is Nothing Then gMsg = "the box corner handle is missing": GoTo ExFail
+    If Not pA.Select(False) Then gMsg = "the box corner anchor would not select": GoTo ExFail
+    swDoc.SketchAddConstraints "sgFix"
+    swDoc.ClearSelection2 True
+    If Not ln0.Select(False) Then gMsg = "the box length would not select": GoTo ExFail
+    Set dd = swDoc.AddDimension2(0#, 0#, 0#)
+    If dd Is Nothing Then gMsg = "the box length dimension did not appear": GoTo ExFail
+    Set dm = dd.GetDimension2(0)
+    If dm Is Nothing Then gMsg = "the box length dimension has no core dimension": GoTo ExFail
+    created = dm.SystemValue
+    If Abs(created - 0.08) <= TOL Then
+    signVal = 1#
+    ElseIf Abs(created + 0.08) <= TOL Then
+    signVal = -1#
+    Else
+    gMsg = "the box length dimension measures " & Trim(Str(created)) & " but the source value is 0.08": GoTo ExFail
+    End If
+    dm.SystemValue = signVal * 0.08
+    v = ln0.GetStartPoint
+    v2 = ln0.GetEndPoint
+    chk = Sqr((v2(0) - v(0)) ^ 2 + (v2(1) - v(1)) ^ 2)
+    If Abs(chk - 0.08) > TOL Then gMsg = "the box length geometry did not follow the value edit (length " & Trim(Str(chk)) & ")": GoTo ExFail
+    swDoc.ClearSelection2 True
+    If regName(0) = "" Then gMsg = "the parameter slot 0 is not bound (its dimension was omitted or failed)": GoTo ExFail
+    If Not AddDimEquation(dm, SlotRef(0) & " * 2", signVal * 0.08, 1, signVal) Then gMsg = "the box length equation did not evaluate": GoTo ExFail
+    SolveSketch primName
+    If Not ln1.Select(False) Then gMsg = "the box width would not select": GoTo ExFail
+    Set dd = swDoc.AddDimension2(0#, 0#, 0#)
+    If dd Is Nothing Then gMsg = "the box width dimension did not appear": GoTo ExFail
+    Set dm = dd.GetDimension2(0)
+    If dm Is Nothing Then gMsg = "the box width dimension has no core dimension": GoTo ExFail
+    created = dm.SystemValue
+    If Abs(created - 0.02) <= TOL Then
+    signVal = 1#
+    ElseIf Abs(created + 0.02) <= TOL Then
+    signVal = -1#
+    Else
+    gMsg = "the box width dimension measures " & Trim(Str(created)) & " but the source value is 0.02": GoTo ExFail
+    End If
+    dm.SystemValue = signVal * 0.02
+    v = ln1.GetStartPoint
+    v2 = ln1.GetEndPoint
+    chk = Sqr((v2(0) - v(0)) ^ 2 + (v2(1) - v(1)) ^ 2)
+    If Abs(chk - 0.02) > TOL Then gMsg = "the box width geometry did not follow the value edit (length " & Trim(Str(chk)) & ")": GoTo ExFail
+    swDoc.ClearSelection2 True
+    SolveSketch primName
+    v = ln0.GetStartPoint
+    If Abs(v(0) - MapU(2, 0.0, 0.0)) > TOL Then gMsg = "the ln0 Start point does not sit where the map put it": GoTo ExFail
+    If Abs(v(1) - MapV(2, 0.0, 0.0)) > TOL Then gMsg = "the ln0 Start point does not sit where the map put it": GoTo ExFail
+    If Abs(v(2)) > TOL Then gMsg = "the ln0 Start point is off the sketch plane": GoTo ExFail
+    v = ln0.GetEndPoint
+    If Abs(v(0) - MapU(2, 0.08, 0.0)) > TOL Then gMsg = "the ln0 End point does not sit where the map put it": GoTo ExFail
+    If Abs(v(1) - MapV(2, 0.08, 0.0)) > TOL Then gMsg = "the ln0 End point does not sit where the map put it": GoTo ExFail
+    If Abs(v(2)) > TOL Then gMsg = "the ln0 End point is off the sketch plane": GoTo ExFail
+    v = ln1.GetStartPoint
+    If Abs(v(0) - MapU(2, 0.08, 0.0)) > TOL Then gMsg = "the ln1 Start point does not sit where the map put it": GoTo ExFail
+    If Abs(v(1) - MapV(2, 0.08, 0.0)) > TOL Then gMsg = "the ln1 Start point does not sit where the map put it": GoTo ExFail
+    If Abs(v(2)) > TOL Then gMsg = "the ln1 Start point is off the sketch plane": GoTo ExFail
+    v = ln1.GetEndPoint
+    If Abs(v(0) - MapU(2, 0.08, 0.02)) > TOL Then gMsg = "the ln1 End point does not sit where the map put it": GoTo ExFail
+    If Abs(v(1) - MapV(2, 0.08, 0.02)) > TOL Then gMsg = "the ln1 End point does not sit where the map put it": GoTo ExFail
+    If Abs(v(2)) > TOL Then gMsg = "the ln1 End point is off the sketch plane": GoTo ExFail
+    v = ln2.GetStartPoint
+    If Abs(v(0) - MapU(2, 0.08, 0.02)) > TOL Then gMsg = "the ln2 Start point does not sit where the map put it": GoTo ExFail
+    If Abs(v(1) - MapV(2, 0.08, 0.02)) > TOL Then gMsg = "the ln2 Start point does not sit where the map put it": GoTo ExFail
+    If Abs(v(2)) > TOL Then gMsg = "the ln2 Start point is off the sketch plane": GoTo ExFail
+    v = ln2.GetEndPoint
+    If Abs(v(0) - MapU(2, 0.0, 0.02)) > TOL Then gMsg = "the ln2 End point does not sit where the map put it": GoTo ExFail
+    If Abs(v(1) - MapV(2, 0.0, 0.02)) > TOL Then gMsg = "the ln2 End point does not sit where the map put it": GoTo ExFail
+    If Abs(v(2)) > TOL Then gMsg = "the ln2 End point is off the sketch plane": GoTo ExFail
+    v = ln3.GetStartPoint
+    If Abs(v(0) - MapU(2, 0.0, 0.02)) > TOL Then gMsg = "the ln3 Start point does not sit where the map put it": GoTo ExFail
+    If Abs(v(1) - MapV(2, 0.0, 0.02)) > TOL Then gMsg = "the ln3 Start point does not sit where the map put it": GoTo ExFail
+    If Abs(v(2)) > TOL Then gMsg = "the ln3 Start point is off the sketch plane": GoTo ExFail
+    v = ln3.GetEndPoint
+    If Abs(v(0) - MapU(2, 0.0, 0.0)) > TOL Then gMsg = "the ln3 End point does not sit where the map put it": GoTo ExFail
+    If Abs(v(1) - MapV(2, 0.0, 0.0)) > TOL Then gMsg = "the ln3 End point does not sit where the map put it": GoTo ExFail
+    If Abs(v(2)) > TOL Then gMsg = "the ln3 End point is off the sketch plane": GoTo ExFail
+    Set skFeat = swSketchMgr.ActiveSketch
+    If skFeat Is Nothing Then gMsg = "the primitive sketch was not open at closing": GoTo ExFail
     swDoc.ClearSelection2 True
     swSketchMgr.InsertSketch True
     ok = swDoc.Extension.SelectByID2(primName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-    If Not ok Then gMsg = "could not select the primitive sketch": GoTo ExFail
-    Set feat = gFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.01, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)
+    If Not ok Then gMsg = "could not select the primitive sketch: name=<" & primName & ">": GoTo ExFail
+    wantSide = 1 * gMapSide(2)
+    dirFlag = (wantSide = TT_PRIM_DIR_TRUE_SIDE)
+    Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.01, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)
     If feat Is Nothing Then gMsg = "the primitive extrude was not created": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
     If dm Is Nothing Then gMsg = "the primitive height dimension is missing": GoTo ExFail
-    If Abs(dm.SystemValue - 0.01) > 0.000001 Then gMsg = "the primitive height does not match": GoTo ExFail
+    If Abs(dm.SystemValue - 0.01) > TOL Then gMsg = "the primitive height does not match": GoTo ExFail
     gMsg = "primitive created"
     BuildPrim2 = "created"
     Exit Function
@@ -634,38 +770,84 @@ End Function
 ' Primitive step 3: "Peg"
 Function BuildPrim3() As String
     On Error GoTo HardFail
+    Const TOL As Double = 0.000001
     Dim ok As Boolean
     Dim feat As SldWorks.Feature
     Dim skFeat As SldWorks.Feature
     Dim primName As String
     Dim dm As SldWorks.Dimension
     Dim dd As SldWorks.DisplayDimension
-    Dim seg As Variant
-    Dim sl As Object
+    Dim created As Double
+    Dim signVal As Double
+    Dim chk As Double
+    Dim v As Variant
+    Dim v2 As Variant
+    Dim wantSide As Long
+    Dim dirFlag As Boolean
+    Dim axClassU As Long
+    Dim axClassV As Long
+    Dim nameU As String
+    Dim nameV As String
+    Dim pA As Object
+    Dim pB As Object
     Dim ci As Object
     ok = OpenSketchOnPlane(3, "XY")
     If Not ok Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo ExFail
-    If Not MapIsIdentity(3) Then gMsg = "frame adaptation: primitive replay on a non-identity sketch map is not implemented (primitive adaptation is batch 3); refusing to report created": GoTo ExFail
-    Set ci = swSketchMgr.CreateCircleByRadius(0.0, 0.0, 0#, 0.04)
-    ci.Select False
-    Set dd = swDoc.AddDimension2(0#, 0#, 0#)
-    If dd Is Nothing Then GoTo ExFail
-    Set dm = dd.GetDimension2(0)
-    If dm Is Nothing Then GoTo ExFail
-    If Abs(dm.SystemValue - 0.04) > 0.000001 Then gMsg = "the cylinder radius does not match": GoTo ExFail
-    If Not AddDimEquation(dm, """width""", 0.04, 2, 1#) Then gMsg = "the cylinder radius equation did not evaluate": GoTo ExFail
+    If Not gMapValid(3) Then gMsg = "frame adaptation: the primitive sketch carries no valid adaptation map; refusing to report created": GoTo ExFail
+    If Not MapIsPermutation(3) Then gMsg = "frame adaptation: the primitive profile requires a signed-permutation sketch map (bounded support, this seat only exhibits permutation frames); refusing to report created": GoTo ExFail
+    If TT_PRIM_DIR_TRUE_SIDE = 0 Then gMsg = "the primitive direction truth table is unmeasured: probe-primorient has not established which physical side the primitive height extends toward on this sketch map; refusing to report created": GoTo ExFail
+    Set ci = swSketchMgr.CreateCircleByRadius(MapU(3, 0.0, 0.0), MapV(3, 0.0, 0.0), 0#, 0.04)
+    If ci Is Nothing Then gMsg = "the cylinder profile circle did not appear": GoTo ExFail
     Set skFeat = swSketchMgr.ActiveSketch
     If skFeat Is Nothing Then gMsg = "the primitive sketch was not created": GoTo ExFail
     primName = skFeat.Name
+    Set pA = ci.GetCenterPoint2
+    If pA Is Nothing Then gMsg = "the cylinder centre handle is missing": GoTo ExFail
+    If Not pA.Select(False) Then gMsg = "the cylinder centre anchor would not select": GoTo ExFail
+    swDoc.SketchAddConstraints "sgFix"
+    swDoc.ClearSelection2 True
+    If Not ci.Select(False) Then gMsg = "the cylinder radius would not select": GoTo ExFail
+    Set dd = swDoc.AddDimension2(0#, 0#, 0#)
+    If dd Is Nothing Then gMsg = "the cylinder radius dimension did not appear": GoTo ExFail
+    Set dm = dd.GetDimension2(0)
+    If dm Is Nothing Then gMsg = "the cylinder radius dimension has no core dimension": GoTo ExFail
+    created = dm.SystemValue
+    chk = Abs(created)
+    If Abs(chk - 0.04) <= TOL And Abs(chk - 2# * 0.04) <= TOL Then gMsg = "the cylinder radius dimension kind cannot be established at this scale (the radius- and diameter-kind readings coincide within tolerance)": GoTo ExFail
+    If Abs(chk - 2# * 0.04) <= TOL Then gMsg = "the cylinder radius dimension reads the diameter (" & Trim(Str(created)) & "); the radius equation needs the radius-kind reading pinned by probe-primorient": GoTo ExFail
+    If Abs(chk - 0.04) > TOL Then gMsg = "the cylinder radius dimension measures " & Trim(Str(created)) & " but the source value is 0.04": GoTo ExFail
+    If Abs(created - 0.04) <= TOL Then
+    signVal = 1#
+    Else
+    signVal = -1#
+    End If
+    dm.SystemValue = signVal * 0.04
+    chk = ci.GetRadius
+    If Abs(chk - 0.04) > TOL Then gMsg = "the cylinder radius geometry did not follow the value edit (radius " & Trim(Str(chk)) & ")": GoTo ExFail
+    swDoc.ClearSelection2 True
+    If Not AddDimEquation(dm, """width""", signVal * 0.04, 2, signVal) Then gMsg = "the cylinder radius equation did not evaluate": GoTo ExFail
+    SolveSketch primName
+    SolveSketch primName
+    Set pA = ci.GetCenterPoint2
+    If pA Is Nothing Then gMsg = "the cylinder centre handle is missing": GoTo ExFail
+    If Abs(pA.X - MapU(3, 0.0, 0.0)) > TOL Then gMsg = "the cylinder centre does not sit where the map put it": GoTo ExFail
+    If Abs(pA.Y - MapV(3, 0.0, 0.0)) > TOL Then gMsg = "the cylinder centre does not sit where the map put it": GoTo ExFail
+    If Abs(pA.Z) > TOL Then gMsg = "the cylinder centre is off the sketch plane": GoTo ExFail
+    chk = ci.GetRadius
+    If Abs(chk - 0.04) > TOL Then gMsg = "the cylinder radius does not sit where the draw put it": GoTo ExFail
+    Set skFeat = swSketchMgr.ActiveSketch
+    If skFeat Is Nothing Then gMsg = "the primitive sketch was not open at closing": GoTo ExFail
     swDoc.ClearSelection2 True
     swSketchMgr.InsertSketch True
     ok = swDoc.Extension.SelectByID2(primName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-    If Not ok Then gMsg = "could not select the primitive sketch": GoTo ExFail
-    Set feat = gFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.005, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)
+    If Not ok Then gMsg = "could not select the primitive sketch: name=<" & primName & ">": GoTo ExFail
+    wantSide = 1 * gMapSide(3)
+    dirFlag = (wantSide = TT_PRIM_DIR_TRUE_SIDE)
+    Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.005, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)
     If feat Is Nothing Then gMsg = "the primitive extrude was not created": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
     If dm Is Nothing Then gMsg = "the primitive height dimension is missing": GoTo ExFail
-    If Abs(dm.SystemValue - 0.005) > 0.000001 Then gMsg = "the primitive height does not match": GoTo ExFail
+    If Abs(dm.SystemValue - 0.005) > TOL Then gMsg = "the primitive height does not match": GoTo ExFail
     gMsg = "primitive created"
     BuildPrim3 = "created"
     Exit Function
@@ -1186,20 +1368,32 @@ Function SketchToModelZ(ByVal idx As Long, ByVal s As Double, ByVal t As Double)
 SketchToModelZ = gFrame(idx, 11) + s * gFrame(idx, 2) + t * gFrame(idx, 5)
 End Function
 
-' Feature guards (batch boundary): primitive replay still assumes the
-' identity map - batch 3 replaces this with primitive adaptation. Extrude
-' and revolve replay runs through the direction truth table on any valid
-' map (batch 2). Anything else is refused with a named reason and never
-' reports created.
-Function MapIsIdentity(ByVal idx As Long) As Boolean
-MapIsIdentity = False
+' Frame adaptation (batch 3): primitive replay supports signed-
+' permutation maps (bounded support - this seat only exhibits permutation
+' frames): each map entry is 0 or +-1 with exactly one nonzero per row and
+' per column. The map's orientation (gMapSide) is unconstrained - the
+' direction truth table composes it. Anything else is refused with a named
+' reason and never reports created (docs/mapping.md, Primitives).
+Function MapIsPermutation(ByVal idx As Long) As Boolean
+Dim m00 As Double
+Dim m01 As Double
+Dim m10 As Double
+Dim m11 As Double
+MapIsPermutation = False
 If Not gMapValid(idx) Then Exit Function
-If gMapSide(idx) <> 1 Then Exit Function
-If Abs(gMap00(idx) - 1#) > 0.000001 Then Exit Function
-If Abs(gMap11(idx) - 1#) > 0.000001 Then Exit Function
-If Abs(gMap01(idx)) > 0.000001 Then Exit Function
-If Abs(gMap10(idx)) > 0.000001 Then Exit Function
-MapIsIdentity = True
+m00 = Abs(gMap00(idx))
+m01 = Abs(gMap01(idx))
+m10 = Abs(gMap10(idx))
+m11 = Abs(gMap11(idx))
+If m00 > 0.000001 And Abs(m00 - 1#) > 0.000001 Then Exit Function
+If m01 > 0.000001 And Abs(m01 - 1#) > 0.000001 Then Exit Function
+If m10 > 0.000001 And Abs(m10 - 1#) > 0.000001 Then Exit Function
+If m11 > 0.000001 And Abs(m11 - 1#) > 0.000001 Then Exit Function
+If Abs(m00 + m10 - 1#) > 0.000001 Then Exit Function
+If Abs(m01 + m11 - 1#) > 0.000001 Then Exit Function
+If Abs(m00 + m01 - 1#) > 0.000001 Then Exit Function
+If Abs(m10 + m11 - 1#) > 0.000001 Then Exit Function
+MapIsPermutation = True
 End Function
 
 ' Rebuild and stay in sketch edit (seat-proven 2026-11-16: EditRebuild3

@@ -304,13 +304,37 @@ fn primitives_and_cross_references_replay() {
     let case = Case::new(TRACER_PRIM);
     case.build_to("prim.swb", false).unwrap();
     let macro_text = fs::read_to_string(case.dir.path().join("prim.swb")).unwrap();
+    // The box profile is four segments between MAPPED corners (sketch
+    // geometry's own drawing calls), never CreateCornerRectangle (whose
+    // returned segment order is unpinned and whose axis-aligned footprint
+    // would not survive a non-permutation map).
     assert!(
-        macro_text.contains("CreateCornerRectangle"),
-        "no box sketch"
+        !macro_text.contains("CreateCornerRectangle"),
+        "the primitive box still uses the unpinned corner-rectangle call"
     );
+    let box_region = builder_region(&macro_text, "BuildPrim2");
+    for corner in [(0.0, 0.0), (0.08, 0.0), (0.08, 0.02), (0.0, 0.02)] {
+        let (x, y) = corner;
+        let u = format!("MapU(2, {}, {})", swb::vba_num(x), swb::vba_num(y));
+        let v = format!("MapV(2, {}, {})", swb::vba_num(x), swb::vba_num(y));
+        assert!(
+            box_region.contains(&u),
+            "box: the mapped corner {u} is missing"
+        );
+        assert!(
+            box_region.contains(&v),
+            "box: the mapped corner {v} is missing"
+        );
+    }
     assert!(
         macro_text.contains("CreateCircleByRadius"),
         "no cylinder sketch"
+    );
+    // The cylinder centre maps like geometry; the radius stays the SI-metre
+    // source value (the map is an isometry).
+    assert!(
+        macro_text.contains("CreateCircleByRadius(MapU(3, 0.0, 0.0), MapV(3, 0.0, 0.0), 0#, 0.04)"),
+        "the cylinder profile is not drawn mapped at its SI radius"
     );
     assert!(
         macro_text.contains("regName(0)"),
@@ -325,6 +349,13 @@ fn primitives_and_cross_references_replay() {
     assert!(
         macro_text.contains("* 2"),
         "the segmented right-hand side is missing"
+    );
+    // The cross-reference equation keeps the sign contract: the sign is
+    // resolved from the dimension readback and travels through
+    // AddDimEquation's signVal (regSign -> SlotRef normalization).
+    assert!(
+        box_region.contains("signVal * 0.08, 1, signVal"),
+        "the box length equation lost the sign contract"
     );
     let outcome = case.build_to("prim2.swb", false).unwrap();
     for step in &outcome.plan.steps {
@@ -1450,20 +1481,40 @@ fn adaptation_machinery_is_wired_fail_closed() {
         "map state is not indexed per sketch slot"
     );
     // Deferred consumers keep their batch boundaries in their own builders,
-    // before any feature is created: primitives still refuse non-identity
-    // maps (batch 3), while extrude and revolve run through the direction
-    // truth table on any valid map and guard on map VALIDITY instead.
+    // before any feature is created: after batch 3 primitives run through
+    // the adaptation map (validity + signed-permutation class) and the
+    // direction truth table's orientation cell (probe-primorient), while
+    // extrude and revolve run through the direction truth table on any
+    // valid map and guard on map VALIDITY instead. The retired identity
+    // guard is gone from the whole macro.
+    assert!(
+        !text.contains("MapIsIdentity"),
+        "the retired identity-map guard survived anywhere in the macro"
+    );
     {
         let case = Case::new(TRACER_PRIM);
         case.build_to("guard.swb", false).unwrap();
         let gtext = fs::read_to_string(case.dir.path().join("guard.swb")).unwrap();
-        let i = gtext
-            .find("Function BuildPrim")
-            .expect("no BuildPrim builder");
-        let region = &gtext[i..i + 1200.min(gtext.len() - i)];
+        let region = builder_region(&gtext, "BuildPrim2");
         assert!(
-            region.contains("MapIsIdentity("),
-            "BuildPrim: no identity-map guard"
+            region.contains("gMapValid(2)"),
+            "BuildPrim: no map-validity guard"
+        );
+        assert!(
+            region.contains("MapIsPermutation(2)"),
+            "BuildPrim: no signed-permutation map-class guard"
+        );
+        assert!(
+            region.contains("TT_PRIM_DIR_TRUE_SIDE = 0"),
+            "BuildPrim: no orientation-cell gate"
+        );
+        assert!(
+            region.contains("probe-primorient"),
+            "BuildPrim: the orientation refusal does not name its probe"
+        );
+        assert!(
+            !region.contains("MapIsIdentity("),
+            "BuildPrim: the retired identity guard survived"
         );
     }
     for (fam, recipe) in [("BuildExtrude", TRACER), ("BuildRevolve", TRACER_REVOLVE)] {
@@ -2078,6 +2129,21 @@ fn truth_table_decisions_refuse_unmeasured_cells() {
         assert_eq!(truth::revolve_reverse_flag(want, 0), None);
         assert_eq!(truth::revolve_two_sided_swap(want, 0), None);
         assert_eq!(truth::revolve_in_evidence_scope(want, 1, 0), None);
+    }
+    // The primitive orientation cell is UNMEASURED until probe-primorient
+    // reports; while it reads 0 every primitive height-side decision must
+    // refuse. The fold-in that measures it updates this test and the
+    // constant together.
+    assert_eq!(
+        truth::TT_PRIM_DIR_TRUE_SIDE,
+        0,
+        "the primitive orientation cell claims a measurement that no probe pinned"
+    );
+    for want in [-1, 1] {
+        assert_eq!(
+            truth::extrude_dir_flag(want, truth::TT_PRIM_DIR_TRUE_SIDE),
+            None
+        );
     }
 }
 
@@ -2975,4 +3041,285 @@ fn every_emitted_local_is_declared() {
         std::panic::catch_unwind(|| assert_locals_declared(broken, "negative-control")).is_err(),
         "the locals scan misses undeclared locals"
     );
+}
+
+// ---- Phase 1 batch 3: primitive adaptation (offline synthetic coverage) ----
+
+/// Mirrors the emitted MapIsPermutation VBA exactly: each map entry is 0 or
+/// +-1 within tolerance, with exactly one nonzero per row and per column.
+fn map_is_permutation(m: [f64; 4]) -> bool {
+    let a = [m[0].abs(), m[1].abs(), m[2].abs(), m[3].abs()];
+    for e in a {
+        if e > 1e-6 && (e - 1.0).abs() > 1e-6 {
+            return false;
+        }
+    }
+    (a[0] + a[2] - 1.0).abs() <= 1e-6
+        && (a[1] + a[3] - 1.0).abs() <= 1e-6
+        && (a[0] + a[1] - 1.0).abs() <= 1e-6
+        && (a[2] + a[3] - 1.0).abs() <= 1e-6
+}
+
+#[test]
+fn primitive_profiles_map_on_all_signed_permutations() {
+    // All eight signed permutations of the sketch map, evaluated over the
+    // emitted source corners (the fixture box: length 0.08 m, width 0.02 m
+    // at the SC origin): the mapped corners form the mapped footprint, the
+    // u edge keeps the length and its length-dimension binding, the v edge
+    // the width, the circle maps with its radius unchanged (isometry), the
+    // classified shape relations land on the right axes, and the extrude
+    // side composes wantSide = +1 * gMapSide through the measured cell.
+    // A rotation map classifies as a refusal (bounded support).
+    let maps: [[f64; 4]; 8] = [
+        [1.0, 0.0, 0.0, 1.0],
+        [-1.0, 0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0, -1.0],
+        [-1.0, 0.0, 0.0, -1.0],
+        [0.0, 1.0, -1.0, 0.0],
+        [0.0, -1.0, 1.0, 0.0],
+        [0.0, 1.0, 1.0, 0.0],
+        [0.0, -1.0, -1.0, 0.0],
+    ];
+    let corners = [[0.0, 0.0], [0.08, 0.0], [0.08, 0.02], [0.0, 0.02]];
+    for m in maps {
+        assert!(
+            map_is_permutation(m),
+            "{m:?} must classify as a permutation"
+        );
+        let image: Vec<(f64, f64)> = corners.iter().map(|c| map_uv(m, c[0], c[1])).collect();
+        let dist =
+            |a: (f64, f64), b: (f64, f64)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+        // ln0 carries the length dimension, ln1 the width; the opposite
+        // edges follow structurally through the closed contour.
+        assert!(
+            (dist(image[0], image[1]) - 0.08).abs() < 1e-12,
+            "{m:?}: the u edge changed length"
+        );
+        assert!(
+            (dist(image[1], image[2]) - 0.02).abs() < 1e-12,
+            "{m:?}: the v edge changed length"
+        );
+        assert!(
+            (dist(image[2], image[3]) - 0.08).abs() < 1e-12,
+            "{m:?}: the far u edge changed length"
+        );
+        assert!(
+            (dist(image[3], image[0]) - 0.02).abs() < 1e-12,
+            "{m:?}: the far v edge changed length"
+        );
+        // Each edge is axis-aligned on the axis its classification picks
+        // (the u edges on AxisClass(u), the v edges on AxisClass(v)).
+        let cu = axis_class(m, true);
+        let cv = axis_class(m, false);
+        assert!(
+            cu >= 0 && cv >= 0 && cu != cv,
+            "{m:?}: the axes do not classify apart"
+        );
+        let aligned = |a: (f64, f64), b: (f64, f64), ax: i32| {
+            if ax == 0 {
+                (a.1 - b.1).abs() < 1e-12
+            } else {
+                (a.0 - b.0).abs() < 1e-12
+            }
+        };
+        assert!(
+            aligned(image[0], image[1], cu),
+            "{m:?}: the u edge is off its classified axis"
+        );
+        assert!(
+            aligned(image[1], image[2], cv),
+            "{m:?}: the v edge is off its classified axis"
+        );
+        // The circle: the centre maps like geometry; the radius is an
+        // isometry invariant (both map columns are unit vectors).
+        let (cs, ct) = map_uv(m, 0.0, 0.0);
+        assert!(
+            cs.abs() < 1e-12 && ct.abs() < 1e-12,
+            "{m:?}: the base centre moved"
+        );
+        let col_u = (m[0].powi(2) + m[1].powi(2)).sqrt();
+        let col_v = (m[2].powi(2) + m[3].powi(2)).sqrt();
+        assert!(
+            (col_u - 1.0).abs() < 1e-12 && (col_v - 1.0).abs() < 1e-12,
+            "{m:?}: the map is not an isometry"
+        );
+        // The side composition for both map orientations: while the
+        // orientation cell is unmeasured the decision refuses everywhere -
+        // never a guess, never a silent wrong side.
+        for side in [-1, 1] {
+            assert_eq!(
+                truth::extrude_dir_flag(side, truth::TT_PRIM_DIR_TRUE_SIDE),
+                None,
+                "{m:?} side {side}: the unmeasured orientation cell must refuse"
+            );
+        }
+    }
+    let q = std::f64::consts::FRAC_1_SQRT_2;
+    assert!(
+        !map_is_permutation([q, q, -q, q]),
+        "the 45-degree map must classify as a refusal"
+    );
+}
+
+#[test]
+fn primitive_refusals_are_named() {
+    let case = Case::new(TRACER_PRIM);
+    case.build_to("refuse.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("refuse.swb")).unwrap();
+    let box_region = builder_region(&text, "BuildPrim2");
+    let cyl_region = builder_region(&text, "BuildPrim3");
+    for (region, name) in [(box_region, "box"), (cyl_region, "cylinder")] {
+        assert!(
+            region.contains("no valid adaptation map"),
+            "{name}: the map-validity refusal is unnamed"
+        );
+        assert!(
+            region.contains("signed-permutation sketch map (bounded support"),
+            "{name}: the map-class refusal is unnamed"
+        );
+        assert!(
+            region.contains("TT_PRIM_DIR_TRUE_SIDE = 0"),
+            "{name}: the orientation gate is missing"
+        );
+        assert!(
+            region.contains("probe-primorient"),
+            "{name}: the orientation refusal does not name its probe"
+        );
+    }
+    // The circle-size dimension kind is established unambiguously BEFORE
+    // the value is written and the dimension registered (plan review): the
+    // coincident-reading scale and the diameter-kind reading are refused
+    // by name.
+    assert!(
+        cyl_region.contains("the radius- and diameter-kind readings coincide within tolerance"),
+        "the radius-kind ambiguity is not refused"
+    );
+    assert!(
+        cyl_region.contains("reads the diameter"),
+        "the diameter-kind reading is not refused"
+    );
+    let ambiguous = cyl_region
+        .find("coincide within tolerance")
+        .expect("no ambiguity refusal");
+    let write = cyl_region
+        .find("dm.SystemValue = signVal")
+        .expect("no value write");
+    let register = cyl_region.find("AddDimEquation").expect("no registration");
+    assert!(
+        ambiguous < write && write < register,
+        "the kind check runs after the write or the registration"
+    );
+    // Mapped-placement readback refusals name what failed.
+    assert!(
+        box_region.contains("does not sit where the map put it"),
+        "the box placement readback is unnamed"
+    );
+    assert!(
+        cyl_region.contains("does not sit where the map put it"),
+        "the circle placement readback is unnamed"
+    );
+    // The sign resolution refuses a measurement of neither sign by name.
+    assert!(
+        box_region.contains("but the source value is 0.08"),
+        "the sign mismatch refusal is unnamed"
+    );
+}
+
+#[test]
+fn primitive_equations_reenter_before_the_next_dimension() {
+    // AddDimEquation's EditRebuild3 EXITS sketch edit (seat-measured): the
+    // first box equation must be followed by a SolveSketch re-entry before
+    // the width dimension is created, or the later AddDimension2 silently
+    // no-ops in a closed sketch. Ordering regression for the sequencing
+    // defect the batch-3 analysis found in the old builder (the fixture's
+    // first box size carries the equation).
+    let case = Case::new(TRACER_PRIM);
+    case.build_to("order.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("order.swb")).unwrap();
+    let region = builder_region(&text, "BuildPrim2");
+    let eq = region
+        .find("AddDimEquation")
+        .expect("no dimension equation");
+    let reenter = region[eq..]
+        .find("SolveSketch primName")
+        .expect("no sketch re-entry after the equation")
+        + eq;
+    let second_dim = region[reenter..]
+        .find("AddDimension2")
+        .expect("no width dimension after the re-entry")
+        + reenter;
+    assert!(
+        eq < reenter && reenter < second_dim,
+        "the equation is not followed by a sketch re-entry before the next dimension"
+    );
+}
+
+#[test]
+fn primitive_box_carries_its_shape_contract() {
+    // Parameter-edit safety (plan review): the generated rectangle never
+    // relies on automatic relations - coincident corners close the contour,
+    // classified horizontal/vertical relations pin rectangularity and edge
+    // directions, and a fix on the corner anchors the literal placement.
+    let case = Case::new(TRACER_PRIM);
+    case.build_to("shape.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("shape.swb")).unwrap();
+    let region = builder_region(&text, "BuildPrim2");
+    assert_eq!(
+        region.matches("\"sgCOINCIDENT\"").count(),
+        4,
+        "the box does not close its four corners"
+    );
+    assert!(
+        region.contains("axClassU = AxisClass(2, True)")
+            && region.contains("axClassV = AxisClass(2, False)"),
+        "the shape relations do not classify at runtime"
+    );
+    assert!(
+        region.contains("nameU = \"sgHORIZONTAL2D\" Else nameU = \"sgVERTICAL2D\""),
+        "the u edges carry no classified relation kind"
+    );
+    assert!(
+        region.contains("nameV = \"sgHORIZONTAL2D\" Else nameV = \"sgVERTICAL2D\""),
+        "the v edges carry no classified relation kind"
+    );
+    assert_eq!(
+        region.matches("swDoc.SketchAddConstraints nameU").count(),
+        2,
+        "the two u edges do not get the u relation"
+    );
+    assert_eq!(
+        region.matches("swDoc.SketchAddConstraints nameV").count(),
+        2,
+        "the two v edges do not get the v relation"
+    );
+    assert!(
+        region.contains("\"sgFix\"") && region.contains("ln0.GetStartPoint2"),
+        "the literal corner is not anchored"
+    );
+    let cyl = builder_region(&text, "BuildPrim3");
+    assert!(
+        cyl.contains("\"sgFix\"") && cyl.contains("ci.GetCenterPoint2"),
+        "the cylinder centre is not anchored"
+    );
+}
+
+#[test]
+fn primitive_cylinder_tiny_radius_is_refused() {
+    // Sub-micrometre negative control (plan review): at or below 2e-6 m the
+    // radius- and diameter-kind circle-dimension readings coincide within
+    // the 1e-6 m verification tolerance (and a halved driven radius passes
+    // the geometry check), so the kind can never be established and the
+    // planner refuses the size fail-closed.
+    let tiny = TRACER_PRIM.replace("\"radius\": \"width\"", "\"radius\": \"0.0005 mm\"");
+    let steps = plan_of(&tiny);
+    assert_eq!(steps[3].status, PlanStatus::FallbackPlanned);
+    assert!(
+        steps[3].detail.contains("cannot be distinguished"),
+        "the tiny-radius refusal does not name its reason: {}",
+        steps[3].detail
+    );
+    // Just above the floor the same size is accepted again.
+    let ok = TRACER_PRIM.replace("\"radius\": \"width\"", "\"radius\": \"0.003 mm\"");
+    let steps = plan_of(&ok);
+    assert_eq!(steps[3].status, PlanStatus::Mapped, "{}", steps[3].detail);
 }

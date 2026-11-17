@@ -1100,3 +1100,45 @@ fn sha256_matches_the_known_answer() {
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     );
 }
+
+// ---- every committed macro, generated or hand-written ----
+
+#[test]
+fn every_committed_macro_passes_the_scans() {
+    // The full scan set over EVERY committed macro byte stream, not only
+    // the recipes the other tests rebuild (plan review): the regenerated
+    // corpus bytes and the new orientation probe (hand-written, same
+    // Option Explicit compile contract) must pass the literal-balance,
+    // structure, intrinsic-shadowing, residue and declaration scans like
+    // the generated macros. A compile failure presents on the seat only as
+    // a bare invocation failure with no report - these scans are the only
+    // early warning.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let corpus = root.join("corpus");
+    let mut targets: Vec<(String, String)> = Vec::new();
+    let mut dirs: Vec<_> = fs::read_dir(&corpus).unwrap().map(|e| e.unwrap()).collect();
+    dirs.sort_by_key(|e| e.file_name());
+    for entry in dirs {
+        let item = entry.path().join("item.swb");
+        if item.is_file() {
+            let name = format!("corpus/{}", entry.file_name().to_string_lossy());
+            targets.push((name, fs::read_to_string(&item).unwrap()));
+        }
+    }
+    targets.push((
+        "corpus/compat-probe/probe-primorient".to_string(),
+        fs::read_to_string(corpus.join("compat-probe").join("probe-primorient.swb")).unwrap(),
+    ));
+    assert!(
+        targets.len() > 3,
+        "the corpus scan found no committed macros"
+    );
+    for (name, text) in &targets {
+        assert_vba_literals_balance(text, name);
+        assert_vba_structure(text, name);
+        assert_no_intrinsic_shadowing(text, name);
+        assert_no_executable_residue(text, name);
+        assert_state_declared(text, name);
+        assert_locals_declared(text, name);
+    }
+}

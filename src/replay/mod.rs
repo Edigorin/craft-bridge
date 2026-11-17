@@ -842,7 +842,9 @@ fn plan_feature(
                         index,
                         command: id.to_string(),
                         status: PlanStatus::Mapped,
-                        detail: format!("{what} replayed as a generated sketch and extrude"),
+                        detail: format!(
+                        "{what} replayed as a mapped generated sketch and a blind extrude through the direction truth table"
+                    ),
                         work: Work::Primitive(primitive),
                     }
                 }
@@ -1829,10 +1831,13 @@ fn coalesce(segs: Vec<RhsSeg>) -> Vec<RhsSeg> {
     out
 }
 
-/// Primitives replay as a generated sketch plus a blind extrude. Placement
-/// (corner/base) must be literal and on the base plane; the axis must be Z;
-/// sizes may be parametric and become dimension equations. Everything else
-/// stops (off-plane placement needs extrude start-offset machinery).
+/// Primitives replay as a mapped generated sketch plus a blind extrude
+/// through the direction truth table. Placement (corner/base) must be
+/// literal and on the base plane; the axis must be Z; sizes may be
+/// parametric and become dimension equations. A cylinder radius at or below
+/// 2e-6 m is refused: at that scale the circle-dimension kind (radius vs
+/// diameter reading) cannot be established. Everything else stops
+/// (off-plane placement needs extrude start-offset machinery).
 #[allow(clippy::too_many_arguments)]
 fn parse_prim(
     name: String,
@@ -1940,6 +1945,18 @@ fn parse_prim(
         let value_mm = q.value * 1000.0;
         if !(value_mm.is_finite() && value_mm > 0.0) {
             return Err(format!("the primitive {key} is not a positive length"));
+        }
+        // The circle-size dimension kind (radius- vs diameter-kind reading)
+        // is established against the drawn radius with a 1e-6 m tolerance;
+        // at or below 2e-6 m the two candidate readings coincide within that
+        // tolerance (and a halved driven radius would pass the geometry
+        // check), so the kind can never be established here and the size is
+        // refused fail-closed (docs/mapping.md, Primitives).
+        if kind == PrimKind::Cylinder && *key == "radius" && q.value <= 2e-6 {
+            return Err(format!(
+                "the cylinder radius {} m is below twice the 1e-6 m dimension-kind verification tolerance: a radius-kind circle dimension cannot be distinguished from a diameter-kind reading at this scale",
+                q.value
+            ));
         }
         let equation = if literal {
             None
