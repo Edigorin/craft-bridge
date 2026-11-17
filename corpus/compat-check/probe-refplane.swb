@@ -308,9 +308,13 @@ Sub main()
     WriteStep stepIdx, "trace", "created", "p4 off=" & SafeNum(off)
     WriteStep stepIdx, "circle.centre", "created", "via " & centreVia & " at " & Vec3Text(cphX, cphY, cphZ)
     WriteStep stepIdx, "trace", "created", "msg done"
+    WriteStep stepIdx, "trace", "created", "checks start"
     If centreVia = "none" Then Err.Raise vbObjectError + 539, "probe-refplane.swb", "the circle centre is unreadable by both handles (last err " & Trim(Str(centreErr)) & ")"
+    WriteStep stepIdx, "trace", "created", "check1 passed"
     If Abs(off - 0.012) > 0.000002 Then Err.Raise vbObjectError + 539, "probe-refplane.swb", "the circle centre is " & Vec3Text(cphX, cphY, cphZ) & " (distance " & Trim(Str(off)) & "), not on the 0.012 plane"
+    WriteStep stepIdx, "trace", "created", "check2 passed"
 
+    WriteStep stepIdx, "trace", "created", "step7 entering"
     ' ---- step 7 (P03a): the offset dimension DRIVES the plane ----
     stepIdx = 7
     Err.Clear
