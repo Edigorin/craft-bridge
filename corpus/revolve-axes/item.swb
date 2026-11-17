@@ -619,7 +619,7 @@ Function BuildRevolve1() As String
     If ok = False Then gMsg = "could not select the profile sketch: " & objState & " name=<" & skName0 & ">; tree scan saw: " & TreeSummary(): GoTo ExFail
     If Not sl0(0).Select(True) Then gMsg = "could not select the revolve axis": GoTo ExFail
     Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, revFlag, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 4.71238898038469, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)
-    If feat Is Nothing Then gMsg = "the revolve was not created": GoTo ExFail
+    If feat Is Nothing Then gMsg = "the revolve was not created (kind=single-dir)": GoTo ExFail
     If feat Is Nothing Then gMsg = "the feature was not created": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
     If dm Is Nothing Then gMsg = "the revolve angle D1 dimension is missing": GoTo ExFail
@@ -694,7 +694,7 @@ Function BuildRevolve2() As String
     If ok = False Then gMsg = "could not select the profile sketch: " & objState & " name=<" & skName0 & ">; tree scan saw: " & TreeSummary(): GoTo ExFail
     If Not ax.Select(True) Then gMsg = "could not select the helper axis": GoTo ExFail
     Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 6.283185307179586, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)
-    If feat Is Nothing Then gMsg = "the revolve was not created": GoTo ExFail
+    If feat Is Nothing Then gMsg = "the revolve was not created (kind=single-dir)": GoTo ExFail
     If feat Is Nothing Then gMsg = "the feature was not created": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
     If dm Is Nothing Then gMsg = "the revolve angle D1 dimension is missing": GoTo ExFail

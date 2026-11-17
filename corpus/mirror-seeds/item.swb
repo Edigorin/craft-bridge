@@ -581,7 +581,7 @@ Function BuildPat2() As String
     ok = False
     If Not pf Is Nothing Then ok = pf.Select(False)
     If ok = False Then ok = swDoc.Extension.SelectByID2(gPlane, "PLANE", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-    If Not ok Then gMsg = "the mirror plane could not be selected": GoTo ExFail
+    If Not ok Then gMsg = "the mirror plane could not be selected: gPlane=<" & gPlane & "> object-found=" & CStr(Not pf Is Nothing) & "; tree scan saw: " & TreeSummary(): GoTo ExFail
     feat1.Select True
     ' feature call shape pending checkpoint verification
     Set feat = gFeatMgr.FeatureMirror(True, False, False, 0#, 0#)

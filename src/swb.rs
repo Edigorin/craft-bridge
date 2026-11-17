@@ -2398,7 +2398,7 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep, sk: Option<&SketchStep>) ->
         match &rv.kind {
             RK::Blind { angle_rad, .. } => {
                 body.push_str(&format!(
-                    "    Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, {flag}, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n    If feat Is Nothing Then gMsg = \"the revolve was not created\": GoTo ExFail\n",
+                    "    Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, {flag}, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n    If feat Is Nothing Then gMsg = \"the revolve was not created (kind=single-dir)\": GoTo ExFail\n",
                     vba_num(*angle_rad)
                 ));
                 body.push_str(&dim_check(1, angle_rad.abs(), "revolve angle D1"));
@@ -2419,7 +2419,7 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep, sk: Option<&SketchStep>) ->
                 // the axis points"); the angle is the TOTAL (the documented
                 // mid-plane semantics, probe-confirmable).
                 body.push_str(&format!(
-                    "    Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondMidPlane, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n    If feat Is Nothing Then gMsg = \"the revolve was not created\": GoTo ExFail\n",
+                    "    Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondMidPlane, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n    If feat Is Nothing Then gMsg = \"the revolve was not created (kind=midplane)\": GoTo ExFail\n",
                     vba_num(*total_rad)
                 ));
                 body.push_str(&dim_check(1, total_rad.abs(), "revolve angle D1"));
@@ -2438,7 +2438,7 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep, sk: Option<&SketchStep>) ->
                 first_rad,
                 second_rad,
             } => {
-                body.push_str("    Set feat = gFeatMgr.FeatureRevolve2(False, True, False, False, False, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, aA, aB, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n    If feat Is Nothing Then gMsg = \"the revolve was not created\": GoTo ExFail\n");
+                body.push_str("    Set feat = gFeatMgr.FeatureRevolve2(False, True, False, False, False, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, aA, aB, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n    If feat Is Nothing Then gMsg = \"the revolve was not created (kind=two-sided)\": GoTo ExFail\n");
                 body.push_str(&dim_check_dyn(
                     "wFirst",
                     first_rad.abs(),
@@ -3052,7 +3052,7 @@ fn emit_pat_subs(index: usize, pt: &crate::replay::PatStep) -> String {
                 desc = frame_desc(solidcraft_frame(*plane))
             ));
             out.push_str("    Set pf = FindFeatureByName(gPlane, uncertain)\n    ok = False\n    If Not pf Is Nothing Then ok = pf.Select(False)\n    If ok = False Then ok = swDoc.Extension.SelectByID2(gPlane, \"PLANE\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n");
-            out.push_str("    If Not ok Then gMsg = \"the mirror plane could not be selected\": GoTo ExFail\n");
+            out.push_str("    If Not ok Then gMsg = \"the mirror plane could not be selected: gPlane=<\" & gPlane & \"> object-found=\" & CStr(Not pf Is Nothing) & \"; tree scan saw: \" & TreeSummary(): GoTo ExFail\n");
             for seed in seeds {
                 out.push_str(&format!("    feat{seed}.Select True\n"));
             }
