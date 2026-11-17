@@ -446,6 +446,7 @@ Source-side rules the adaptation applies on top of the constants
 | `angle` = 360 deg | full turn; convention-free, no truth-table cell consulted | pending |
 | `angle` + `angle2` | two-sided, interval `[-angle2, +angle]`; the angle arguments (and their D1/D2 dimension identities) swap per the truth table; non-positive angles refused | pending |
 | `direction: "symmetric"` | mid-plane revolve; `angle` is the whole turn split either side | pending |
+| a profile that crosses its revolve axis | **refused named** before the call on every form - the source kernel's own unconditional rule (`revolved()`: "the profile crosses the revolve axis", any angle) | n/a |
 | `to`, `convention: "legacy_axis_start"` on a partial turn, model/construction axes, edge/face axes, `profiles` other than `all` | **stop rule** (unsupported in the tracer phase) | n/a |
 
 Revolve verification: the feature must exist and its angle dimension(s) must
