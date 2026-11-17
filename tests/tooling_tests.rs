@@ -421,6 +421,20 @@ fn the_mass_entry_is_never_absent() {
 
 #[test]
 fn checker_syntax_is_paired_and_acquisition_is_typed() {
+    // The solid=none flag must be declared (Option Explicit turns an
+    // undeclared variable into a swallowed runtime error that once
+    // silently emptied the whole mass block), and both decision calls
+    // must fail closed instead of leaving absent entries.
+    assert!(
+        CHECKER.contains("Dim skipVolume, noSolid, minFeatures"),
+        "the checker lost its noSolid declaration"
+    );
+    for pin in ["the decision call failed: ", "check:mass=fail"] {
+        assert!(
+            CHECKER.contains(pin),
+            "the checker lost its fail-closed decision-call guard: {pin}"
+        );
+    }
     // Finding 1: a single-line If...Then cannot pair with ElseIf - the
     // branches are block form now (the Windows syntax test parses the
     // whole file; this pins the offending shape out).

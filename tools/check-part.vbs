@@ -38,7 +38,7 @@ Dim swApp, swDoc, expectPath, stepPath, outPath, ownedTitle, f, line, parts
 Dim logicPath, logicText, logicFile
 Dim mp, rebuiltText, rebuiltCx, rebuiltCy, rebuiltCz, rebuiltSolidsText, rebuiltAcquireErr
 Dim bodiesArr
-Dim skipVolume, minFeatures, volumeTol, volumeTolAbs, placementTol, refBodies
+Dim skipVolume, noSolid, minFeatures, volumeTol, volumeTolAbs, placementTol, refBodies
 Dim scan, scanFso
 Dim treeCount, featWalk
 Dim refDoc, refTitle, refText, refCx, refCy, refCz
@@ -203,7 +203,12 @@ Else
   Loop
 End If
 If skipVolume Then
+  Err.Clear
   blocks = MassSkipLines(rebuiltText, noSolid)
+  If Err.Number <> 0 Then
+    blocks = "detail:mass=the decision call failed: " & Err.Description & vbCrLf & _
+      "check:mass=fail" & vbCrLf & "check:mass_vs_reference=skipped" & vbCrLf
+  End If
   blocks = blocks & RefImportSkipLines()
   blocks = blocks & BodiesSkipLines()
   blocks = blocks & PlacementSkipLines()
@@ -278,7 +283,12 @@ Else
   End If
 
   ' The verdicts: the required mass entry is always emitted, named.
+  Err.Clear
   blocks = MassLines(rebuiltText, refText, volumeTol, volumeTolAbs)
+  If Err.Number <> 0 Then
+    blocks = "detail:mass=the decision call failed: " & Err.Description & vbCrLf & _
+      "check:mass=fail" & vbCrLf & "check:mass_vs_reference=fail" & vbCrLf
+  End If
   blocks = blocks & RefImportLines(refBodies, docTypeText, solidsText, sheetsText)
   blocks = blocks & BodiesLines(refBodies, rebuiltSolidsText)
   blocks = blocks & PlacementLines(distText, placementTol)
