@@ -45,6 +45,60 @@ list), `operation: "new"` (the serialized enum writes `new_body`) and
 `body_name`. `timeline.inspect` returns the serialized `definition`
 under the feature's own field names.
 
+## 2026-11-17 - probe-refplane (P01+P03): offset planes are fully pinned
+
+**Probe:** `corpus/compat-check/probe-refplane.swb` (hand-written on the
+minimal.swb skeleton), run through `tools/seat-smoke.ps1` on the seat
+(swf 34.3.2). Final run: summary ok, all steps created.
+
+**P01 established:**
+- `InsertRefPlane(8, 0.012, 0, 0, 0, 0)` with a pre-selected origin plane
+  (plain `Feature.Select(False)` = mark 0) creates the offset plane. The
+  created feature is `Plane1` of type `RefPlane`, renamable via
+  `IFeature.Name`.
+- `IRefPlane.Transform` ArrayData(16) layout: **the origin lives at
+  entries 9..11** (not 12..14); the offset plane at +0.012 read
+  `[0,1,0,-1,0,0,0,0,1,0,0,.012,1,0,0,0]` - the rotation part is the
+  plane frame, and the offset sign (+Z for Top) is recorded.
+- The plane feature's display dimension name reads **`D1`** (feature-
+  level; the qualified form is `D1@CB_Plane_A`).
+- A sketch opens on the reference plane by selecting the **feature
+  object** (`Feature.Select(False)` then `InsertSketch True`); a circle
+  created at (0,0,0) is in SKETCH space - `SketchSegment.GetCenterPoint2`
+  returns a SketchPoint object whose X/Y/Z are sketch-space (0,0,0 here),
+  NOT model space.
+
+**P03 established (the parametric chain):**
+- `Dimension.SystemValue` (metres) drives the plane: 0.019 moved it.
+- The full equation chain works: global equation `"CB_Off" = 23mm` +
+  dimension equation `"D1@CB_Plane_A" = "CB_Off"` - **both name forms
+  (qualified and bare) are accepted and drive**; the stored text reads
+  back exactly (the canary discipline: readback + driven-value check).
+- **Unit rule (empirical): a BARE number in equation text is in DOCUMENT
+  units** - `"CB_Off" = 0.023` drove the dimension to 0.023 mm
+  (0.000023 m), not 0.023 m. Unit-suffixed text (`23mm`) is unambiguous.
+  This confirms the emitted-macro convention of unit-suffixed literals.
+- **Sketch associativity holds**: after driving the plane to 0.023, the
+  sketch's `ModelToSketchTransform` origin read (0,0,-0.023) - the sketch
+  follows the plane, and the inverse-origin math of the frame map
+  (translation = negative plane offset along the normal) checks out.
+
+**Host quirks discovered (VBA inside SolidWorks):**
+- `Sqr(x)` raises "Invalid procedure call or argument" on a **zero**
+  argument in this host (reproduced twice; `SafeSqr` guards it - the
+  probe keeps the helper).
+- `Str(NaN)`/`Sqr(NaN)` likewise raise err 5; `SafeNum` guards reporting.
+- A trailing `;` on a VBA statement is a compile error (VBScript habit);
+  an undeclared variable under `Option Explicit` compiles the macro out
+  of existence silently (RunMacro "returned: failure" with no report).
+
+**Replay consequence:** the offset-plane implementation (docs A1 of the
+SW research) now has every blocker answered: the emitter can create the
+plane with `InsertRefPlane(8, distance_m, 0,0,0,0)`, rename it, bind its
+`D1@<name>` dimension to a global equation with unit-suffixed text, and
+open sketches on the feature object - and the frame-map translation rule
+is confirmed for offset planes.
+
 ## 2026-11-17 - `fixed: true` + `exprs` is creatable through the MCP
 
 Source-confirmed earlier (nested-schema research [S38]); the design
