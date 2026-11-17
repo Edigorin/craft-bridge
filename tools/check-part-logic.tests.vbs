@@ -151,18 +151,18 @@ Check "the validators inherit the locale-safe parse", ((PositiveError("0.01") = 
 
 ' ---- a zero found count is named downstream, never refused as invalid
 ' (finding 2: the surface/empty-import branches must be reachable) ----
-Check "a zero found count is valid" (FoundCountError("0") = ""), FoundCountError("0")
-Check "a negative found count is refused" (FoundCountError("-1") = "negative"), FoundCountError("-1")
-Check "a fractional found count is refused" (FoundCountError("1.5") = "not an integer"), FoundCountError("1.5")
+Check "a zero found count is valid", (FoundCountError("0") = ""), FoundCountError("0")
+Check "a negative found count is refused", (FoundCountError("-1") = "negative"), FoundCountError("-1")
+Check "a fractional found count is refused", (FoundCountError("1.5") = "not an integer"), FoundCountError("1.5")
 b = RefImportLines("1", "part", "0", "3")
-Check "the surface naming is reached for zero solids" Has(b, "a surface import"), b
+Check "the surface naming is reached for zero solids", Has(b, "a surface import"), b
 
 ' ---- reference ownership (finding 4): a pre-existing title is the
 ' user's document and is never closed ----
-Check "a pre-existing title is detected" IsPreExistingTitle("Doc1" & vbCrLf & "Doc2" & vbCrLf, "Doc2"), "not detected"
-Check "a new title is not pre-existing" (Not IsPreExistingTitle("Doc1" & vbCrLf, "Doc2")), "false positive"
-Check "an empty title is never pre-existing" (Not IsPreExistingTitle("Doc1" & vbCrLf, "")), "false positive"
-Check "an empty snapshot owns nothing" (Not IsPreExistingTitle("", "Doc1")), "false positive"
+Check "a pre-existing title is detected", IsPreExistingTitle("Doc1" & vbCrLf & "Doc2" & vbCrLf, "Doc2"), "not detected"
+Check "a new title is not pre-existing", (Not IsPreExistingTitle("Doc1" & vbCrLf, "Doc2")), "false positive"
+Check "an empty title is never pre-existing", (Not IsPreExistingTitle("Doc1" & vbCrLf, "")), "false positive"
+Check "an empty snapshot owns nothing", (Not IsPreExistingTitle("", "Doc1")), "false positive"
 
 If failures > 0 Then
   WScript.Echo failures & " test(s) failed"

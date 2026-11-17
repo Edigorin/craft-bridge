@@ -279,6 +279,16 @@ fn body_and_placement_verdicts_run_alongside_volume() {
 
 #[test]
 fn the_decision_mirror_is_pinned_to_the_vbs_logic() {
+    // Every Check call takes (name, condition, detail): a missing comma
+    // made the suite fail to compile once, hiding a broken parser.
+    for line in LOGIC_TESTS.lines() {
+        if line.trim_start().starts_with("Check \"") {
+            assert!(
+                line.contains("\", "),
+                "a Check call lost its name/condition comma: {line}"
+            );
+        }
+    }
     for pin in [
         "limit = rel * refVol",
         "If absTol > limit Then limit = absTol",
