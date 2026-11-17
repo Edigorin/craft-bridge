@@ -230,7 +230,7 @@ volume is `check:mass=fail`. Real designs never declare `solid=none`.
 
 ## The proven FeatureExtrusion2 call carries Merge/scope flags (2026-11-17)
 
-The public API research (docs/solidworks-api-research.md, A2) names the
+The public API research (research/outputs/03-solidworks-api-research.md, A2) names the
 23 positional arguments: position 18 = Merge, 19 = UseFeatScope,
 20 = UseAutoSelect. Our corpus-proven emission passes True, True, True:
 the extrude MERGES with automatically selected bodies in feature scope.

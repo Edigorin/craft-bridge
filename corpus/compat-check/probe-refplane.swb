@@ -1,4 +1,4 @@
-' craft-bridge probe - probe-refplane.swb (P01 + P03, docs/solidworks-api-research.md)
+' craft-bridge probe - probe-refplane.swb (P01 + P03, research/outputs/03-solidworks-api-research.md)
 ' Hand-written from the reviewed minimal.swb skeleton (helpers reused
 ' verbatim; main replaced). Evidence questions, all recorded in the report:
 '   P01: does InsertRefPlane(8, 0.012, 0, 0, 0, 0) with a pre-selected
@@ -61,6 +61,13 @@ Sub main()
     Dim offY As Double
     Dim offZ As Double
     Dim stepIdx As Long
+    Dim selMode As String
+    Dim eqForm As String
+    Dim eqErr As Long
+    Dim circleForm As String
+    Dim firstErr As Long
+    Dim secondErr As Long
+    Dim circErr As Long
     stepIdx = -1
     On Error GoTo Fail
 
@@ -175,20 +182,66 @@ Sub main()
     If Trim(names) = "" Then Err.Raise vbObjectError + 538, "probe-refplane.swb", "the plane feature carries no display dimensions (the offset dimension name question is answered: NONE)"
     WriteStep stepIdx, "plane.dimensions", "created", "display dimensions: " & Trim(names)
 
-    ' ---- step 6 (P01): a sketch on the reference plane, selected by object ----
+    ' ---- step 6 (P01): a sketch on the reference plane - the selection
+    ' grammar is itself evidence: try the FEATURE object first, then the
+    ' IRefPlane object, recording every error. The circle is drawn in both
+    ' candidate coordinate spaces the same way. ----
     stepIdx = 6
+    selMode = "none"
+    firstErr = 0
+    secondErr = 0
+    On Error Resume Next
+    Err.Clear
     swDoc.ClearSelection2 True
+    Err.Clear
     ok = feat.Select(False)
-    If Not ok Then Err.Raise vbObjectError + 539, "probe-refplane.swb", "the reference-plane feature would not select by object for sketch creation"
-    swSketchMgr.InsertSketch True
-    Set sk = swSketchMgr.ActiveSketch
-    If sk Is Nothing Then Err.Raise vbObjectError + 539, "probe-refplane.swb", "no sketch opened on the reference plane (object selection accepted but no sketch)"
+    If Err.Number = 0 And ok Then
+        Err.Clear
+        swSketchMgr.InsertSketch True
+        If Err.Number = 0 Then
+            Set sk = swSketchMgr.ActiveSketch
+            If Not sk Is Nothing Then selMode = "feature-object"
+        End If
+    End If
+    firstErr = Err.Number
+    If selMode = "none" Then
+        Err.Clear
+        swDoc.ClearSelection2 True
+        Err.Clear
+        ok = rp.Select(False)
+        If Err.Number = 0 And ok Then
+            Err.Clear
+            swSketchMgr.InsertSketch True
+            If Err.Number = 0 Then
+                Set sk = swSketchMgr.ActiveSketch
+                If Not sk Is Nothing Then selMode = "refplane-object"
+            End If
+        End If
+        secondErr = Err.Number
+    End If
+    Err.Clear
+    On Error GoTo Fail
+    If selMode = "none" Then Err.Raise vbObjectError + 539, "probe-refplane.swb", "no selection form opened a sketch on the reference plane (feature-object err " & Trim(Str(firstErr)) & ", refplane-object err " & Trim(Str(secondErr)) & ")"
     skName = swSketchMgr.ActiveSketch.Name
+    circleForm = "none"
+    On Error Resume Next
+    Err.Clear
     Set ci = swSketchMgr.CreateCircleByRadius(0#, 0#, 0#, 0.005)
-    If ci Is Nothing Then Err.Raise vbObjectError + 539, "probe-refplane.swb", "the circle did not create on the reference plane"
+    If Err.Number = 0 And Not ci Is Nothing Then circleForm = "sketch-space (0,0,0)"
+    circErr = Err.Number
+    If circleForm = "none" Then
+        Err.Clear
+        Set ci = swSketchMgr.CreateCircleByRadius(0#, 0#, 0.012, 0.005)
+        If Err.Number = 0 And Not ci Is Nothing Then circleForm = "model-space (0,0,0.012)"
+        If circleForm = "none" Then circErr = Err.Number
+    End If
+    Err.Clear
+    On Error GoTo Fail
+    If circleForm = "none" Then Err.Raise vbObjectError + 539, "probe-refplane.swb", "the circle did not create in either coordinate space (err " & Trim(Str(circErr)) & ")"
     swSketchMgr.InsertSketch True
     Set sk = swSketchMgr.ActiveSketch
     If Not sk Is Nothing Then Err.Raise vbObjectError + 539, "probe-refplane.swb", "the sketch on the reference plane did not close"
+    WriteStep stepIdx, "sketch.on-plane", "created", "sketch opened via " & selMode & "; circle created as " & circleForm
     ' The circle centre must sit on the plane: its distance from the model
     ' origin is the plane offset (0.012), matching the transform origin.
     Set cph = ci.GetCenterPoint2
@@ -229,9 +282,22 @@ Sub main()
     Err.Clear
     idx = eqMgr.Add(-1, """CB_Off"" = 0.023")
     If idx < 0 Then Err.Raise vbObjectError + 541, "probe-refplane.swb", "the global equation CB_Off = 0.023 was not accepted"
+    eqForm = "none"
+    On Error Resume Next
     Err.Clear
-    idx = eqMgr.Add(-1, """" & dimName & """ = ""CB_Off""")
-    If idx < 0 Then Err.Raise vbObjectError + 541, "probe-refplane.swb", "the dimension equation " & dimName & " = CB_Off was not accepted"
+    idx = eqMgr.Add(-1, """" & dimName & "@CB_Plane_A"" = ""CB_Off""")
+    If Err.Number = 0 And idx >= 0 Then eqForm = "qualified (D@CB_Plane_A)"
+    eqErr = Err.Number
+    If eqForm = "none" Then
+        Err.Clear
+        idx = eqMgr.Add(-1, """" & dimName & """ = ""CB_Off""")
+        If Err.Number = 0 And idx >= 0 Then eqForm = "bare name"
+        If eqForm = "none" Then eqErr = Err.Number
+    End If
+    Err.Clear
+    On Error GoTo Fail
+    If eqForm = "none" Then Err.Raise vbObjectError + 541, "probe-refplane.swb", "the dimension equation was not accepted in either name form (err " & Trim(Str(eqErr)) & ")"
+    WriteStep stepIdx, "plane.equation-form", "created", "the dimension equation accepted: " & eqForm
     swDoc.EditRebuild3
     Err.Clear
     Set tr = Nothing
@@ -245,7 +311,7 @@ Sub main()
         off = Sqr(offX * offX + offY * offY + offZ * offZ)
     End If
     If Abs(off - 0.023) > 0.000001 Then Err.Raise vbObjectError + 541, "probe-refplane.swb", "the equation CB_Off = 0.023 did not drive the plane (origin reads " & Vec3Text(offX, offY, offZ) & ")"
-    WriteStep stepIdx, "plane.equation-drives", "created", "equation " & dimName & " = CB_Off drove the plane to 0.023"
+    WriteStep stepIdx, "plane.equation-drives", "created", "equation (" & eqForm & ") drove the plane to 0.023"
 
     ' ---- step 9: the sketch geometry moved WITH the plane (associativity) ----
     stepIdx = 9
