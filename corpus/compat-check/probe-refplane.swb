@@ -355,7 +355,10 @@ Sub main()
     Err.Clear
     Set eqMgr = swDoc.GetEquationMgr
     If Err.Number <> 0 Or eqMgr Is Nothing Then Err.Raise vbObjectError + 541, "probe-refplane.swb", "GetEquationMgr failed (err " & Trim(Str(Err.Number)) & ")"
-    globalText = """CB_Off"" = 0.023"
+    ' Unit rule established by the previous run: a BARE number in equation
+    ' text is in DOCUMENT units (0.023 became 0.023 mm = 0.000023 m in the
+    ' dimension). Unit-suffixed text is unambiguous.
+    globalText = """CB_Off"" = 23mm"
     Err.Clear
     idx = eqMgr.Add(-1, globalText)
     If Err.Number <> 0 Or idx < 0 Then Err.Raise vbObjectError + 541, "probe-refplane.swb", "the global equation was not accepted (err " & Trim(Str(Err.Number)) & ")"
