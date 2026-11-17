@@ -19,6 +19,15 @@ models (replay, not translation). This file is the hard rules; the program spec 
 - **Seat safety.** The owner's licensed seat never executes macros or fixture
   files from unreviewed public PRs. Only committed, reviewed synthetic-corpus
   items run on the seat. Real client parts are never committed anywhere.
+- **Real-part private-run exception (owner-approved 2026-11-17).** Owner-
+  provided real designs may run on the seat under a narrow exception: every
+  real-part artifact (source design, generated macro, derived report, log,
+  screenshot, plan, sidecar) stays UNTRACKED (uploads/, runs/ are gitignored);
+  each design's first run needs the owner's explicit approval of the exact
+  macro sha256; every run pins source, macro, reference and tooling shas in an
+  untracked manifest; the synthetic committed-corpus runner and its review
+  requirements stay unchanged. Tests use independently authored synthetic
+  fixtures - never copied client geometry.
 - **Hostile input.** Artifacts are untrusted: safe extraction (no path traversal),
   size caps, VBA string-literal escaping in generated macros, recipe entries
   translated only from a known command allowlist (unknown entries become fallback

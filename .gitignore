@@ -4,3 +4,6 @@
 # Owner-provided uploads and every real-part run artifact stay untracked.
 uploads/
 runs/
+# Real-part derived artifacts stay private too (the exception's rule).
+runs/
+uploads/
