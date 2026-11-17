@@ -175,7 +175,7 @@ Function BuildSketch1() As String
     gMsg = ""
     gOmit = ""
     ok = OpenSketchOnPlane(1, "XY")
-    If Not ok Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo SketchFailed
+    If ok = False Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo SketchFailed
     Set skFeat = swSketchMgr.ActiveSketch
     Set skFeat1 = LastFeature()
     If skFeat1 Is Nothing Then gMsg = "the new sketch feature is missing from the tree": GoTo SketchFailed
@@ -610,7 +610,7 @@ Function BuildPrim2() As String
     Dim ln2 As Object
     Dim ln3 As Object
     ok = OpenSketchOnPlane(2, "XY")
-    If Not ok Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo ExFail
+    If ok = False Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo ExFail
     If Not gMapValid(2) Then gMsg = "frame adaptation: the primitive sketch carries no valid adaptation map; refusing to report created": GoTo ExFail
     If Not MapIsPermutation(2) Then gMsg = "frame adaptation: the primitive profile requires a signed-permutation sketch map (bounded support, this seat only exhibits permutation frames); refusing to report created": GoTo ExFail
     If TT_PRIM_DIR_TRUE_SIDE = 0 Then gMsg = "the primitive direction truth table is unmeasured: probe-primorient has not established which physical side the primitive height extends toward on this sketch map; refusing to report created": GoTo ExFail
@@ -761,8 +761,8 @@ Function BuildPrim2() As String
     swSketchMgr.InsertSketch True
     ok = False
     If Not skFeat Is Nothing Then ok = skFeat.Select(False)
-    If Not ok Then ok = swDoc.Extension.SelectByID2(primName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-    If Not ok Then gMsg = "could not select the primitive sketch (object and name selection both failed): name=<" & primName & ">, tree scan saw: " & TreeSummary(): GoTo ExFail
+    If ok = False Then ok = swDoc.Extension.SelectByID2(primName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    If ok = False Then gMsg = "could not select the primitive sketch (object and name selection both failed): name=<" & primName & ">, tree scan saw: " & TreeSummary(): GoTo ExFail
     wantSide = 1 * gMapSide(2)
     dirFlag = (wantSide = TT_PRIM_DIR_TRUE_SIDE)
     Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.01, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)
@@ -819,7 +819,7 @@ Function BuildPrim3() As String
     Dim cur As Object
     Dim ci As Object
     ok = OpenSketchOnPlane(3, "XY")
-    If Not ok Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo ExFail
+    If ok = False Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo ExFail
     If Not gMapValid(3) Then gMsg = "frame adaptation: the primitive sketch carries no valid adaptation map; refusing to report created": GoTo ExFail
     If Not MapIsPermutation(3) Then gMsg = "frame adaptation: the primitive profile requires a signed-permutation sketch map (bounded support, this seat only exhibits permutation frames); refusing to report created": GoTo ExFail
     If TT_PRIM_DIR_TRUE_SIDE = 0 Then gMsg = "the primitive direction truth table is unmeasured: probe-primorient has not established which physical side the primitive height extends toward on this sketch map; refusing to report created": GoTo ExFail
@@ -871,8 +871,8 @@ Function BuildPrim3() As String
     swSketchMgr.InsertSketch True
     ok = False
     If Not skFeat Is Nothing Then ok = skFeat.Select(False)
-    If Not ok Then ok = swDoc.Extension.SelectByID2(primName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-    If Not ok Then gMsg = "could not select the primitive sketch (object and name selection both failed): name=<" & primName & ">, tree scan saw: " & TreeSummary(): GoTo ExFail
+    If ok = False Then ok = swDoc.Extension.SelectByID2(primName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    If ok = False Then gMsg = "could not select the primitive sketch (object and name selection both failed): name=<" & primName & ">, tree scan saw: " & TreeSummary(): GoTo ExFail
     wantSide = 1 * gMapSide(3)
     dirFlag = (wantSide = TT_PRIM_DIR_TRUE_SIDE)
     Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.005, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)

@@ -163,7 +163,7 @@ Function BuildSketch0() As String
     gMsg = ""
     gOmit = ""
     ok = OpenSketchOnPlane(0, "XY")
-    If Not ok Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo SketchFailed
+    If ok = False Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo SketchFailed
     Set skFeat = swSketchMgr.ActiveSketch
     Set skFeat0 = LastFeature()
     If skFeat0 Is Nothing Then gMsg = "the new sketch feature is missing from the tree": GoTo SketchFailed
@@ -581,7 +581,7 @@ Function BuildPat2() As String
     ok = False
     If Not pf Is Nothing Then ok = pf.Select(False)
     If ok = False Then ok = swDoc.Extension.SelectByID2(gPlane, "PLANE", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-    If Not ok Then gMsg = "the mirror plane could not be selected: gPlane=<" & gPlane & "> object-found=" & CStr(Not pf Is Nothing) & "; tree scan saw: " & TreeSummary(): GoTo ExFail
+    If ok = False Then gMsg = "the mirror plane could not be selected: gPlane=<" & gPlane & "> object-found=" & CStr(Not pf Is Nothing) & "; tree scan saw: " & TreeSummary(): GoTo ExFail
     feat1.Select True
     ' feature call shape pending checkpoint verification
     Set feat = gFeatMgr.FeatureMirror(True, False, False, 0#, 0#)

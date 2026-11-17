@@ -1465,7 +1465,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
         vb_lit(plane_code(sk.plane))
     ));
     out.push_str(&format!(
-        "    If Not ok Then gMsg = \"no origin plane carries the {} frame {}; probed: \" & gProbeLog & \"; tree scan saw: \" & TreeSummary(): GoTo SketchFailed\n",
+        "    If ok = False Then gMsg = \"no origin plane carries the {} frame {}; probed: \" & gProbeLog & \"; tree scan saw: \" & TreeSummary(): GoTo SketchFailed\n",
         plane_code(sk.plane),
         frame_desc(solidcraft_frame(sk.plane))
     ));
@@ -2571,7 +2571,7 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
         "Function BuildPrim{index}() As String\n    On Error GoTo HardFail\n    Const TOL As Double = 0.000001\n    Dim ok As Boolean\n    Dim dimScale As Double\n    Dim feat As SldWorks.Feature\n    Dim skFeat As SldWorks.Feature\n    Dim primName As String\n    Dim dm As SldWorks.Dimension\n    Dim dd As SldWorks.DisplayDimension\n    Dim created As Double\n    Dim signVal As Double\n    Dim chk As Double\n    Dim v As Variant\n    Dim v2 As Variant\n    Dim wantSide As Long\n    Dim dirFlag As Boolean\n    Dim axClassU As Long\n    Dim axClassV As Long\n    Dim nameU As String\n    Dim nameV As String\n    Dim pA As Object\n    Dim pB As Object\n    Dim uncertain As Boolean\n    Dim cur As Object\n{entity_decls}"
     ));
     out.push_str(&format!("    ok = OpenSketchOnPlane({}, \"XY\")\n", index));
-    out.push_str("    If Not ok Then gMsg = \"no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: \" & gProbeLog & \"; tree scan saw: \" & TreeSummary(): GoTo ExFail\n");
+    out.push_str("    If ok = False Then gMsg = \"no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: \" & gProbeLog & \"; tree scan saw: \" & TreeSummary(): GoTo ExFail\n");
     // Fail-closed guards before any drawing: the map validity, the bounded
     // map class (signed permutations, plan scope F5), and the orientation
     // cell (probe-primorient). Nothing downstream of an unestablished
@@ -2722,9 +2722,9 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
     );
     // The blind extrude carries the last size (height).
     let height = pr.sizes.last().map(|s| s.value / 1000.0).unwrap_or(0.0);
-    out.push_str("    ok = False\n    If Not skFeat Is Nothing Then ok = skFeat.Select(False)\n    If Not ok Then ok = swDoc.Extension.SelectByID2(primName, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n");
+    out.push_str("    ok = False\n    If Not skFeat Is Nothing Then ok = skFeat.Select(False)\n    If ok = False Then ok = swDoc.Extension.SelectByID2(primName, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n");
     out.push_str(
-        "    If Not ok Then gMsg = \"could not select the primitive sketch (object and name selection both failed): name=<\" & primName & \">, tree scan saw: \" & TreeSummary(): GoTo ExFail\n",
+        "    If ok = False Then gMsg = \"could not select the primitive sketch (object and name selection both failed): name=<\" & primName & \">, tree scan saw: \" & TreeSummary(): GoTo ExFail\n",
     );
     // The operation orientation: the SolidCraft height extends toward +Z
     // (the XY source normal), so its end sits toward +1 * gMapSide in
@@ -2884,7 +2884,7 @@ fn emit_mod_subs(index: usize, md: &crate::replay::ModStep) -> String {
             vba_num(p[2] / 1000.0)
         ));
         out.push_str(&format!(
-            "    If Not ok Then gMsg = \"a {pick_type} pick did not land\": GoTo ExFail\n"
+            "    If ok = False Then gMsg = \"a {pick_type} pick did not land\": GoTo ExFail\n"
         ));
     }
     out.push_str("    anySel = True\n");
@@ -3052,7 +3052,7 @@ fn emit_pat_subs(index: usize, pt: &crate::replay::PatStep) -> String {
                 desc = frame_desc(solidcraft_frame(*plane))
             ));
             out.push_str("    Set pf = FindFeatureByName(gPlane, uncertain)\n    ok = False\n    If Not pf Is Nothing Then ok = pf.Select(False)\n    If ok = False Then ok = swDoc.Extension.SelectByID2(gPlane, \"PLANE\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n");
-            out.push_str("    If Not ok Then gMsg = \"the mirror plane could not be selected: gPlane=<\" & gPlane & \"> object-found=\" & CStr(Not pf Is Nothing) & \"; tree scan saw: \" & TreeSummary(): GoTo ExFail\n");
+            out.push_str("    If ok = False Then gMsg = \"the mirror plane could not be selected: gPlane=<\" & gPlane & \"> object-found=\" & CStr(Not pf Is Nothing) & \"; tree scan saw: \" & TreeSummary(): GoTo ExFail\n");
             for seed in seeds {
                 out.push_str(&format!("    feat{seed}.Select True\n"));
             }
@@ -3094,7 +3094,7 @@ Function Fallback{index}() As String\n\
     Dim ok As Boolean\n\
     DeleteCreated\n\
     ok = swDoc.Extension.ImportFile(MacroDirFromHost() & \"\\fallback-step-{sidecar:04}.step\", \"\")\n\
-    If Not ok Then gMsg = \"the fallback body could not be imported\": Fallback{index} = \"failed\": Exit Function\n"
+    If ok = False Then gMsg = \"the fallback body could not be imported\": Fallback{index} = \"failed\": Exit Function\n"
     ));
     out.push_str("    ClearSlotsAll\n");
     out.push_str(&format!(

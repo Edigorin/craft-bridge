@@ -145,7 +145,7 @@ Function BuildSketch1() As String
     gMsg = ""
     gOmit = ""
     ok = OpenSketchOnPlane(1, "XZ")
-    If Not ok Then gMsg = "no origin plane carries the XZ frame u=(1,0,0) v=(0,0,-1) n=(0,1,0); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo SketchFailed
+    If ok = False Then gMsg = "no origin plane carries the XZ frame u=(1,0,0) v=(0,0,-1) n=(0,1,0); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo SketchFailed
     Set skFeat = swSketchMgr.ActiveSketch
     Set skFeat1 = LastFeature()
     If skFeat1 Is Nothing Then gMsg = "the new sketch feature is missing from the tree": GoTo SketchFailed

@@ -160,9 +160,9 @@ Function BuildMod0() As String
     Dim dm As SldWorks.Dimension
     Dim anySel As Boolean
     ok = swDoc.Extension.SelectByID2("", "EDGE", 0.01, 0.0, 0.0, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-    If Not ok Then gMsg = "a EDGE pick did not land": GoTo ExFail
+    If ok = False Then gMsg = "a EDGE pick did not land": GoTo ExFail
     ok = swDoc.Extension.SelectByID2("", "EDGE", 0.02, 0.0, 0.0, True, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-    If Not ok Then gMsg = "a EDGE pick did not land": GoTo ExFail
+    If ok = False Then gMsg = "a EDGE pick did not land": GoTo ExFail
     anySel = True
     ' feature call shape pending checkpoint verification
     Set feat = gDoc.FeatureFillet3(0.000002, True, 0, 0, 0)
@@ -193,7 +193,7 @@ Function BuildMod1() As String
     Dim dm As SldWorks.Dimension
     Dim anySel As Boolean
     ok = swDoc.Extension.SelectByID2("", "FACE", 0.0, 0.0, 0.0, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-    If Not ok Then gMsg = "a FACE pick did not land": GoTo ExFail
+    If ok = False Then gMsg = "a FACE pick did not land": GoTo ExFail
     anySel = True
     ' feature call shape pending checkpoint verification
     Set feat = gDoc.FeatureShell(0.0000015, False, 0#, False, False, False, 0#, 0#, 0#, 0#, 0#)
@@ -224,7 +224,7 @@ Function BuildMod2() As String
     Dim dm As SldWorks.Dimension
     Dim anySel As Boolean
     ok = swDoc.Extension.SelectByID2("", "FACE", 0.005, 0.005, 0.0, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-    If Not ok Then gMsg = "a FACE pick did not land": GoTo ExFail
+    If ok = False Then gMsg = "a FACE pick did not land": GoTo ExFail
     anySel = True
     ' feature call shape pending checkpoint verification
     Set feat = gDoc.SimpleHole2(True, False, False, swEndConditions_e.swEndCondBlind, 0.000004, 0.000008, 0#, 0#, False, False, False, False, 0#, 0#)
