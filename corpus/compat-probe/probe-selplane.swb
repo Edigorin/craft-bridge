@@ -44,6 +44,9 @@ Sub main()
         GoTo WrapUp
     End If
     Set ln = swSketchMgr.CreateLine(0.01, 0.01, 0#, 0.05, 0.01, 0#)
+    Set ln = swSketchMgr.CreateLine(0.05, 0.01, 0#, 0.05, 0.03, 0#)
+    Set ln = swSketchMgr.CreateLine(0.05, 0.03, 0#, 0.01, 0.03, 0#)
+    Set ln = swSketchMgr.CreateLine(0.01, 0.03, 0#, 0.01, 0.01, 0#)
     swDoc.ClearSelection2 True
     swSketchMgr.InsertSketch True
     WriteLine TrySelect("after-sketch")
@@ -58,6 +61,15 @@ Sub main()
     Set feat = feat.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.01, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)
     WriteLine LineFor("extrude", 0, "", "feat-is-nothing=" & CStr(feat Is Nothing))
     WriteLine TrySelect("after-extrude")
+    If Not feat Is Nothing Then
+        swDoc.ClearSelection2 True
+        ok = feat.Select(False)
+        WriteLine LineFor("seed-select", 0, "", "result=" & CStr(ok))
+        WriteLine TrySelect("after-seed-select")
+        swDoc.ClearSelection2 True
+    End If
+    WriteLine ProbeDance()
+    WriteLine TrySelect("after-dance")
 WrapUp:
     cleanupMode = CloseMode()
     If cleanupMode = "close" Then
@@ -117,6 +129,46 @@ Function TrySelect(ByVal tag As String) As String
     detail = detail & " refplane-select=" & CStr(ok) & " err=" & Trim(Str(Err.Number)) & " " & Err.Description
     swDoc.ClearSelection2 True
     TrySelect = LineFor("selplane-" & tag, 0, "", detail)
+End Function
+
+' Replicate the PlaneNameFor dance: create a sketch on a plane, then close
+' and delete it, then report the plane selection state.
+Function ProbeDance() As String
+    Dim pf As SldWorks.Feature
+    Dim uncertain As Boolean
+    Dim sk As Object
+    Dim nm As String
+    Dim detail As String
+    Dim ok As Boolean
+    On Error Resume Next
+    Set pf = FindFeatureByName("Front Plane", uncertain)
+    If pf Is Nothing Then
+        ProbeDance = LineFor("dance", -1, "no front plane", "")
+        Exit Function
+    End If
+    ok = pf.Select(False)
+    If ok Then
+        swSketchMgr.InsertSketch True
+        Set sk = swSketchMgr.ActiveSketch
+        If Not sk Is Nothing Then
+            nm = sk.Name
+            swSketchMgr.InsertSketch True
+            Set pf = FindFeatureByName(nm, uncertain)
+            detail = "dance-sketch=" & nm & " re-found=" & CStr(Not pf Is Nothing)
+            If Not pf Is Nothing Then
+                swDoc.ClearSelection2 True
+                ok = pf.Select(False)
+                If ok Then swDoc.EditDelete
+                detail = detail & " deleted-select=" & CStr(ok)
+            End If
+        Else
+            detail = "no active sketch in dance"
+        End If
+    Else
+        detail = "front plane would not select for the dance"
+    End If
+    swDoc.ClearSelection2 True
+    ProbeDance = LineFor("dance", 0, "", detail)
 End Function
 
 Function LineFor(ByVal which As String, ByVal n As Long, ByVal d As String, ByVal detail As String) As String
