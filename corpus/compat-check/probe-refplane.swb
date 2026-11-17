@@ -45,6 +45,7 @@ Sub main()
     Dim rp As Object
     Dim tr As Object
     Dim a As Variant
+    Dim v As Variant
     Dim eqMgr As Object
     Dim dp As SldWorks.Dimension
     Dim dd As SldWorks.DisplayDimension
@@ -248,26 +249,56 @@ Sub main()
     If Not sk Is Nothing Then Err.Raise vbObjectError + 539, "probe-refplane.swb", "the sketch on the reference plane did not close"
     WriteStep stepIdx, "sketch.on-plane", "created", "sketch opened via " & selMode & "; circle created as " & circleForm
     ' The circle centre must sit on the plane: its distance from the model
-    ' origin is the plane offset (0.012). Read it granularly - both
-    ' candidate handles - and record what each API returned (evidence).
+    ' origin is the plane offset (0.012). Every read is contained and the
+    ' form that worked is recorded - the COM return shape (SketchPoint
+    ' object vs Variant array) is itself A7 evidence.
     centreVia = "none"
+    centreErr = 0
+    cphX = 0: cphY = 0: cphZ = 0
     On Error Resume Next
     Err.Clear
+    Set cph = Nothing
     Set cph = ci.GetCenterPoint2
-    If Err.Number = 0 And Not cph Is Nothing Then centreVia = "GetCenterPoint2 (err 0)"
-    centreErr = Err.Number
+    If Err.Number = 0 Then
+        If Not cph Is Nothing Then
+            Err.Clear
+            cphX = cph.X
+            If Err.Number = 0 Then
+                cphY = cph.Y
+                cphZ = cph.Z
+                centreVia = "GetCenterPoint2 (object)"
+            Else
+                centreErr = Err.Number
+            End If
+        Else
+            centreErr = 424
+        End If
+    Else
+        centreErr = Err.Number
+    End If
     If centreVia = "none" Then
         Err.Clear
-        Set cph = ci.GetStartPoint
-        If Err.Number = 0 And Not cph Is Nothing Then centreVia = "GetStartPoint (err 0)"
-        If centreVia = "none" Then centreErr = Err.Number
+        v = ci.GetStartPoint
+        If Err.Number = 0 Then
+            If IsArray(v) Then
+                If UBound(v) >= 2 Then
+                    cphX = v(0): cphY = v(1): cphZ = v(2)
+                    centreVia = "GetStartPoint (array)"
+                Else
+                    centreErr = 9
+                End If
+            Else
+                centreErr = 424
+            End If
+        Else
+            centreErr = Err.Number
+        End If
     End If
     Err.Clear
     On Error GoTo Fail
-    If centreVia = "none" Then Err.Raise vbObjectError + 539, "probe-refplane.swb", "the circle centre is unreadable by both handles (err " & Trim(Str(centreErr)) & ")"
-    cphX = cph.X: cphY = cph.Y: cphZ = cph.Z
     off = Sqr(cphX * cphX + cphY * cphY + cphZ * cphZ)
-    WriteStep stepIdx, "circle.centre", "created", "read via " & centreVia & " at " & Vec3Text(cphX, cphY, cphZ) & " (distance from origin " & Trim(Str(off)) & ", plane offset 0.012)"
+    WriteStep stepIdx, "circle.centre", "created", "via " & centreVia & " (other err " & Trim(Str(centreErr)) & ") at " & Vec3Text(cphX, cphY, cphZ) & " (distance from origin " & Trim(Str(off)) & ")"
+    If centreVia = "none" Then Err.Raise vbObjectError + 539, "probe-refplane.swb", "the circle centre is unreadable by both handles (last err " & Trim(Str(centreErr)) & ")"
     If Abs(off - 0.012) > 0.000002 Then Err.Raise vbObjectError + 539, "probe-refplane.swb", "the circle centre is " & Vec3Text(cphX, cphY, cphZ) & " (distance " & Trim(Str(off)) & "), not on the 0.012 plane"
 
     ' ---- step 7 (P03a): the offset dimension DRIVES the plane ----
@@ -336,19 +367,46 @@ Sub main()
     ' ---- step 9: the sketch geometry moved WITH the plane (associativity) ----
     stepIdx = 9
     centreVia = "none"
+    centreErr = 0
+    cphX = 0: cphY = 0: cphZ = 0
     On Error Resume Next
     Err.Clear
+    Set cph = Nothing
     Set cph = ci.GetCenterPoint2
-    If Err.Number = 0 And Not cph Is Nothing Then centreVia = "GetCenterPoint2"
+    If Err.Number = 0 Then
+        If Not cph Is Nothing Then
+            Err.Clear
+            cphX = cph.X
+            If Err.Number = 0 Then
+                cphY = cph.Y
+                cphZ = cph.Z
+                centreVia = "GetCenterPoint2 (object)"
+            Else
+                centreErr = Err.Number
+            End If
+        Else
+            centreErr = 424
+        End If
+    Else
+        centreErr = Err.Number
+    End If
     If centreVia = "none" Then
         Err.Clear
-        Set cph = ci.GetStartPoint
-        If Err.Number = 0 And Not cph Is Nothing Then centreVia = "GetStartPoint"
+        v = ci.GetStartPoint
+        If Err.Number = 0 Then
+            If IsArray(v) Then
+                If UBound(v) >= 2 Then
+                    cphX = v(0): cphY = v(1): cphZ = v(2)
+                    centreVia = "GetStartPoint (array)"
+                End If
+            End If
+        Else
+            centreErr = Err.Number
+        End If
     End If
     Err.Clear
     On Error GoTo Fail
-    If centreVia = "none" Then Err.Raise vbObjectError + 542, "probe-refplane.swb", "the circle centre is unreadable after the moves"
-    cphX = cph.X: cphY = cph.Y: cphZ = cph.Z
+    If centreVia = "none" Then Err.Raise vbObjectError + 542, "probe-refplane.swb", "the circle centre is unreadable after the moves (last err " & Trim(Str(centreErr)) & ")"
     off = Sqr(cphX * cphX + cphY * cphY + cphZ * cphZ)
     If Abs(off - 0.023) > 0.000002 Then Err.Raise vbObjectError + 542, "probe-refplane.swb", "the sketch did not follow the plane: circle centre " & Vec3Text(cphX, cphY, cphZ) & " (distance " & Trim(Str(off)) & ")"
     WriteStep stepIdx, "sketch.follows-plane", "created", "the circle centre followed the plane to 0.023 (via " & centreVia & ")"
