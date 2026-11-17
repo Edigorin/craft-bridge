@@ -2085,7 +2085,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
         "    If Not gMapValid({sk}) Then gMsg = \"frame adaptation: the profile sketch carries no valid adaptation map; refusing to report created\": GoTo ExFail\n"
     ));
     let select_sketch = format!(
-        "    ok = False\n    objState = \"missing\"\n    If Not skFeat{sk} Is Nothing Then\n    objState = \"name=<\" & skFeat{sk}.Name & \">\"\n    ok = skFeat{sk}.Select(False)\n    objState = objState & \" select-result=\" & CStr(ok)\n    End If\n    If Not ok Then ok = swDoc.Extension.SelectByID2(skName{sk}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n    If Not ok Then gMsg = \"could not select the sketch for the extrude: \" & objState & \" name=<\" & skName{sk} & \">; tree scan saw: \" & TreeSummary(): GoTo ExFail\n"
+        "    ok = False\n    objState = \"missing\"\n    If Not skFeat{sk} Is Nothing Then\n    objState = \"name=<\" & skFeat{sk}.Name & \">\"\n    ok = skFeat{sk}.Select(False)\n    objState = objState & \" select-result=\" & CStr(ok)\n    End If\n    If ok = False Then ok = swDoc.Extension.SelectByID2(skName{sk}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n    If ok = False Then gMsg = \"could not select the sketch for the extrude: \" & objState & \" name=<\" & skName{sk} & \">; tree scan saw: \" & TreeSummary(): GoTo ExFail\n"
     );
     let no_depth_note =
         "    ' through-all: the end condition is the geometry; depth readback does not apply\n";

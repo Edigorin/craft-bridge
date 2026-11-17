@@ -3110,7 +3110,7 @@ fn sketch_selection_uses_the_stored_feature_object() {
         "the extrude does not select through the stored feature object"
     );
     assert!(
-        extrude.contains("If Not ok Then ok = swDoc.Extension.SelectByID2(skName2,")
+        extrude.contains("If ok = False Then ok = swDoc.Extension.SelectByID2(skName2,")
             && extrude.contains("could not select the sketch for the extrude: ")
             && extrude.contains("TreeSummary()"),
         "the extrude lost its named fallback or the TreeSummary refusal"

@@ -1238,8 +1238,8 @@ Function BuildExtrude3() As String
     ok = skFeat1.Select(False)
     objState = objState & " select-result=" & CStr(ok)
     End If
-    If Not ok Then ok = swDoc.Extension.SelectByID2(skName1, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-    If Not ok Then gMsg = "could not select the sketch for the extrude: " & objState & " name=<" & skName1 & ">; tree scan saw: " & TreeSummary(): GoTo ExFail
+    If ok = False Then ok = swDoc.Extension.SelectByID2(skName1, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    If ok = False Then gMsg = "could not select the sketch for the extrude: " & objState & " name=<" & skName1 & ">; tree scan saw: " & TreeSummary(): GoTo ExFail
     Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.03, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)
     If feat Is Nothing Then gMsg = "the extrude was not created": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
