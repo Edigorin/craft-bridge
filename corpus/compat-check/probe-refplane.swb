@@ -311,7 +311,7 @@ Sub main()
     WriteStep stepIdx, "trace", "created", "checks start"
     If centreVia = "none" Then Err.Raise vbObjectError + 539, "probe-refplane.swb", "the circle centre is unreadable by both handles (last err " & Trim(Str(centreErr)) & ")"
     WriteStep stepIdx, "trace", "created", "check1 passed"
-    If Abs(off - 0.012) > 0.000002 Then Err.Raise vbObjectError + 539, "probe-refplane.swb", "the circle centre is " & Vec3Text(cphX, cphY, cphZ) & " (distance " & Trim(Str(off)) & "), not on the 0.012 plane"
+    If Abs(cphX) > 0.000002 Or Abs(cphY) > 0.000002 Or Abs(cphZ) > 0.000002 Then Err.Raise vbObjectError + 539, "probe-refplane.swb", "the circle centre is " & Vec3Text(cphX, cphY, cphZ) & " in sketch space, not at the sketch origin"
     WriteStep stepIdx, "trace", "created", "check2 passed"
 
     WriteStep stepIdx, "trace", "created", "step7 entering"
@@ -380,50 +380,23 @@ Sub main()
 
     ' ---- step 9: the sketch geometry moved WITH the plane (associativity) ----
     stepIdx = 9
-    centreVia = "none"
-    centreErr = 0
-    cphX = 0: cphY = 0: cphZ = 0
-    On Error Resume Next
-    Err.Clear
-    Set cph = Nothing
-    Set cph = ci.GetCenterPoint2
-    If Err.Number = 0 Then
-        If Not cph Is Nothing Then
-            Err.Clear
-            cphX = cph.X
-            If Err.Number = 0 Then
-                cphY = cph.Y
-                cphZ = cph.Z
-                centreVia = "GetCenterPoint2 (object)"
-            Else
-                centreErr = Err.Number
-            End If
-        Else
-            centreErr = 424
-        End If
-    Else
-        centreErr = Err.Number
-    End If
-    If centreVia = "none" Then
-        Err.Clear
-        v = ci.GetStartPoint
-        If Err.Number = 0 Then
-            If IsArray(v) Then
-                If UBound(v) >= 2 Then
-                    cphX = v(0): cphY = v(1): cphZ = v(2)
-                    centreVia = "GetStartPoint (array)"
-                End If
-            End If
-        Else
-            centreErr = Err.Number
-        End If
-    End If
-    Err.Clear
-    On Error GoTo Fail
-    If centreVia = "none" Then Err.Raise vbObjectError + 542, "probe-refplane.swb", "the circle centre is unreadable after the moves (last err " & Trim(Str(centreErr)) & ")"
-    off = Sqr(cphX * cphX + cphY * cphY + cphZ * cphZ)
-    If Abs(off - 0.023) > 0.000002 Then Err.Raise vbObjectError + 542, "probe-refplane.swb", "the sketch did not follow the plane: circle centre " & Vec3Text(cphX, cphY, cphZ) & " (distance " & Trim(Str(off)) & ")"
-    WriteStep stepIdx, "sketch.follows-plane", "created", "the circle centre followed the plane to 0.023 (via " & centreVia & ")"
+    ' The follow witness is the SKETCH FRAME: re-open the sketch and read
+    ' its ModelToSketchTransform origin - it must sit on the plane at 0.023
+    ' (either sign; the sign is recorded).
+    swDoc.ClearSelection2 True
+    ok = feat.Select(False)
+    If Not ok Then Err.Raise vbObjectError + 542, "probe-refplane.swb", "the plane feature would not reselect for the follow check"
+    swSketchMgr.InsertSketch True
+    Set sk = swSketchMgr.ActiveSketch
+    If sk Is Nothing Then Err.Raise vbObjectError + 542, "probe-refplane.swb", "the sketch did not re-open for the follow check"
+    Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
+    If tr Is Nothing Then Err.Raise vbObjectError + 542, "probe-refplane.swb", "the reopened sketch has no transform"
+    a = tr.ArrayData
+    offX = a(9): offY = a(10): offZ = a(11)
+    off = SafeSqr(offX * offX + offY * offY + offZ * offZ)
+    swSketchMgr.InsertSketch True
+    If Abs(off - 0.023) > 0.000002 Then Err.Raise vbObjectError + 542, "probe-refplane.swb", "the sketch did not follow the plane: frame origin " & Vec3Text(offX, offY, offZ) & " (distance " & Trim(Str(off)) & ")"
+    WriteStep stepIdx, "sketch.follows-plane", "created", "the sketch frame origin followed the plane to 0.023 (transform origin " & Vec3Text(offX, offY, offZ) & ")"
 
     ' ---- done ----
     If gDimToggleSaved And Not swApp Is Nothing Then swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle
@@ -1034,6 +1007,17 @@ Function FrameText() As String
     If Err.Number <> 0 Then FrameText = "(no frame)": Exit Function
     a = tr.ArrayData
     FrameText = "u=(" & Vec3Text(a(0), a(3), a(6)) & ") v=(" & Vec3Text(a(1), a(4), a(7)) & ") n=(" & Vec3Text(a(2), a(5), a(8)) & ") o=(" & Vec3Text(a(9), a(10), a(11)) & ")"
+End Function
+
+Function SafeSqr(ByVal x As Double) As Double
+    ' Empirical host quirk (probe-refplane 2026-11-17): Sqr raised
+    ' "Invalid procedure call or argument" on a zero argument in this
+    ' SolidWorks VBA host. Guard the domain explicitly everywhere.
+    If x <= 0 Then
+        SafeSqr = 0
+    Else
+        SafeSqr = Sqr(x)
+    End If
 End Function
 
 Function SafeNum(ByVal x As Double) As String
