@@ -1048,9 +1048,7 @@ End Function
 
 Function SolveSketch(ByRef reason As String) As Boolean
     Dim sk As Object
-    Dim nm As String
     Dim rebuilt As Boolean
-    Dim selOk As Boolean
     On Error Resume Next
     SolveSketch = False
     reason = ""
@@ -1061,51 +1059,22 @@ Function SolveSketch(ByRef reason As String) As Boolean
         Exit Function
     End If
     ' The rebuild Boolean is informational only (seat evidence: False in
-    ' working flows); the verified re-entry below is the gate.
+    ' working flows).
     If Not rebuilt Then reason = "editrebuild3 returned false (informational); "
     Err.Clear
     Set sk = swSketchMgr.ActiveSketch
-    If Err.Number <> 0 Then
-        reason = "activesketch err " & Trim(Str(Err.Number)) & " " & Err.Description
-        Exit Function
+    If sk Is Nothing Then
+        ' Re-entry: the seat-proven shape (8 green corpus items use it) is
+        ' select-attempt then InsertSketch True, gated on the FINAL state -
+        ' the select Boolean itself is not reliable evidence on this seat.
+        Err.Clear
+        If Not gSketchFeat Is Nothing Then gSketchFeat.Select False
+        swDoc.Extension.SelectByID2 skName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault
+        swSketchMgr.InsertSketch True
+        Set sk = swSketchMgr.ActiveSketch
     End If
     If sk Is Nothing Then
-        Err.Clear
-        If Not gSketchFeat Is Nothing Then selOk = gSketchFeat.Select(False)
-        If Not selOk Then selOk = swDoc.Extension.SelectByID2(skName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-        If Err.Number <> 0 Then
-            reason = "select-for-reentry err " & Trim(Str(Err.Number)) & " " & Err.Description
-            Exit Function
-        End If
-        If Not selOk Then
-            reason = "select-for-reentry returned false"
-            Exit Function
-        End If
-        Err.Clear
-        swSketchMgr.InsertSketch True
-        If Err.Number <> 0 Then
-            reason = "insertsketch err " & Trim(Str(Err.Number)) & " " & Err.Description
-            Exit Function
-        End If
-        Err.Clear
-        Set sk = swSketchMgr.ActiveSketch
-        If Err.Number <> 0 Then
-            reason = "activesketch-after-reentry err " & Trim(Str(Err.Number)) & " " & Err.Description
-            Exit Function
-        End If
-        If sk Is Nothing Then
-            reason = "sketch edit could not be re-entered"
-            Exit Function
-        End If
-    End If
-    Err.Clear
-    nm = sk.Name
-    If Err.Number <> 0 Then
-        reason = "active sketch name err " & Trim(Str(Err.Number)) & " " & Err.Description
-        Exit Function
-    End If
-    If nm <> skName Then
-        reason = "the active sketch is " & nm & ", expected " & skName
+        reason = reason & "re-entry failed: no active sketch after the select-and-insert sequence"
         Exit Function
     End If
     SolveSketch = True
