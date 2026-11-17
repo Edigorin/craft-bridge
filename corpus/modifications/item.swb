@@ -25,6 +25,7 @@ Dim gDoc As Object
 Dim gFeatMgr As Object
 Dim regName(0 To 0) As String
 Dim regSign(0 To 0) As Double
+Dim regScale(0 To 0) As Double
 
 ' ---- extrude/revolve/primitive direction truth table (measured on the seat) ----
 ' Each constant comes from a direction probe's runtime report (corpus/
@@ -251,14 +252,17 @@ Sub ClearSlotsAll()
     For i = 0 To UBound(regName)
         regName(i) = ""
         regSign(i) = 1#
+        regScale(i) = 1#
     Next i
 End Sub
 
 Function SlotRef(ByVal slot As Long) As String
-    If regSign(slot) < 0 Then
-    SlotRef = "(-1*" & """" & regName(slot) & """" & ")"
-    Else
+    Dim f As Double
+    f = regSign(slot) * regScale(slot)
+    If Abs(f - 1#) <= 0.000001 Then
     SlotRef = """" & regName(slot) & """"
+    Else
+    SlotRef = "(" & Trim(Str(1# / f)) & "*" & """" & regName(slot) & """" & ")"
     End If
 End Function
 
@@ -773,6 +777,28 @@ If Abs(m10 + m11 - 1#) > 0.000001 Then Exit Function
 MapIsPermutation = True
 End Function
 
+' The just-created sketch as a TREE FEATURE (seat-proven 2026-11-17:
+' ActiveSketch.Name is an internal name that does NOT match the tree when
+' probe-sketch deletion recycled the name - SelectByID2 by it fails and
+' equations qualified by it drive nothing). A fresh part always appends the
+' new sketch as the last tree feature; its Name is the true tree name and
+' its Select is the pinned-working selection.
+Function LastFeature() As SldWorks.Feature
+Dim f As SldWorks.Feature
+Dim last As SldWorks.Feature
+On Error Resume Next
+Err.Clear
+Set f = swDoc.FirstFeature
+If Err.Number <> 0 Then Exit Function
+Do While Not f Is Nothing
+Set last = f
+Err.Clear
+Set f = f.GetNextFeature
+If Err.Number <> 0 Then Exit Function
+Loop
+Set LastFeature = last
+End Function
+
 ' Rebuild and stay in sketch edit (seat-proven 2026-11-16: EditRebuild3
 ' EXITS sketch edit - sketch API calls then silently do nothing, and its
 ' Boolean return is NOT a gate: it returns False in working flows). The
@@ -1059,7 +1085,7 @@ End Function
 ' Add an equation driving a dimension and verify it evaluated: the
 ' dimension name is captured at runtime, the value must match the
 ' expectation after a rebuild. Never presence alone.
-Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long, ByVal signVal As Double, ByVal qual As String) As Boolean
+Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long, ByVal signVal As Double, ByVal qual As String, ByVal dimScale As Double) As Boolean
 On Error GoTo EqFail
 Dim eqMgr As Object
 Dim eqText As String
@@ -1082,6 +1108,7 @@ If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = "the driven value does no
 If eqMgr.Equation(idx) <> eqText Then gMsg = "the stored equation reads back differently": GoTo EqFail
 If slot >= 0 Then regName(slot) = qName
 If slot >= 0 Then regSign(slot) = signVal
+If slot >= 0 Then regScale(slot) = dimScale
 AddDimEquation = True
 Exit Function
 EqFail:

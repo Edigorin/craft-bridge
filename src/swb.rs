@@ -229,6 +229,10 @@ pub fn emit(
         "Dim regSign(0 To {}) As Double\n",
         max_slot.unwrap_or(0)
     ));
+    out.push_str(&format!(
+        "Dim regScale(0 To {}) As Double\n",
+        max_slot.unwrap_or(0)
+    ));
     // ---- extrude/revolve/primitive direction truth table (Phase 1 batch 2/3) ----
     // Every constant is measured on the seat from a direction probe's
     // runtime report; 0 means UNMEASURED and every decision that consults
@@ -562,14 +566,15 @@ pub fn emit(
     // Always defined: AddDimEquation and every fallback builder reference it
     // regardless of the recipe's equation slots (plan review).
     out.push_str(
-        "Sub ClearSlotsAll()\n    Dim i As Long\n    For i = 0 To UBound(regName)\n        regName(i) = \"\"\n        regSign(i) = 1#\n    Next i\nEnd Sub\n\n",
+        "Sub ClearSlotsAll()\n    Dim i As Long\n    For i = 0 To UBound(regName)\n        regName(i) = \"\"\n        regSign(i) = 1#
+        regScale(i) = 1#\n    Next i\nEnd Sub\n\n",
     );
     // A registered dimension may carry its source value with the opposite
     // sign (the map is reflected on its axis). Downstream equation text
     // references such a slot normalized back to source semantics, so
     // parameter edits keep meaning what the source meant.
     out.push_str(
-        "Function SlotRef(ByVal slot As Long) As String\n    If regSign(slot) < 0 Then\n    SlotRef = \"(-1*\" & \"\"\"\" & regName(slot) & \"\"\"\" & \")\"\n    Else\n    SlotRef = \"\"\"\" & regName(slot) & \"\"\"\"\n    End If\nEnd Function\n\n",
+        "Function SlotRef(ByVal slot As Long) As String\n    Dim f As Double\n    f = regSign(slot) * regScale(slot)\n    If Abs(f - 1#) <= 0.000001 Then\n    SlotRef = \"\"\"\" & regName(slot) & \"\"\"\"\n    Else\n    SlotRef = \"(\" & Trim(Str(1# / f)) & \"*\" & \"\"\"\" & regName(slot) & \"\"\"\" & \")\"\n    End If\nEnd Function\n\n",
     );
 
     // ---- shared helpers (the checkpoint's, unchanged in spirit) ----
@@ -1087,6 +1092,28 @@ If Abs(m10 + m11 - 1#) > 0.000001 Then Exit Function
 MapIsPermutation = True
 End Function
 
+' The just-created sketch as a TREE FEATURE (seat-proven 2026-11-17:
+' ActiveSketch.Name is an internal name that does NOT match the tree when
+' probe-sketch deletion recycled the name - SelectByID2 by it fails and
+' equations qualified by it drive nothing). A fresh part always appends the
+' new sketch as the last tree feature; its Name is the true tree name and
+' its Select is the pinned-working selection.
+Function LastFeature() As SldWorks.Feature
+Dim f As SldWorks.Feature
+Dim last As SldWorks.Feature
+On Error Resume Next
+Err.Clear
+Set f = swDoc.FirstFeature
+If Err.Number <> 0 Then Exit Function
+Do While Not f Is Nothing
+Set last = f
+Err.Clear
+Set f = f.GetNextFeature
+If Err.Number <> 0 Then Exit Function
+Loop
+Set LastFeature = last
+End Function
+
 ' Rebuild and stay in sketch edit (seat-proven 2026-11-16: EditRebuild3
 ' EXITS sketch edit - sketch API calls then silently do nothing, and its
 ' Boolean return is NOT a gate: it returns False in working flows). The
@@ -1373,7 +1400,7 @@ End Function\n\
          ' Add an equation driving a dimension and verify it evaluated: the\n\
          ' dimension name is captured at runtime, the value must match the\n\
          ' expectation after a rebuild. Never presence alone.\n\
-         Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long, ByVal signVal As Double, ByVal qual As String) As Boolean
+         Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long, ByVal signVal As Double, ByVal qual As String, ByVal dimScale As Double) As Boolean
 On Error GoTo EqFail
 Dim eqMgr As Object
 Dim eqText As String
@@ -1396,6 +1423,7 @@ If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = \"the driven value does n
 If eqMgr.Equation(idx) <> eqText Then gMsg = \"the stored equation reads back differently\": GoTo EqFail
 If slot >= 0 Then regName(slot) = qName
 If slot >= 0 Then regSign(slot) = signVal
+If slot >= 0 Then regScale(slot) = dimScale
 AddDimEquation = True
 Exit Function
 EqFail:
@@ -1442,7 +1470,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
         frame_desc(solidcraft_frame(sk.plane))
     ));
     out.push_str(&format!(
-        "    Set skFeat = swSketchMgr.ActiveSketch\n    skName{index} = skFeat.Name\n    Set skFeat{index} = FindFeatureByName(skName{index}, uncertain)\n    If skFeat{index} Is Nothing Then gMsg = \"the sketch feature object could not be captured for later selection: name=<\" & skName{index} & \">, tree scan saw: \" & TreeSummary(): GoTo SketchFailed\n",
+        "    Set skFeat = swSketchMgr.ActiveSketch\n    Set skFeat{index} = LastFeature()\n    If skFeat{index} Is Nothing Then gMsg = \"the new sketch feature is missing from the tree\": GoTo SketchFailed\n    skName{index} = skFeat{index}.Name\n    Set skFeat{index} = FindFeatureByName(skName{index}, uncertain)\n    If skFeat{index} Is Nothing Then gMsg = \"the sketch feature object could not be captured for later selection: name=<\" & skName{index} & \">, tree scan saw: \" & TreeSummary(): GoTo SketchFailed\n",
     ));
     out.push_str(&format!("    DrawGeometry{index}\n"));
     out.push_str(&format!(
@@ -1549,7 +1577,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
 
     // Dimensions
     out.push_str(&format!(
-        "Function Dims{index}() As Boolean\n    On Error GoTo DimFail\n    Const TOL As Double = 0.000001\n    gMsg = \"\"\n    Dim dd As SldWorks.DisplayDimension\n    Dim dm As SldWorks.Dimension\n    Dim ax As Double\n    Dim ay As Double\n    Dim bx As Double\n    Dim by As Double\n    Dim ds As Double\n    Dim dt As Double\n    Dim proj As Double\n    Dim other As Double\n    Dim created As Double\n    Dim signVal As Double\n    Dim sT As Double\n    Dim tT As Double\n    Dim mx As Double\n    Dim my As Double\n    Dim mz As Double\n    Dim axClass As Long\n    Dim v As Variant\n    Dim v2 As Variant\n    Dim nax As Double\n    Dim nay As Double\n    Dim nbx As Double\n    Dim nby As Double\n    Dim chk As Double\n    Dim chk2 As Double\n"
+        "Function Dims{index}() As Boolean\n    On Error GoTo DimFail\n    Const TOL As Double = 0.000001\n    gMsg = \"\"\n    Dim dd As SldWorks.DisplayDimension\n    Dim dm As SldWorks.Dimension\n    Dim ax As Double\n    Dim ay As Double\n    Dim bx As Double\n    Dim by As Double\n    Dim ds As Double\n    Dim dt As Double\n    Dim proj As Double\n    Dim other As Double\n    Dim created As Double\n    Dim signVal As Double\n    Dim sT As Double\n    Dim tT As Double\n    Dim mx As Double\n    Dim my As Double\n    Dim mz As Double\n    Dim axClass As Long\n    Dim dimScale As Double\n    Dim v As Variant\n    Dim v2 As Variant\n    Dim nax As Double\n    Dim nay As Double\n    Dim nbx As Double\n    Dim nby As Double\n    Dim chk As Double\n    Dim chk2 As Double\n"
     ));
     for (di, dim) in sk.dimensions.iter().enumerate() {
         out.push_str(&emit_dimension(index, dim, sk, equation_for(sk, di)));
@@ -1611,8 +1639,9 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     ));
     for (_, eq) in &sk.dim_equations {
         out.push_str(&format!(
-            "    regName({}) = \"\"\n    regSign({}) = 1#\n",
-            eq.slot, eq.slot
+            "    regName({}) = \"\"\n    regSign({}) = 1#
+    regScale({}) = 1#\n",
+            eq.slot, eq.slot, eq.slot
         ));
     }
     for i in 0..sk.lines.len() {
@@ -1633,11 +1662,11 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
         "    If Not AcceptAndPublish({index}, {}, gProbeReason) Then gMsg = \"the sketch frame could not be re-accepted after recreation: \" & gProbeReason: GoTo CleanFail\n",
         vb_lit(plane_code(sk.plane))
     ));
-    out.push_str(
-        "    Set skFeat = swSketchMgr.ActiveSketch\n    If skFeat Is Nothing Then gMsg = \"the recreated sketch has no active sketch object\": GoTo CleanFail\n",
-    );
     out.push_str(&format!(
-        "    skName{index} = skFeat.Name\n    Set skFeat{index} = FindFeatureByName(skName{index}, uncertain)\n    If skFeat{index} Is Nothing Then gMsg = \"the recreated sketch feature object could not be captured for selection: name=<\" & skName{index} & \">, tree scan saw: \" & TreeSummary(): GoTo CleanFail\n    CleanSketch{index} = True\n    Exit Function\nCleanFail:\n    If Err.Number <> 0 Then gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description\n    gMsg = gCause & \" | recreate refused: \" & gMsg\n    CleanSketch{index} = False\nEnd Function\n\n"
+        "    Set skFeat{index} = LastFeature()\n    If skFeat{index} Is Nothing Then gMsg = \"the recreated sketch is missing from the tree\": GoTo CleanFail\n",
+    ));
+    out.push_str(&format!(
+        "    skName{index} = skFeat{index}.Name\n    Set skFeat{index} = FindFeatureByName(skName{index}, uncertain)\n    If skFeat{index} Is Nothing Then gMsg = \"the recreated sketch feature object could not be captured for selection: name=<\" & skName{index} & \">, tree scan saw: \" & TreeSummary(): GoTo CleanFail\n    CleanSketch{index} = True\n    Exit Function\nCleanFail:\n    If Err.Number <> 0 Then gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description\n    gMsg = gCause & \" | recreate refused: \" & gMsg\n    CleanSketch{index} = False\nEnd Function\n\n"
     ));
     out
 }
@@ -1821,6 +1850,11 @@ fn emit_dimension(
         DimKind::Angle => format!("angle lines {}-{}", dim.a, dim.b.unwrap_or(0)),
     };
     out.push_str(&format!("    ' dimension: {label}\n"));
+    out.push_str(if matches!(dim.kind, DimKind::Radius) {
+        "    dimScale = 2#\n"
+    } else {
+        "    dimScale = 1#\n"
+    });
     // Referent coordinates come from the live handles at runtime, so the
     // placement and the kind check follow the actual sketch, not the source
     // coordinates. The text position is MODEL space (Phase 0): SketchToModel
@@ -1858,8 +1892,8 @@ fn emit_dimension(
             );
             let (what, expr) = if matches!(dim.kind, DimKind::Radius) {
                 (
-                    "the circle radius",
-                    format!("ci{index}({}).GetRadius", dim.a),
+                    "twice the circle radius (the API circle dimension is diameter-valued)",
+                    format!("2# * ci{index}({}).GetRadius", dim.a),
                 )
             } else {
                 (
@@ -1929,12 +1963,12 @@ fn emit_dimension(
     ));
     tail.push_str(&kindcheck);
     tail.push_str(&format!(
-        "    If Abs(created - {}) <= TOL Then\n    signVal = 1#\n    ElseIf Abs(created + {}) <= TOL Then\n    signVal = -1#\n    Else\n    gMsg = \"dimension {label} measures \" & Trim(Str(created)) & \" but the source value is {}\"\n    GoTo DimFail\n    End If\n",
+        "    If Abs(created - dimScale * {}) <= TOL Then\n    signVal = 1#\n    ElseIf Abs(created + dimScale * {}) <= TOL Then\n    signVal = -1#\n    Else\n    gMsg = \"dimension {label} measures \" & Trim(Str(created)) & \" but the source value is {}\"\n    GoTo DimFail\n    End If\n",
         vba_num(si),
         vba_num(si),
         vba_num(si)
     ));
-    tail.push_str(&format!("    dm.SystemValue = signVal * {}\n", vba_num(si)));
+    tail.push_str(&format!("    dm.SystemValue = signVal * dimScale * {}\n", vba_num(si)));
     // Behavioural kind evidence: setting the value must move exactly the
     // measured quantity. A wrong-kind dimension provably moves the wrong
     // axis (or the wrong measure) and fails here with both numbers named.
@@ -1942,7 +1976,7 @@ fn emit_dimension(
         DimKind::Length => {
             let l = dim.a;
             format!(
-                "    v = sl{index}({l}).GetStartPoint\n    v2 = sl{index}({l}).GetEndPoint\n    chk = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))\n    If Abs(chk - Abs({si})) > TOL Then gMsg = \"the value edit did not carry the {label} geometry (length \" & Trim(Str(chk)) & \" after driving \" & Trim(Str(Abs({si}))) & \")\": GoTo DimFail\n",
+                "    v = sl{index}({l}).GetStartPoint\n    v2 = sl{index}({l}).GetEndPoint\n    chk = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))\n    If Abs(chk - Abs(dimScale * {si})) > TOL Then gMsg = \"the value edit did not carry the {label} geometry (length \" & Trim(Str(chk)) & \" after driving \" & Trim(Str(Abs(dimScale * {si}))) & \")\": GoTo DimFail\n",
                 si = vba_num(si)
             )
         }
@@ -1954,25 +1988,25 @@ fn emit_dimension(
                 format!("2# * ci{index}({j}).GetRadius")
             };
             format!(
-                "    chk = {measure}\n    If Abs(chk - Abs({si})) > TOL Then gMsg = \"the value edit did not carry the {label} geometry (measure \" & Trim(Str(chk)) & \" after driving \" & Trim(Str(Abs({si}))) & \")\": GoTo DimFail\n",
+                "    chk = {measure}\n    If Abs(chk - Abs(dimScale * {si})) > TOL Then gMsg = \"the value edit did not carry the {label} geometry (measure \" & Trim(Str(chk)) & \" after driving \" & Trim(Str(Abs(dimScale * {si}))) & \")\": GoTo DimFail\n",
                 si = vba_num(si)
             )
         }
         DimKind::Angle => format!(
-            "    If Abs(dm.SystemValue - signVal * {si}) > TOL Then gMsg = \"the {label} value edit did not stick\": GoTo DimFail\n",
+            "    If Abs(dm.SystemValue - signVal * dimScale * {si}) > TOL Then gMsg = \"the {label} value edit did not stick\": GoTo DimFail\n",
             si = vba_num(si)
         ),
         DimKind::DistanceX | DimKind::DistanceY => {
             let (a, b) = (dim.a, dim.b.unwrap_or(0));
             format!(
-                "    nax = pt{index}({a}).X\n    nay = pt{index}({a}).Y\n    nbx = pt{index}({b}).X\n    nby = pt{index}({b}).Y\n    If axClass = 0 Then\n    chk = nbx - nax\n    chk2 = nby - nay\n    Else\n    chk = nby - nay\n    chk2 = nbx - nax\n    End If\n    If Abs(Abs(chk) - Abs({si})) > TOL Then gMsg = \"the value edit did not carry the {label} geometry (classified-axis \" & Trim(Str(chk)) & \" after driving \" & Trim(Str(Abs({si}))) & \")\": GoTo DimFail\n    If Abs(Abs(chk2) - Abs(other)) > TOL Then\n    gMsg = \"the value edit moved the perpendicular axis - the {label} kind is wrong\"\n    GoTo DimFail\n    End If\n",
+                "    nax = pt{index}({a}).X\n    nay = pt{index}({a}).Y\n    nbx = pt{index}({b}).X\n    nby = pt{index}({b}).Y\n    If axClass = 0 Then\n    chk = nbx - nax\n    chk2 = nby - nay\n    Else\n    chk = nby - nay\n    chk2 = nbx - nax\n    End If\n    If Abs(Abs(chk) - Abs({si})) > TOL Then gMsg = \"the value edit did not carry the {label} geometry (classified-axis \" & Trim(Str(chk)) & \" after driving \" & Trim(Str(Abs(dimScale * {si}))) & \")\": GoTo DimFail\n    If Abs(Abs(chk2) - Abs(other)) > TOL Then\n    gMsg = \"the value edit moved the perpendicular axis - the {label} kind is wrong\"\n    GoTo DimFail\n    End If\n",
                 si = vba_num(si)
             )
         }
         _ => {
             let (a, b) = (dim.a, dim.b.unwrap_or(0));
             format!(
-                "    nax = pt{index}({a}).X\n    nay = pt{index}({a}).Y\n    nbx = pt{index}({b}).X\n    nby = pt{index}({b}).Y\n    chk = Sqr((nbx - nax) * (nbx - nax) + (nby - nay) * (nby - nay))\n    If Abs(chk - Abs({si})) > TOL Then gMsg = \"the value edit did not carry the {label} geometry (distance \" & Trim(Str(chk)) & \" after driving \" & Trim(Str(Abs({si}))) & \")\": GoTo DimFail\n",
+                "    nax = pt{index}({a}).X\n    nay = pt{index}({a}).Y\n    nbx = pt{index}({b}).X\n    nby = pt{index}({b}).Y\n    chk = Sqr((nbx - nax) * (nbx - nax) + (nby - nay) * (nby - nay))\n    If Abs(chk - Abs(dimScale * {si})) > TOL Then gMsg = \"the value edit did not carry the {label} geometry (distance \" & Trim(Str(chk)) & \" after driving \" & Trim(Str(Abs(dimScale * {si}))) & \")\": GoTo DimFail\n",
                 si = vba_num(si)
             )
         }
@@ -1980,9 +2014,17 @@ fn emit_dimension(
     tail.push_str(&behaviour);
     if let Some(equation) = equation {
         tail.push_str(&slot_guards(equation, "DimFail"));
+        // The API circle dimension is diameter-valued: a radius source is
+        // expressed as twice its value in the equation text, so parameter
+        // edits keep meaning the radius (slot references divide it back).
+        let rhs_expr = if matches!(dim.kind, DimKind::Radius) {
+            format!("\"2*(\" & {} & \")\"", rhs_vba(equation))
+        } else {
+            rhs_vba(equation)
+        };
         tail.push_str(&format!(
-            "    If Not AddDimEquation(dm, {}, signVal * {}, {}, signVal, skName{index}) Then GoTo DimFail\n    SolveSketch skName{index}, skFeat{index}\n",
-            rhs_vba(equation),
+            "    If Not AddDimEquation(dm, {}, signVal * {} * dimScale, {}, signVal, skName{index}, dimScale) Then GoTo DimFail\n    SolveSketch skName{index}, skFeat{index}\n",
+            rhs_expr,
             vba_num(equation.expect_si),
             equation.slot
         ));
@@ -2586,7 +2628,7 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
     // The sketch name is captured before any equation rebuild: SolveSketch
     // re-enters the sketch by name after AddDimEquation's EditRebuild3
     // exits sketch edit (seat-measured semantics).
-    out.push_str("    Set skFeat = swSketchMgr.ActiveSketch\n    If skFeat Is Nothing Then gMsg = \"the primitive sketch was not created\": GoTo ExFail\n    primName = skFeat.Name\n    Set skFeat = FindFeatureByName(primName, uncertain)\n    If skFeat Is Nothing Then gMsg = \"the primitive sketch feature object could not be captured for selection: name=<\" & primName & \">, tree scan saw: \" & TreeSummary(): GoTo ExFail\n");
+    out.push_str("    Set skFeat = swSketchMgr.ActiveSketch\n    If skFeat Is Nothing Then gMsg = \"the primitive sketch was not created\": GoTo ExFail\n    Set skFeat = LastFeature()\n    If skFeat Is Nothing Then gMsg = \"the primitive sketch is missing from the tree\": GoTo ExFail\n    primName = skFeat.Name\n    Set skFeat = FindFeatureByName(primName, uncertain)\n    If skFeat Is Nothing Then gMsg = \"the primitive sketch feature object could not be captured for selection: name=<\" & primName & \">, tree scan saw: \" & TreeSummary(): GoTo ExFail\n");
     match pr.kind {
         PrimKind::Box => {
             // The shape contract (parameter-edit safety): coincident

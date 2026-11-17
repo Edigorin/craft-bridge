@@ -103,7 +103,7 @@ fn sign_chain_equations_flow_through_slotrefs() {
     // dimension values is a seat question; the generated coverage pins both
     // branches and the seat check (expect.txt) reads the stored equation.
     assert!(
-        text.contains("If Not AddDimEquation(dm, \"40mm\", signVal * 0.04, 0, signVal, skName"),
+        text.contains("If Not AddDimEquation(dm, \"40mm\", signVal * 0.04 * dimScale, 0, signVal, skName"),
         "the upstream dimension does not register its slot with the runtime sign"
     );
     for needle in ["signVal = 1#", "signVal = -1#", "but the source value is"] {
@@ -122,13 +122,13 @@ fn sign_chain_equations_flow_through_slotrefs() {
     // two hops: slot 0 -> slot 1 -> slot 2.
     assert!(
         text.contains(
-            "AddDimEquation(dm, SlotRef(0) & \" * 2\", signVal * 0.08, 1, signVal, skName"
+            "AddDimEquation(dm, SlotRef(0) & \" * 2\", signVal * 0.08 * dimScale, 1, signVal, skName"
         ),
         "the first downstream equation does not reference the upstream slot"
     );
     assert!(
         text.contains(
-            "AddDimEquation(dm, SlotRef(1) & \" / 8\", signVal * 0.01, 2, signVal, skName"
+            "AddDimEquation(dm, \"2*(\" & SlotRef(1) & \" / 8\" & \")\", signVal * 0.01 * dimScale, 2, signVal, skName"
         ),
         "the second downstream equation does not reference the mid-chain slot"
     );
@@ -137,11 +137,11 @@ fn sign_chain_equations_flow_through_slotrefs() {
     // chain (regSign/SlotRef end to end).
     let slot_ref = proc_region(&text, "SlotRef");
     assert!(
-        slot_ref.contains("If regSign(slot) < 0 Then"),
+        slot_ref.contains("regSign(slot) * regScale(slot)"),
         "SlotRef does not consult the registered sign"
     );
     assert!(
-        slot_ref.contains("SlotRef = \"(-1*\" & \"\"\"\" & regName(slot) & \"\"\"\" & \")\""),
+        slot_ref.contains("1# / f") && slot_ref.contains("Trim(Str(1# / f))"),
         "SlotRef does not normalize a negative upstream sign"
     );
     // Fail closed on dead slots before every downstream equation.

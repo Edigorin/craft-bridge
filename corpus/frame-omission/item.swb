@@ -25,6 +25,7 @@ Dim gDoc As Object
 Dim gFeatMgr As Object
 Dim regName(0 To 3) As String
 Dim regSign(0 To 3) As Double
+Dim regScale(0 To 3) As Double
 
 ' ---- extrude/revolve/primitive direction truth table (measured on the seat) ----
 ' Each constant comes from a direction probe's runtime report (corpus/
@@ -145,7 +146,9 @@ Function BuildSketch1() As String
     ok = OpenSketchOnPlane(1, "XY")
     If Not ok Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo SketchFailed
     Set skFeat = swSketchMgr.ActiveSketch
-    skName1 = skFeat.Name
+    Set skFeat1 = LastFeature()
+    If skFeat1 Is Nothing Then gMsg = "the new sketch feature is missing from the tree": GoTo SketchFailed
+    skName1 = skFeat1.Name
     Set skFeat1 = FindFeatureByName(skName1, uncertain)
     If skFeat1 Is Nothing Then gMsg = "the sketch feature object could not be captured for later selection: name=<" & skName1 & ">, tree scan saw: " & TreeSummary(): GoTo SketchFailed
     DrawGeometry1
@@ -355,6 +358,7 @@ Function Dims1() As Boolean
     Dim my As Double
     Dim mz As Double
     Dim axClass As Long
+    Dim dimScale As Double
     Dim v As Variant
     Dim v2 As Variant
     Dim nax As Double
@@ -364,6 +368,7 @@ Function Dims1() As Boolean
     Dim chk As Double
     Dim chk2 As Double
     ' dimension: DistanceX 0-1
+    dimScale = 1#
     ax = pt1(0).X
     ay = pt1(0).Y
     bx = pt1(1).X
@@ -409,15 +414,15 @@ Function Dims1() As Boolean
     GoTo DimFail
     End If
     End If
-    If Abs(created - 0.04) <= TOL Then
+    If Abs(created - dimScale * 0.04) <= TOL Then
     signVal = 1#
-    ElseIf Abs(created + 0.04) <= TOL Then
+    ElseIf Abs(created + dimScale * 0.04) <= TOL Then
     signVal = -1#
     Else
     gMsg = "dimension DistanceX 0-1 measures " & Trim(Str(created)) & " but the source value is 0.04"
     GoTo DimFail
     End If
-    dm.SystemValue = signVal * 0.04
+    dm.SystemValue = signVal * dimScale * 0.04
     nax = pt1(0).X
     nay = pt1(0).Y
     nbx = pt1(1).X
@@ -429,16 +434,17 @@ Function Dims1() As Boolean
     chk = nby - nay
     chk2 = nbx - nax
     End If
-    If Abs(Abs(chk) - Abs(0.04)) > TOL Then gMsg = "the value edit did not carry the DistanceX 0-1 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.04))) & ")": GoTo DimFail
+    If Abs(Abs(chk) - Abs(0.04)) > TOL Then gMsg = "the value edit did not carry the DistanceX 0-1 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(dimScale * 0.04))) & ")": GoTo DimFail
     If Abs(Abs(chk2) - Abs(other)) > TOL Then
     gMsg = "the value edit moved the perpendicular axis - the DistanceX 0-1 kind is wrong"
     GoTo DimFail
     End If
-    If Not AddDimEquation(dm, "40mm", signVal * 0.04, 0, signVal, skName1) Then GoTo DimFail
+    If Not AddDimEquation(dm, "40mm", signVal * 0.04 * dimScale, 0, signVal, skName1, dimScale) Then GoTo DimFail
     SolveSketch skName1, skFeat1
     swDoc.ClearSelection2 True
     End If
     ' dimension: DistanceY 0-5
+    dimScale = 1#
     ax = pt1(0).X
     ay = pt1(0).Y
     bx = pt1(5).X
@@ -484,15 +490,15 @@ Function Dims1() As Boolean
     GoTo DimFail
     End If
     End If
-    If Abs(created - 0.08) <= TOL Then
+    If Abs(created - dimScale * 0.08) <= TOL Then
     signVal = 1#
-    ElseIf Abs(created + 0.08) <= TOL Then
+    ElseIf Abs(created + dimScale * 0.08) <= TOL Then
     signVal = -1#
     Else
     gMsg = "dimension DistanceY 0-5 measures " & Trim(Str(created)) & " but the source value is 0.08"
     GoTo DimFail
     End If
-    dm.SystemValue = signVal * 0.08
+    dm.SystemValue = signVal * dimScale * 0.08
     nax = pt1(0).X
     nay = pt1(0).Y
     nbx = pt1(5).X
@@ -504,16 +510,17 @@ Function Dims1() As Boolean
     chk = nby - nay
     chk2 = nbx - nax
     End If
-    If Abs(Abs(chk) - Abs(0.08)) > TOL Then gMsg = "the value edit did not carry the DistanceY 0-5 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.08))) & ")": GoTo DimFail
+    If Abs(Abs(chk) - Abs(0.08)) > TOL Then gMsg = "the value edit did not carry the DistanceY 0-5 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(dimScale * 0.08))) & ")": GoTo DimFail
     If Abs(Abs(chk2) - Abs(other)) > TOL Then
     gMsg = "the value edit moved the perpendicular axis - the DistanceY 0-5 kind is wrong"
     GoTo DimFail
     End If
-    If Not AddDimEquation(dm, "80mm", signVal * 0.08, 1, signVal, skName1) Then GoTo DimFail
+    If Not AddDimEquation(dm, "80mm", signVal * 0.08 * dimScale, 1, signVal, skName1, dimScale) Then GoTo DimFail
     SolveSketch skName1, skFeat1
     swDoc.ClearSelection2 True
     End If
     ' dimension: distance 8-9
+    dimScale = 1#
     ax = pt1(8).X
     ay = pt1(8).Y
     bx = pt1(9).X
@@ -537,26 +544,27 @@ Function Dims1() As Boolean
     gMsg = "dimension distance 8-9 measures " & Trim(Str(created)) & " but the point distance is " & Trim(Str(proj))
     GoTo DimFail
     End If
-    If Abs(created - 0.08) <= TOL Then
+    If Abs(created - dimScale * 0.08) <= TOL Then
     signVal = 1#
-    ElseIf Abs(created + 0.08) <= TOL Then
+    ElseIf Abs(created + dimScale * 0.08) <= TOL Then
     signVal = -1#
     Else
     gMsg = "dimension distance 8-9 measures " & Trim(Str(created)) & " but the source value is 0.08"
     GoTo DimFail
     End If
-    dm.SystemValue = signVal * 0.08
+    dm.SystemValue = signVal * dimScale * 0.08
     nax = pt1(8).X
     nay = pt1(8).Y
     nbx = pt1(9).X
     nby = pt1(9).Y
     chk = Sqr((nbx - nax) * (nbx - nax) + (nby - nay) * (nby - nay))
-    If Abs(chk - Abs(0.08)) > TOL Then gMsg = "the value edit did not carry the distance 8-9 geometry (distance " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.08))) & ")": GoTo DimFail
+    If Abs(chk - Abs(dimScale * 0.08)) > TOL Then gMsg = "the value edit did not carry the distance 8-9 geometry (distance " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(dimScale * 0.08))) & ")": GoTo DimFail
     If regName(0) = "" Then gMsg = "the parameter slot 0 is not bound (its dimension was omitted or failed)": GoTo DimFail
-    If Not AddDimEquation(dm, SlotRef(0) & " * 2", signVal * 0.08, 2, signVal, skName1) Then GoTo DimFail
+    If Not AddDimEquation(dm, SlotRef(0) & " * 2", signVal * 0.08 * dimScale, 2, signVal, skName1, dimScale) Then GoTo DimFail
     SolveSketch skName1, skFeat1
     swDoc.ClearSelection2 True
     ' dimension: distance 3-5
+    dimScale = 1#
     ax = pt1(3).X
     ay = pt1(3).Y
     bx = pt1(5).X
@@ -580,24 +588,24 @@ Function Dims1() As Boolean
     gMsg = "dimension distance 3-5 measures " & Trim(Str(created)) & " but the point distance is " & Trim(Str(proj))
     GoTo DimFail
     End If
-    If Abs(created - 0.04) <= TOL Then
+    If Abs(created - dimScale * 0.04) <= TOL Then
     signVal = 1#
-    ElseIf Abs(created + 0.04) <= TOL Then
+    ElseIf Abs(created + dimScale * 0.04) <= TOL Then
     signVal = -1#
     Else
     gMsg = "dimension distance 3-5 measures " & Trim(Str(created)) & " but the source value is 0.04"
     GoTo DimFail
     End If
-    dm.SystemValue = signVal * 0.04
+    dm.SystemValue = signVal * dimScale * 0.04
     nax = pt1(3).X
     nay = pt1(3).Y
     nbx = pt1(5).X
     nby = pt1(5).Y
     chk = Sqr((nbx - nax) * (nbx - nax) + (nby - nay) * (nby - nay))
-    If Abs(chk - Abs(0.04)) > TOL Then gMsg = "the value edit did not carry the distance 3-5 geometry (distance " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.04))) & ")": GoTo DimFail
+    If Abs(chk - Abs(dimScale * 0.04)) > TOL Then gMsg = "the value edit did not carry the distance 3-5 geometry (distance " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(dimScale * 0.04))) & ")": GoTo DimFail
     If regName(1) = "" Then gMsg = "the parameter slot 1 is not bound (its dimension was omitted or failed)": GoTo DimFail
     If regName(0) = "" Then gMsg = "the parameter slot 0 is not bound (its dimension was omitted or failed)": GoTo DimFail
-    If Not AddDimEquation(dm, "(" & SlotRef(1) & " - " & SlotRef(0) & ")", signVal * 0.04, 3, signVal, skName1) Then GoTo DimFail
+    If Not AddDimEquation(dm, "(" & SlotRef(1) & " - " & SlotRef(0) & ")", signVal * 0.04 * dimScale, 3, signVal, skName1, dimScale) Then GoTo DimFail
     SolveSketch skName1, skFeat1
     swDoc.ClearSelection2 True
     Dims1 = True
@@ -675,12 +683,16 @@ Function CleanSketch1() As Boolean
     ClearMap 1
     regName(0) = ""
     regSign(0) = 1#
+    regScale(0) = 1#
     regName(1) = ""
     regSign(1) = 1#
+    regScale(1) = 1#
     regName(2) = ""
     regSign(2) = 1#
+    regScale(2) = 1#
     regName(3) = ""
     regSign(3) = 1#
+    regScale(3) = 1#
     If Not sl1(0) Is Nothing Then
     okSel = sl1(0).Select(anySel)
     If Not okSel Then gMsg = "a sketch entity would not select for deletion": GoTo CleanFail
@@ -745,9 +757,9 @@ Function CleanSketch1() As Boolean
     End If
     On Error GoTo CleanFail
     If Not AcceptAndPublish(1, "XY", gProbeReason) Then gMsg = "the sketch frame could not be re-accepted after recreation: " & gProbeReason: GoTo CleanFail
-    Set skFeat = swSketchMgr.ActiveSketch
-    If skFeat Is Nothing Then gMsg = "the recreated sketch has no active sketch object": GoTo CleanFail
-    skName1 = skFeat.Name
+    Set skFeat1 = LastFeature()
+    If skFeat1 Is Nothing Then gMsg = "the recreated sketch is missing from the tree": GoTo CleanFail
+    skName1 = skFeat1.Name
     Set skFeat1 = FindFeatureByName(skName1, uncertain)
     If skFeat1 Is Nothing Then gMsg = "the recreated sketch feature object could not be captured for selection: name=<" & skName1 & ">, tree scan saw: " & TreeSummary(): GoTo CleanFail
     CleanSketch1 = True
@@ -763,14 +775,17 @@ Sub ClearSlotsAll()
     For i = 0 To UBound(regName)
         regName(i) = ""
         regSign(i) = 1#
+        regScale(i) = 1#
     Next i
 End Sub
 
 Function SlotRef(ByVal slot As Long) As String
-    If regSign(slot) < 0 Then
-    SlotRef = "(-1*" & """" & regName(slot) & """" & ")"
-    Else
+    Dim f As Double
+    f = regSign(slot) * regScale(slot)
+    If Abs(f - 1#) <= 0.000001 Then
     SlotRef = """" & regName(slot) & """"
+    Else
+    SlotRef = "(" & Trim(Str(1# / f)) & "*" & """" & regName(slot) & """" & ")"
     End If
 End Function
 
@@ -1285,6 +1300,28 @@ If Abs(m10 + m11 - 1#) > 0.000001 Then Exit Function
 MapIsPermutation = True
 End Function
 
+' The just-created sketch as a TREE FEATURE (seat-proven 2026-11-17:
+' ActiveSketch.Name is an internal name that does NOT match the tree when
+' probe-sketch deletion recycled the name - SelectByID2 by it fails and
+' equations qualified by it drive nothing). A fresh part always appends the
+' new sketch as the last tree feature; its Name is the true tree name and
+' its Select is the pinned-working selection.
+Function LastFeature() As SldWorks.Feature
+Dim f As SldWorks.Feature
+Dim last As SldWorks.Feature
+On Error Resume Next
+Err.Clear
+Set f = swDoc.FirstFeature
+If Err.Number <> 0 Then Exit Function
+Do While Not f Is Nothing
+Set last = f
+Err.Clear
+Set f = f.GetNextFeature
+If Err.Number <> 0 Then Exit Function
+Loop
+Set LastFeature = last
+End Function
+
 ' Rebuild and stay in sketch edit (seat-proven 2026-11-16: EditRebuild3
 ' EXITS sketch edit - sketch API calls then silently do nothing, and its
 ' Boolean return is NOT a gate: it returns False in working flows). The
@@ -1571,7 +1608,7 @@ End Function
 ' Add an equation driving a dimension and verify it evaluated: the
 ' dimension name is captured at runtime, the value must match the
 ' expectation after a rebuild. Never presence alone.
-Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long, ByVal signVal As Double, ByVal qual As String) As Boolean
+Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long, ByVal signVal As Double, ByVal qual As String, ByVal dimScale As Double) As Boolean
 On Error GoTo EqFail
 Dim eqMgr As Object
 Dim eqText As String
@@ -1594,6 +1631,7 @@ If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = "the driven value does no
 If eqMgr.Equation(idx) <> eqText Then gMsg = "the stored equation reads back differently": GoTo EqFail
 If slot >= 0 Then regName(slot) = qName
 If slot >= 0 Then regSign(slot) = signVal
+If slot >= 0 Then regScale(slot) = dimScale
 AddDimEquation = True
 Exit Function
 EqFail:

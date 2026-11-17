@@ -1592,7 +1592,7 @@ fn sketch_recreation_rebinds_and_reprobes() {
     );
     // The sketch identity is reacquired, never assumed.
     assert!(
-        region.contains("skName2 = skFeat.Name"),
+        region.contains("skName2 = skFeat2.Name"),
         "the sketch identity is not reacquired"
     );
     // The degrade path fails closed when recreation fails.
@@ -1635,7 +1635,7 @@ fn dims_verify_kind_and_resolve_signs_in_the_equation() {
     // The sign lives in the equation RHS and the expected value - never only
     // in the initial SystemValue - so parameter edits keep tracking.
     assert!(
-        region.contains("AddDimEquation(dm, \"40mm\", signVal * 0.04, 0, signVal, skName2)"),
+        region.contains("AddDimEquation(dm, \"40mm\", signVal * 0.04 * dimScale, 0, signVal, skName2, dimScale)"),
         "the equation does not carry the runtime sign"
     );
     assert!(
