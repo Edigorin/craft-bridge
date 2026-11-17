@@ -86,6 +86,7 @@ Sub main()
         GoTo WrapUp
     End If
     WriteLine TryPoints(5, "sgVERTPOINTS2D", True, caseOk)
+    WriteLine TryPoints(7, "sgVERTICALPOINTS2D", True, caseOk)
     If Not caseOk Then
         runFailed = True
         GoTo WrapUp
@@ -968,6 +969,15 @@ Function TryCoincident(ByVal idx As Long, ByVal cname As String, ByRef caseOk As
     End If
     If Not SelectTwo(sa, sb, reason) Then
         TryCoincident = StepFor(idx, "probe." & cname, "failed", "point pair select failed: " & reason & "; the case cannot produce evidence")
+        Exit Function
+    End If
+    ' The merge invalidates pre-solve handles: re-acquire fresh ones before
+    ' the measurement (the seat proved stale handles raise automation errors).
+    Err.Clear
+    Set sa = la.GetEndPoint2
+    Set sb = lb.GetStartPoint2
+    If sa Is Nothing Or sb Is Nothing Then
+        TryCoincident = StepFor(idx, "probe." & cname, "failed", "post-solve handles are gone (the merge invalidated them)")
         Exit Function
     End If
     If Not PointXY(sa, px1, py1, reason) Then
