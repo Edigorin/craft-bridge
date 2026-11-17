@@ -153,15 +153,106 @@ fn duplicate_and_out_of_bound_feature_ids_refuse() {
 }
 
 #[test]
-fn the_rollback_marker_refuses_when_it_changes_behavior() {
-    // A marker past the last feature is a no-op cursor and replays fine.
+fn the_rollback_marker_excludes_features_named_without_stopping() {
+    // Source-pinned semantics (nested-schema research A6): the marker is a
+    // zero-based index into features; the feature AT that index and every
+    // feature after it are rolled back - recorded, not executed, never a
+    // stop. Parameters always evaluate.
+    let design = DESIGN.replace("\"next_id\": 100001", "\"marker\": 1, \"next_id\": 100001");
+    let steps = plan_of(&design);
+    assert!(
+        matches!(steps[3].work, Work::Sketch(_)),
+        "feature at index 0 still replays"
+    );
+    for step in &steps[4..] {
+        assert_eq!(step.status, PlanStatus::NotExecuted);
+        assert!(matches!(step.work, Work::Note));
+        assert!(
+            step.detail.contains("past the timeline rollback marker"),
+            "{}",
+            step.detail
+        );
+    }
+    // A marker past the last feature is a no-op cursor: everything replays.
     let ok = DESIGN.replace("\"next_id\": 100001", "\"marker\": 9, \"next_id\": 100001");
     assert_eq!(plan_of(&ok).len(), 8);
-    // A marker inside the timeline decides what the evaluated model is; its
-    // index semantics are unpinned, so it refuses named.
-    let refused = DESIGN.replace("\"next_id\": 100001", "\"marker\": 1, \"next_id\": 100001");
-    let err = plan_err(&refused);
-    assert!(err.contains("rollback marker"), "{err}");
+    assert_eq!(plan_of(&ok)[7].status, PlanStatus::Mapped);
+    // A malformed marker still refuses.
+    for marker in ["-1", "2.5", "\"x\""] {
+        let design = DESIGN.replace(
+            "\"next_id\": 100001",
+            &format!("\"marker\": {marker}, \"next_id\": 100001"),
+        );
+        let err = plan_err(&design);
+        assert!(err.contains("marker"), "{marker}: {err}");
+    }
+}
+
+#[test]
+fn centerline_and_infinite_curves_replay_as_construction_geometry() {
+    // The source profile detector excludes construction, centerline and
+    // infinite curves from bounding profiles; replay marks them all the
+    // same way so a centerline can never split a profile.
+    let design = r#"{"format": "solidcraft/57", "units": "mm", "params": [], "features": [
+        {"id": 1, "name": "s", "suppressed": false, "type": "sketch",
+         "plane": {"type": "origin", "name": "XY"},
+         "sketch": {
+           "points": [{"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+                      {"id": "p1", "pos": [10.0, 0.0]},
+                      {"id": "p2", "pos": [3.0, 7.0]}],
+           "curves": [
+             {"id": "l1", "type": "line", "a": 0, "b": 1},
+             {"id": "l2", "type": "line", "a": 1, "b": 2, "centerline": true},
+             {"id": "l3", "type": "line", "a": 2, "b": 0, "infinite": true}
+           ],
+           "constraints": [], "counters": {"l": 3, "p": 3}}}]}"#;
+    let steps = plan_of(design);
+    let sketch = match &steps[0].work {
+        Work::Sketch(s) => s,
+        _ => panic!(),
+    };
+    let flags: Vec<bool> = sketch.lines.iter().map(|l| l.construction).collect();
+    assert_eq!(flags, vec![false, true, true], "{flags:?}");
+}
+
+#[test]
+fn angle_constraints_with_flip_are_dropped_not_misreplayed() {
+    // flip selects the supplementary branch; replaying the primary angle
+    // would be silently wrong, so the constraint degrades named.
+    let design = r#"{"format": "solidcraft/57", "units": "mm", "params": [], "features": [
+        {"id": 1, "name": "s", "suppressed": false, "type": "sketch",
+         "plane": {"type": "origin", "name": "XY"},
+         "sketch": {
+           "points": [{"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+                      {"id": "p1", "pos": [10.0, 0.0]},
+                      {"id": "p2", "pos": [3.0, 7.0]},
+                      {"id": "p3", "pos": [-4.0, 5.0]}],
+           "curves": [
+             {"id": "l1", "type": "line", "a": 0, "b": 1},
+             {"id": "l2", "type": "line", "a": 1, "b": 2},
+             {"id": "l3", "type": "line", "a": 2, "b": 3}
+           ],
+           "constraints": [
+             {"id": "k1", "type": "angle", "a": 1, "b": 2, "value": 0.7, "flip": true}
+           ], "counters": {"l": 3, "p": 4}}}]}"#;
+    let steps = plan_of(design);
+    assert_eq!(steps[0].status, PlanStatus::DegradePlanned);
+    let sketch = match &steps[0].work {
+        Work::Sketch(s) => s,
+        _ => panic!(),
+    };
+    assert!(
+        sketch.dimensions.is_empty(),
+        "no angle dimension may be driven"
+    );
+    assert!(
+        sketch
+            .dropped_constraints
+            .iter()
+            .any(|d| d.contains("flip")),
+        "{:?}",
+        sketch.dropped_constraints
+    );
 }
 
 #[test]

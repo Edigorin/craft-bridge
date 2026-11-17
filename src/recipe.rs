@@ -96,22 +96,20 @@ fn validate_57(value: &Value, limits: &Limits) -> Result<()> {
             )));
         }
     }
+    // The marker is source-pinned: a zero-based index into features; the
+    // feature AT that index and every feature after it are rolled back and
+    // not evaluated (nested-schema research A6). Planning implements the
+    // cutoff; only a malformed marker refuses here.
     match root.get("marker") {
         None | Some(Value::Null) => {}
-        Some(Value::Number(n)) => match n.as_u64() {
-            Some(at) => {
-                if at < feature_count as u64 {
-                    return Err(Error::InvalidRecipe(format!(
-                        "the timeline rollback marker ({at}) leaves {feature_count} features past it; the marker's index semantics are unpinned, refusing to guess which features the evaluated model carries"
-                    )));
-                }
-            }
-            None => {
+        Some(Value::Number(n)) => {
+            if n.as_u64().is_none() {
                 return Err(Error::InvalidRecipe(
                     "the timeline rollback marker is not a non-negative whole number".to_string(),
-                ))
+                ));
             }
-        },
+            let _ = feature_count;
+        }
         Some(_) => {
             return Err(Error::InvalidRecipe(
                 "the timeline rollback marker is not a number".to_string(),

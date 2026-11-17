@@ -640,6 +640,12 @@ fn plan57(
     let mut next_slot: usize = 0;
     let mut stopped = false;
     let mut index = 0usize;
+    // Timeline rollback marker (source-pinned): features at this index and
+    // after are rolled back - recorded, not executed, never a stop.
+    let marker = root
+        .get("marker")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX) as usize;
     for p in crate::recipe::params57_of(recipe)? {
         let name = p
             .get("name")
@@ -669,10 +675,21 @@ fn plan57(
         ));
         index += 1;
     }
-    for f in crate::recipe::features_of(recipe)? {
+    for (position, f) in crate::recipe::features_of(recipe)?.iter().enumerate() {
         let kind = f.get("type").and_then(Value::as_str).unwrap_or("");
         let fid = f.get("id").and_then(Value::as_u64).unwrap_or(0);
-        let planned = if stopped {
+        let planned = if position >= marker {
+            PlannedStep {
+                index,
+                source_id: format!("feature {fid}"),
+                command: kind.to_string(),
+                status: PlanStatus::NotExecuted,
+                detail: format!(
+                    "{kind} is past the timeline rollback marker (feature index {marker}); the source evaluator has rolled it back and the evaluated model excludes it"
+                ),
+                work: Work::Note,
+            }
+        } else if stopped {
             PlannedStep {
                 index,
                 source_id: format!("feature {fid}"),
@@ -1260,10 +1277,12 @@ fn parse_sketch(
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let construction = c
-            .get("construction")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+        // Construction, centerline and infinite curves all sit outside
+        // profile detection (the source profile detector excludes them),
+        // so they replay as construction geometry.
+        let construction = ["construction", "centerline", "infinite"]
+            .iter()
+            .any(|k| c.get(*k).and_then(Value::as_bool).unwrap_or(false));
         let point_index = |key: &str| -> Result<usize> {
             let v = c
                 .get(key)
@@ -1493,13 +1512,23 @@ fn parse_sketch(
                         param: k.get("param").and_then(Value::as_str).map(str::to_string),
                     });
                 }
-                "angle" => dimensions.push(DimensionT {
-                    kind: DimKind::Angle,
-                    a: line_index("a")?,
-                    b: Some(line_index("b")?),
-                    value: value()?,
-                    param: k.get("param").and_then(Value::as_str).map(str::to_string),
-                }),
+                "angle" => {
+                    if k.get("flip").and_then(Value::as_bool).unwrap_or(false) {
+                        // flip selects the supplementary branch; replaying
+                        // the primary branch would be silently wrong.
+                        dropped_constraints.push(
+                            "angle (flip: the supplementary branch is not replayed)".to_string(),
+                        );
+                    } else {
+                        dimensions.push(DimensionT {
+                            kind: DimKind::Angle,
+                            a: line_index("a")?,
+                            b: Some(line_index("b")?),
+                            value: value()?,
+                            param: k.get("param").and_then(Value::as_str).map(str::to_string),
+                        });
+                    }
+                }
                 other => dropped_constraints.push(other.to_string()),
             }
             Ok(Some(()))

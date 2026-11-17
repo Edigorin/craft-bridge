@@ -66,9 +66,11 @@ read as this shape, unchanged.
 
 `params` and `features` at the root. Every feature has a unique integer
 `id` (source identity, below) and a `type`. `units` is the design length
-unit (mm, cm, m, in, ft). A `marker` (timeline rollback cursor) that would
-decide which features are evaluated refuses named: its index semantics are
-unpinned and replay never guesses what the reference geometry carries.
+unit (mm, cm, m, in, ft). A `marker` is a timeline rollback cursor (a
+zero-based index into `features`, source-pinned): the feature at that
+index and every feature after it are rolled back - replay records them as
+`not-executed` (named) and never builds them, because the reference
+geometry excludes them. A malformed marker refuses.
 
 **Source identity, dense runtime indices, snapshot addressing** are three
 different things:
@@ -89,6 +91,13 @@ replay.
 **Suppression.** `suppressed: true` keeps the record and skips the
 geometry, exactly as the source timeline does. The step plans as
 `not-executed` (named) and never triggers the stop rule.
+
+**Curves and constraints.** Curve indices refer to `curves`, point
+indices to `points` (never the string ids). `construction`, `centerline`
+and `infinite` curves all sit outside profile detection and replay as
+construction geometry. An `angle` constraint with `flip: true` selects
+the supplementary branch and degrades named (never a wrong angle). The
+`fix {p}` constraint is a point pin and a faithful no-op.
 
 **Coordinate drivers.** A sketch point may carry `exprs: {x?, y?}`. The
 expression is the source of truth (the source engine fixes expression
