@@ -9,16 +9,19 @@ volume_compare=skip
 # identity, XZ probes Right and publishes the half turn (-1,0,0,-1).
 # Per-slot map state: each probe publishes its own slot and CleanSketchN
 # invalidates and re-probes only its own. Restore-on-reference: the extrude
-# (step 3) references the FIRST sketch - it consults slot 1's map
-# (MapIsIdentity) and sketch name while slot 2 holds a different map, and
-# its depth equation reads the first sketch's registered dimension (slot 0)
-# through the sign-normalizing SlotRef. The extrude family still requires
-# the identity map (batch 2 replaces this with the direction truth table):
-# on a seat whose YZ map is not exactly identity the extrude step reports
-# the named refusal and never reports created - bounded support, not a
-# defect. SEAT CHECK: the runtime report must show both sketches created;
-# the Boss sketch must land on the XZ plane at its mirrored source position
-# (u->-s, v->-t). During a manual keep-open replay (seat-smoke runs with
-# close-after-run) the Equations dialog must show the Base depth driven by
-# the Plate dimension; capture evidence and close the document afterwards
-# (the leave-no-documents-open rule).
+# (step 3) references the FIRST sketch - it consults slot 1's map state
+# (gMapValid/gMapSide) and sketch name while slot 2 holds a different map,
+# and its depth equation reads the first sketch's registered dimension
+# (slot 0) through the sign-normalizing SlotRef. The extrude direction
+# adapts through the measured direction truth table (batch 2): the Dir
+# flag is chosen from the referenced sketch's map side, and the step
+# refuses with a named reason (never reports created) if the truth table
+# is unmeasured or the profile sketch carries no valid map. SEAT CHECK:
+# the runtime report must show both sketches and the extrude created; the
+# Boss sketch must land on the XZ plane at its mirrored source position
+# (u->-s, v->-t) and the Base material must extend toward +Z of the SC
+# frame (direction positive) despite the YZ sketch's adapted frame. During
+# a manual keep-open replay (seat-smoke runs with close-after-run) the
+# Equations dialog must show the Base depth driven by the Plate dimension;
+# capture evidence and close the document afterwards (the
+# leave-no-documents-open rule).
