@@ -1,0 +1,2371 @@
+' craft-bridge probe-primorient - Phase 1 batch 3 PRIMITIVE ORIENTATION
+' PROBE: what the primitive path does on this seat. Four cases in fresh
+' parts, each drawing the emitter's generated profile at the MAPPED
+' coordinates of a fixed source-space footprint (the 2x2 map computed from
+' the probed source-XY plane frame exactly as the emitter's PublishMap
+' computes and stores it):
+'
+'   box-dir-false / box-dir-true: the mapped box (four lines in the
+'   emitter's deterministic order, ln0 the SC-u edge = the length edge)
+'   with the emitter's two size dimensions, blindly extruded 0.012 m with
+'   the emitter's exact 23-argument call shape and the case's Dir flag.
+'   Each case reports the probed frame, the computed map entries and side,
+'   each created dimension's Name and SystemValue WITH ITS SIGN, the D1
+'   identity and SystemValue, and IPartDoc.GetPartBox(True) with every
+'   component.
+'
+'   cylinder-dim: the mapped circle (the emitter's CreateCircleByRadius
+'   call) anchored like the emitter's, with the circle dimension created
+'   exactly as the emitter creates it - the report carries the created
+'   value against GetRadius AND twice it, which is the radius-kind vs
+'   diameter-kind pin for primitive sizes and sketch radius dimensions
+'   alike - then the emitter's kind guards, and only if they pass the same
+'   blind extrusion and box.
+'
+'   box-edit-follow: the mapped box with the emitter's whole shape
+'   contract (coincident corners, classified horizontal/vertical
+'   relations, the corner fix) and its two size dimensions, then a
+'   parameter change - the length dimension driven to 1.5x its drawn
+'   value - with a full corner readback (every endpoint coordinate, both
+'   edge lengths, the closure). No feature is created.
+'
+' Reading the pin - kept narrow on purpose (the plan review's scope
+' bound): the two box cases pin which physical side the Dir flag sends
+' the primitive's height to, ON THIS SEAT'S SOURCE-XY CONFIGURATION (the
+' positive-normal reading), and cross-check probe-extrudedir's
+' TT_EX_DIR_TRUE_SIDE reading on a second frame that carries a
+' non-identity map. Two candidate frame laws remain open: the flag follows
+' the transform-reported sketch normal, or a host-canonicalized normal.
+' These cases cannot distinguish the two wherever they agree - they agree
+' whenever the transform normal IS the canonical one, as on the
+' positive-normal planes here - so a matching result confirms the
+' emitter's composition for the measured configuration ONLY and never
+' proves the general law; a mismatch with the Front-plane reading refutes
+' frame-relativity and must stop the fill-in. The opposing-normal
+' composition (map side -1) is not covered by any case here (every origin
+' plane on this seat publishes a permutation map with side +1) and stays
+' an accepted residual under the seat-acceptance outer guard. Filling
+' TT_PRIM_DIR_TRUE_SIDE from these reports is evidence for the measured
+' configuration only - never proof of the reflected case. GetPartBox is
+' approximate per its documentation, so sides are read with tolerance,
+' never by exact endpoint equality. The probe reports the numbers; it
+' draws no conclusion the box does not carry.
+'
+' Evidence discipline: every SolidWorks API call captures its numeric
+' error and description at its own named stage (the host-file report
+' plumbing - path discovery, open/append - is the proven helper set and
+' suppresses its own I/O errors by design); entering records precede the
+' risky calls (feature creation, AddDimension2, GetPartBox); contexts are
+' verified before the named measurements and re-verified after the
+' mutating feature call (with selections cleared and checked); missing
+' setup geometry fails the run with a failed step while cleanup still
+' runs. Procedure bodies run under captured-error discipline: a raised
+' call error is captured at its own named stage before any failure path,
+' and every numeric value is rejected if Empty/Null/nonnumeric before
+' conversion - nothing is silently coerced or defaulted. The map
+' computation is fail-closed exactly like the emitter's PublishMap: the
+' 16-entry transform form, finite entries, scale 1, unit axes, mutual
+' orthogonality and the right-handed 3D frame must all hold before a
+' single entry is used. Required observations: the map entries and side,
+' every created dimension identity and value, the box form and all six
+' components, and the D1 identity. Cleanup is tri-state and
+' ownership-checked on every path (close/keep/unknown); authorization is
+' established before any model creation; a keep-mode handoff must verify
+' as a live, nonempty, uniquely owned document or the run fails and the
+' document is closed instead. Setup failure aborts the remaining cases; a
+' measurement failure fails the run but lets the independent remaining
+' cases record their own evidence (fresh parts, no shared state).
+' Diagnostic instrument, not a fidelity golden.
+Option Explicit
+
+Dim swApp As SldWorks.SldWorks
+Dim swDoc As SldWorks.ModelDoc2
+Dim swSketchMgr As SketchManager
+Dim reportPath As String
+Dim gProbeLog As String
+Dim gTemplate As String
+Dim gFeatMgr As Object
+Dim gRunFailed As Boolean
+Dim gDimToggle As Boolean
+Dim gDimToggleSaved As Boolean
+' The per-case adaptation map, computed from the probed frame exactly as
+' the emitter's PublishMap stores it: s = u*gMap00 + v*gMap10, t =
+' u*gMap01 + v*gMap11, gMapSide = sign(n_sk . source +Z).
+Dim gMap00 As Double
+Dim gMap01 As Double
+Dim gMap10 As Double
+Dim gMap11 As Double
+Dim gMapSide As Long
+
+Sub main()
+    Dim mode As String
+    Dim r As Long
+    Dim closedOk As Boolean
+    Dim errNum As Long
+    Dim errMsg As String
+    Dim n As Long
+    Dim d As String
+    On Error GoTo Fail
+    gRunFailed = False
+    reportPath = ReportPathFromHost()
+    If reportPath = "" Then Err.Raise vbObjectError + 513, "probe-primorient", "no report path"
+    StartReport
+    WriteLine "{""type"":""header"",""macro"":""probe-primorient"",""bridge_version"":""0.1.0""}"
+    mode = CloseMode()
+    If mode = "unknown" Then
+        WriteStep -1, "close-mode", "failed", "cleanup authorization is not established; no model is created"
+        gRunFailed = True
+        GoTo WrapUp
+    End If
+    On Error Resume Next
+    Err.Clear
+    Set swApp = Application.SldWorks
+    n = Err.Number
+    d = Err.Description
+    On Error GoTo Fail
+    WriteLine LineFor("application", n, d, "stage=acquire")
+    If n <> 0 Or swApp Is Nothing Then Err.Raise vbObjectError + 516, "probe-primorient", "the SolidWorks application could not be acquired"
+    ' The input-dimension-value dialog blocks AddDimension2 (minimal.swb):
+    ' save the owner's value, disable, verify the disable; every exit
+    ' restores the SAVED value and verifies the restore - never force one.
+    gDimToggle = swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate)
+    gDimToggleSaved = True
+    swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, False
+    If swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate) Then Err.Raise vbObjectError + 528, "probe-primorient", "the input-dimension-value dialog could not be disabled"
+    On Error Resume Next
+    Err.Clear
+    gTemplate = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
+    n = Err.Number
+    d = Err.Description
+    On Error GoTo Fail
+    WriteLine LineFor("template", n, d, "stage=default-part-template value=" & gTemplate)
+    If n <> 0 Then Err.Raise vbObjectError + 514, "probe-primorient", "the default part template could not be read"
+    If gTemplate = "" Then Err.Raise vbObjectError + 514, "probe-primorient", "no default part template is configured"
+    r = RunBoxCase("box-dir-false", False, False, mode)
+    If r <> 0 Then gRunFailed = True
+    If r >= 2 Then GoTo WrapUp
+    Err.Clear
+    mode = CloseMode()
+    If mode = "unknown" Then
+        WriteStep -1, "close-mode", "failed", "cleanup authorization lost; no further case is started"
+        gRunFailed = True
+        GoTo WrapUp
+    End If
+    r = RunBoxCase("box-dir-true", True, False, mode)
+    If r <> 0 Then gRunFailed = True
+    If r >= 2 Then GoTo WrapUp
+    Err.Clear
+    mode = CloseMode()
+    If mode = "unknown" Then
+        WriteStep -1, "close-mode", "failed", "cleanup authorization lost; no further case is started"
+        gRunFailed = True
+        GoTo WrapUp
+    End If
+    r = RunCylinderCase("cylinder-dim", False, mode)
+    If r <> 0 Then gRunFailed = True
+    If r >= 2 Then GoTo WrapUp
+    Err.Clear
+    mode = CloseMode()
+    If mode = "unknown" Then
+        WriteStep -1, "close-mode", "failed", "cleanup authorization lost; no further case is started"
+        gRunFailed = True
+        GoTo WrapUp
+    End If
+    r = RunEditCase("box-edit-follow", True, mode)
+    If r <> 0 Then gRunFailed = True
+    If r >= 2 Then GoTo WrapUp
+WrapUp:
+    If gDimToggleSaved And Not swApp Is Nothing Then
+        swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle
+        If swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate) <> gDimToggle Then WriteStep -1, "toggle-restore", "failed", "the input-dimension-value preference did not restore"
+    End If
+    If gRunFailed Then
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
+    Else
+        WriteLine "{""type"":""summary"",""status"":""ok""}"
+    End If
+    Exit Sub
+Fail:
+    errNum = Err.Number
+    errMsg = Err.Description
+    On Error Resume Next
+    WriteLine "{""type"":""step"",""index"":-1,""command"":""probe"",""status"":""failed"",""message"":""" & JsonStr("err " & Trim(Str(errNum)) & ": " & errMsg) & """}"
+    If gDimToggleSaved And Not swApp Is Nothing Then
+        swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle
+        If swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate) <> gDimToggle Then WriteStep -1, "toggle-restore", "failed", "the input-dimension-value preference did not restore on the failure path"
+    End If
+    If Not swDoc Is Nothing Then
+        CloseOwnedDoc closedOk
+        If Not closedOk Then WriteStep -1, "close", "failed", "the owned document could not be confirmed closed"
+    End If
+    WriteLine "{""type"":""summary"",""status"":""failed""}"
+End Sub
+
+' One box orientation case: fresh part, the source-XY plane opened exactly
+' as the emitter's OpenSketchOnPlane accepts it (the geometric plane), the
+' adaptation map computed fail-closed from the probed frame, the emitter's
+' mapped box drawing and size dimensions, then the emitter's blind
+' extrusion call shape with the case's Dir flag and the box/dimension
+' evidence. Returns 0 = complete, 1 = measurement failure (the run is
+' failed; later independent cases still record), 2 = setup failure (the
+' run is failed and the remaining cases are aborted), 3 = the case's
+' document could not be confirmed closed or handed off (the run is failed
+' and the remaining cases are aborted). Cleanup runs on every path; only
+' the final case may be kept open, then only in keep mode and only after
+' its handoff verifies live.
+Function RunBoxCase(ByVal tag As String, ByVal dirFlag As Boolean, ByVal isFinal As Boolean, ByVal mode As String) As Long
+    Dim result As Long
+    Dim ok As Boolean
+    Dim verified As Boolean
+    Dim measOk As Boolean
+    Dim nameOk As Boolean
+    Dim feat As Object
+    Dim extSel As Object
+    Dim featName As String
+    Dim featShown As String
+    Dim skName As String
+    Dim handoffTitle As String
+    Dim closedOk As Boolean
+    Dim n As Long
+    Dim d As String
+    Dim ln0 As Object
+    Dim ln1 As Object
+    Dim ln2 As Object
+    Dim ln3 As Object
+    Dim dmLen As Object
+    Dim dmWid As Object
+    On Error Resume Next
+    result = 2
+    WriteLine LineFor("case-" & tag, 0, "", "entering: mapped box SC u 0.010..0.050 v 0.020..0.035 (metres), blind 0.012 m, Dir=" & CStr(dirFlag))
+    Err.Clear
+    Set swDoc = swApp.NewDocument(gTemplate, 0, 0, 0)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("document.new-" & tag, n, d, "")
+    If n <> 0 Or swDoc Is Nothing Then
+        WriteStep -1, "document.new", "failed", "the fresh part for " & tag & " could not be created"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    Set swSketchMgr = swDoc.SketchManager
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("sketchmgr-" & tag, n, d, "")
+    If n <> 0 Or swSketchMgr Is Nothing Then
+        WriteStep -1, "sketchmgr", "failed", "no sketch manager for " & tag
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    Set gFeatMgr = swDoc.FeatureManager
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("featuremgr-" & tag, n, d, "")
+    If n <> 0 Or gFeatMgr Is Nothing Then
+        WriteStep -1, "featuremgr", "failed", "no feature manager for " & tag
+        GoTo CaseCleanup
+    End If
+    If Not OpenSketchOnPlaneXY(skName) Then
+        WriteStep 0, "sketch.open", "failed", "no plane carries the source-XY geometric frame (translation at the model origin, normal parallel to +Z); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary()
+        GoTo CaseCleanup
+    End If
+    WriteStep 0, "sketch.open", "created", gProbeLog & "sketch feature " & skName
+    If Not ComputeMap() Then
+        WriteStep 0, "map", "failed", "the adaptation map could not be computed fail-closed from the probed frame; the case is refused"
+        GoTo CaseCleanup
+    End If
+    WriteStep 0, "map", "created", "m00=" & Trim(Str(gMap00)) & " m01=" & Trim(Str(gMap01)) & " m10=" & Trim(Str(gMap10)) & " m11=" & Trim(Str(gMap11)) & " side=" & Trim(Str(gMapSide)) & " frame " & FrameTextEx()
+    ReportContext "active", verified
+    If Not verified Then
+        WriteStep 1, "context", "failed", "the active-sketch context is not verified"
+        GoTo CaseCleanup
+    End If
+    Set ln0 = MappedLine(tag, 1, 0.01, 0.02, 0.05, 0.02)
+    Set ln1 = MappedLine(tag, 2, 0.05, 0.02, 0.05, 0.035)
+    Set ln2 = MappedLine(tag, 3, 0.05, 0.035, 0.01, 0.035)
+    Set ln3 = MappedLine(tag, 4, 0.01, 0.035, 0.01, 0.02)
+    If ln0 Is Nothing Or ln1 Is Nothing Or ln2 Is Nothing Or ln3 Is Nothing Then
+        WriteStep 2, "profile", "failed", "the mapped box profile is incomplete; the direction pin is refused"
+        GoTo CaseCleanup
+    End If
+    WriteStep 2, "profile", "created", "four mapped lines at the mapped corners of SC u 0.010..0.050 v 0.020..0.035 (ln0 = the u edge = the length edge)"
+    If Not SizeDim(tag & "-length", ln0, 0.04, dmLen) Then
+        WriteStep 2, "dim-length", "failed", "the length dimension evidence is incomplete"
+        GoTo CaseCleanup
+    End If
+    If Not SizeDim(tag & "-width", ln1, 0.015, dmWid) Then
+        WriteStep 2, "dim-width", "failed", "the width dimension evidence is incomplete"
+        GoTo CaseCleanup
+    End If
+    WriteStep 2, "dims", "created", "the length and width dimensions were created with sign-resolved values (see the sizedim records)"
+    Err.Clear
+    swSketchMgr.InsertSketch True
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("sketch.close-" & tag, n, d, "")
+    If n <> 0 Then
+        WriteStep 1, "context", "failed", "the sketch could not be closed"
+        GoTo CaseCleanup
+    End If
+    ReportContext "closed", verified
+    If Not verified Then
+        WriteStep 1, "context", "failed", "the closed-sketch context is not verified; the feature call is refused"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    swDoc.ClearSelection2 True
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("clearselection-" & tag, n, d, "stage=preselect")
+    If n <> 0 Then
+        WriteStep 1, "selection", "failed", "selections could not be cleared before selecting the profile"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    Set extSel = swDoc.Extension
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("selectsketch-" & tag, n, d, "stage=extension-acquire")
+    If n <> 0 Or extSel Is Nothing Then
+        WriteStep 3, "extrude", "failed", "the Extension could not be acquired; the profile sketch cannot be selected"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    ok = extSel.SelectByID2(skName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("selectsketch-" & tag, n, d, "stage=selectbyname name=" & skName & " result=" & CStr(ok))
+    If n <> 0 Or Not ok Then
+        WriteStep 3, "extrude", "failed", "the profile sketch " & skName & " could not be selected; the extrusion is not attempted (setup)"
+        GoTo CaseCleanup
+    End If
+    result = 1
+    WriteLine LineFor("featureextrusion2-" & tag, 0, "", "entering: FeatureExtrusion2(True, False, " & CStr(dirFlag) & ", swEndCondBlind, swEndCondBlind, 0.012, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)")
+    Err.Clear
+    Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.012, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("featureextrusion2-" & tag, n, d, "outcome")
+    If n <> 0 Or feat Is Nothing Then
+        WriteStep 3, "extrude", "failed", "the blind extrusion (Dir=" & CStr(dirFlag) & ") was not created; direction evidence is incomplete"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    featName = feat.Name
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("feature-name-" & tag, n, d, "name=" & featName)
+    nameOk = True
+    featShown = featName
+    If n <> 0 Or Trim(featName) = "" Then
+        nameOk = False
+        featShown = "(name unavailable)"
+        WriteLine LineFor("feature-name-" & tag, -1, "name unavailable", "the D1 lookup cannot be constructed; its key is never issued empty")
+    End If
+    WriteStep 3, "extrude", "created", "blind 0.012 m, Dir=" & CStr(dirFlag) & ", feature " & featShown
+    ReportContext "closed", verified
+    If Not verified Then
+        WriteStep 4, "measure-" & tag, "failed", "the post-feature context is not verified; measurements are refused"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    swDoc.ClearSelection2 True
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("clearselection-" & tag, n, d, "stage=premeasure")
+    If n <> 0 Then
+        WriteStep 4, "measure-" & tag, "failed", "selections could not be cleared before the measurements"
+        GoTo CaseCleanup
+    End If
+    measOk = True
+    BoxEvidence tag, ok
+    If Not ok Then measOk = False
+    If nameOk Then
+        DimEvidence "dim-d1-" & tag, "D1@" & featName, True, ok
+        If Not ok Then measOk = False
+    Else
+        WriteLine LineFor("dim-d1-" & tag, -1, "lookup unavailable", "required: no feature name; the D1 identity is missing")
+        measOk = False
+    End If
+    If measOk Then
+        WriteStep 4, "measure-" & tag, "created", "map entries and side captured; both size dimensions captured with sign; box form and all 6 components captured; D1 identity captured"
+        result = 0
+    Else
+        WriteStep 4, "measure-" & tag, "failed", "a required observation is missing"
+    End If
+CaseCleanup:
+    On Error Resume Next
+    If isFinal And mode = "keep" Then
+        ok = OwnedHandoffVerified(tag, handoffTitle)
+        If ok Then
+            WriteStep 5, "owned-document", "kept-open", handoffTitle
+        Else
+            WriteStep 5, "owned-document", "failed", "the keep-mode handoff is unverified; the document is not reported as retained"
+            result = 3
+            CloseOwnedDoc closedOk
+            If Not closedOk Then WriteStep 5, "close", "failed", "the unverified handoff could not be confirmed closed"
+        End If
+    Else
+        CloseOwnedDoc closedOk
+        If Not closedOk Then
+            WriteStep 5, "close", "failed", "the owned document could not be confirmed closed"
+            result = 3
+        End If
+    End If
+    Set swDoc = Nothing
+    Set swSketchMgr = Nothing
+    Set gFeatMgr = Nothing
+    RunBoxCase = result
+End Function
+
+' The cylinder-kind case: the mapped circle anchored like the emitter's,
+' the circle dimension created exactly as the emitter creates it (the
+' created value reported against GetRadius and twice it - the radius-kind
+' vs diameter-kind pin), then the emitter's kind guards and - only when
+' they pass - the emitter's blind extrusion and the box evidence.
+Function RunCylinderCase(ByVal tag As String, ByVal isFinal As Boolean, ByVal mode As String) As Long
+    Dim result As Long
+    Dim ok As Boolean
+    Dim verified As Boolean
+    Dim measOk As Boolean
+    Dim nameOk As Boolean
+    Dim kindOk As Boolean
+    Dim feat As Object
+    Dim extSel As Object
+    Dim featName As String
+    Dim featShown As String
+    Dim skName As String
+    Dim handoffTitle As String
+    Dim closedOk As Boolean
+    Dim n As Long
+    Dim d As String
+    Dim ci As Object
+    Dim pA As Object
+    Dim dmRad As Object
+    On Error Resume Next
+    result = 2
+    WriteLine LineFor("case-" & tag, 0, "", "entering: mapped circle SC base (0.023,-0.031) r 0.006 (metres), blind 0.012 m, Dir=False")
+    Err.Clear
+    Set swDoc = swApp.NewDocument(gTemplate, 0, 0, 0)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("document.new-" & tag, n, d, "")
+    If n <> 0 Or swDoc Is Nothing Then
+        WriteStep -1, "document.new", "failed", "the fresh part for " & tag & " could not be created"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    Set swSketchMgr = swDoc.SketchManager
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("sketchmgr-" & tag, n, d, "")
+    If n <> 0 Or swSketchMgr Is Nothing Then
+        WriteStep -1, "sketchmgr", "failed", "no sketch manager for " & tag
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    Set gFeatMgr = swDoc.FeatureManager
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("featuremgr-" & tag, n, d, "")
+    If n <> 0 Or gFeatMgr Is Nothing Then
+        WriteStep -1, "featuremgr", "failed", "no feature manager for " & tag
+        GoTo CaseCleanup
+    End If
+    If Not OpenSketchOnPlaneXY(skName) Then
+        WriteStep 0, "sketch.open", "failed", "no plane carries the source-XY geometric frame (translation at the model origin, normal parallel to +Z); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary()
+        GoTo CaseCleanup
+    End If
+    WriteStep 0, "sketch.open", "created", gProbeLog & "sketch feature " & skName
+    If Not ComputeMap() Then
+        WriteStep 0, "map", "failed", "the adaptation map could not be computed fail-closed from the probed frame; the case is refused"
+        GoTo CaseCleanup
+    End If
+    WriteStep 0, "map", "created", "m00=" & Trim(Str(gMap00)) & " m01=" & Trim(Str(gMap01)) & " m10=" & Trim(Str(gMap10)) & " m11=" & Trim(Str(gMap11)) & " side=" & Trim(Str(gMapSide)) & " frame " & FrameTextEx()
+    ReportContext "active", verified
+    If Not verified Then
+        WriteStep 1, "context", "failed", "the active-sketch context is not verified"
+        GoTo CaseCleanup
+    End If
+    Set ci = MappedCircle(tag, 0.023, -0.031, 0.006)
+    If ci Is Nothing Then
+        WriteStep 2, "profile", "failed", "the mapped cylinder circle is missing; the kind pin is refused"
+        GoTo CaseCleanup
+    End If
+    WriteStep 2, "profile", "created", "mapped circle at the mapped centre of SC (0.023,-0.031), r 0.006"
+    ' The emitter's centre anchor (sgFix on the GetCenterPoint2 handle).
+    Err.Clear
+    Set pA = ci.GetCenterPoint2
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("centre-handle-" & tag, n, d, "")
+    If n <> 0 Or pA Is Nothing Then
+        WriteStep 2, "anchor", "failed", "the cylinder centre handle is missing"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    ok = pA.Select(False)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("centre-fix-" & tag, n, d, "stage=select result=" & CStr(ok))
+    If n <> 0 Or Not ok Then
+        WriteStep 2, "anchor", "failed", "the cylinder centre anchor would not select"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    swDoc.SketchAddConstraints "sgFix"
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("centre-fix-" & tag, n, d, "stage=sgFix (no return value; application is indistinguishable from a pre-held predicate at creation)")
+    swDoc.ClearSelection2 True
+    WriteStep 2, "anchor", "created", "sgFix applied on the centre point (behaviourally established by box-edit-follow's corner anchor, same vocabulary)"
+    If Not CircleDim(tag, ci, 0.006, dmRad, kindOk) Then
+        WriteStep 2, "circledim", "failed", "the circle dimension evidence is incomplete"
+        GoTo CaseCleanup
+    End If
+    If Not kindOk Then
+        WriteStep 2, "circledim", "failed", "the circle-size dimension kind is not radius-kind or ambiguous; the emitter's guard refuses exactly this (the report carries the numbers)"
+        GoTo CaseCleanup
+    End If
+    WriteStep 2, "circledim", "created", "the circle dimension reads the radius-kind value (see the circledim records)"
+    Err.Clear
+    swSketchMgr.InsertSketch True
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("sketch.close-" & tag, n, d, "")
+    If n <> 0 Then
+        WriteStep 1, "context", "failed", "the sketch could not be closed"
+        GoTo CaseCleanup
+    End If
+    ReportContext "closed", verified
+    If Not verified Then
+        WriteStep 1, "context", "failed", "the closed-sketch context is not verified; the feature call is refused"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    swDoc.ClearSelection2 True
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("clearselection-" & tag, n, d, "stage=preselect")
+    If n <> 0 Then
+        WriteStep 1, "selection", "failed", "selections could not be cleared before selecting the profile"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    Set extSel = swDoc.Extension
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("selectsketch-" & tag, n, d, "stage=extension-acquire")
+    If n <> 0 Or extSel Is Nothing Then
+        WriteStep 3, "extrude", "failed", "the Extension could not be acquired; the profile sketch cannot be selected"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    ok = extSel.SelectByID2(skName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("selectsketch-" & tag, n, d, "stage=selectbyname name=" & skName & " result=" & CStr(ok))
+    If n <> 0 Or Not ok Then
+        WriteStep 3, "extrude", "failed", "the profile sketch " & skName & " could not be selected; the extrusion is not attempted (setup)"
+        GoTo CaseCleanup
+    End If
+    result = 1
+    WriteLine LineFor("featureextrusion2-" & tag, 0, "", "entering: FeatureExtrusion2(True, False, False, swEndCondBlind, swEndCondBlind, 0.012, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)")
+    Err.Clear
+    Set feat = gFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.012, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("featureextrusion2-" & tag, n, d, "outcome")
+    If n <> 0 Or feat Is Nothing Then
+        WriteStep 3, "extrude", "failed", "the blind extrusion (Dir=False) was not created; the side cross-check is incomplete"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    featName = feat.Name
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("feature-name-" & tag, n, d, "name=" & featName)
+    nameOk = True
+    featShown = featName
+    If n <> 0 Or Trim(featName) = "" Then
+        nameOk = False
+        featShown = "(name unavailable)"
+        WriteLine LineFor("feature-name-" & tag, -1, "name unavailable", "the D1 lookup cannot be constructed; its key is never issued empty")
+    End If
+    WriteStep 3, "extrude", "created", "blind 0.012 m, Dir=False, feature " & featShown
+    ReportContext "closed", verified
+    If Not verified Then
+        WriteStep 4, "measure-" & tag, "failed", "the post-feature context is not verified; measurements are refused"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    swDoc.ClearSelection2 True
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("clearselection-" & tag, n, d, "stage=premeasure")
+    If n <> 0 Then
+        WriteStep 4, "measure-" & tag, "failed", "selections could not be cleared before the measurements"
+        GoTo CaseCleanup
+    End If
+    measOk = True
+    BoxEvidence tag, ok
+    If Not ok Then measOk = False
+    If nameOk Then
+        DimEvidence "dim-d1-" & tag, "D1@" & featName, True, ok
+        If Not ok Then measOk = False
+    Else
+        WriteLine LineFor("dim-d1-" & tag, -1, "lookup unavailable", "required: no feature name; the D1 identity is missing")
+        measOk = False
+    End If
+    If measOk Then
+        WriteStep 4, "measure-" & tag, "created", "circle-kind evidence, map entries and side captured; box form and all 6 components captured; D1 identity captured"
+        result = 0
+    Else
+        WriteStep 4, "measure-" & tag, "failed", "a required observation is missing"
+    End If
+CaseCleanup:
+    On Error Resume Next
+    If isFinal And mode = "keep" Then
+        ok = OwnedHandoffVerified(tag, handoffTitle)
+        If ok Then
+            WriteStep 5, "owned-document", "kept-open", handoffTitle
+        Else
+            WriteStep 5, "owned-document", "failed", "the keep-mode handoff is unverified; the document is not reported as retained"
+            result = 3
+            CloseOwnedDoc closedOk
+            If Not closedOk Then WriteStep 5, "close", "failed", "the unverified handoff could not be confirmed closed"
+        End If
+    Else
+        CloseOwnedDoc closedOk
+        If Not closedOk Then
+            WriteStep 5, "close", "failed", "the owned document could not be confirmed closed"
+            result = 3
+        End If
+    End If
+    Set swDoc = Nothing
+    Set swSketchMgr = Nothing
+    Set gFeatMgr = Nothing
+    RunCylinderCase = result
+End Function
+
+' The parameter-change case: the emitter's full box construction (mapped
+' drawing, shape contract, both size dimensions), then the length
+' dimension driven to 1.5x its drawn value and a full corner readback -
+' the shape contract's behavioural evidence. No feature is created.
+Function RunEditCase(ByVal tag As String, ByVal isFinal As Boolean, ByVal mode As String) As Long
+    Dim result As Long
+    Dim ok As Boolean
+    Dim verified As Boolean
+    Dim skName As String
+    Dim handoffTitle As String
+    Dim closedOk As Boolean
+    Dim n As Long
+    Dim d As String
+    Dim ln0 As Object
+    Dim ln1 As Object
+    Dim ln2 As Object
+    Dim ln3 As Object
+    Dim dmLen As Object
+    Dim dmWid As Object
+    Dim axU As Long
+    Dim axV As Long
+    On Error Resume Next
+    result = 2
+    WriteLine LineFor("case-" & tag, 0, "", "entering: mapped box with the shape contract, then the length dimension driven to 0.06 (1.5x of 0.04)")
+    Err.Clear
+    Set swDoc = swApp.NewDocument(gTemplate, 0, 0, 0)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("document.new-" & tag, n, d, "")
+    If n <> 0 Or swDoc Is Nothing Then
+        WriteStep -1, "document.new", "failed", "the fresh part for " & tag & " could not be created"
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    Set swSketchMgr = swDoc.SketchManager
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("sketchmgr-" & tag, n, d, "")
+    If n <> 0 Or swSketchMgr Is Nothing Then
+        WriteStep -1, "sketchmgr", "failed", "no sketch manager for " & tag
+        GoTo CaseCleanup
+    End If
+    Err.Clear
+    Set gFeatMgr = swDoc.FeatureManager
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("featuremgr-" & tag, n, d, "")
+    If n <> 0 Or gFeatMgr Is Nothing Then
+        WriteStep -1, "featuremgr", "failed", "no feature manager for " & tag
+        GoTo CaseCleanup
+    End If
+    If Not OpenSketchOnPlaneXY(skName) Then
+        WriteStep 0, "sketch.open", "failed", "no plane carries the source-XY geometric frame (translation at the model origin, normal parallel to +Z); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary()
+        GoTo CaseCleanup
+    End If
+    WriteStep 0, "sketch.open", "created", gProbeLog & "sketch feature " & skName
+    If Not ComputeMap() Then
+        WriteStep 0, "map", "failed", "the adaptation map could not be computed fail-closed from the probed frame; the case is refused"
+        GoTo CaseCleanup
+    End If
+    WriteStep 0, "map", "created", "m00=" & Trim(Str(gMap00)) & " m01=" & Trim(Str(gMap01)) & " m10=" & Trim(Str(gMap10)) & " m11=" & Trim(Str(gMap11)) & " side=" & Trim(Str(gMapSide)) & " frame " & FrameTextEx()
+    ReportContext "active", verified
+    If Not verified Then
+        WriteStep 1, "context", "failed", "the active-sketch context is not verified"
+        GoTo CaseCleanup
+    End If
+    Set ln0 = MappedLine(tag, 1, 0.01, 0.02, 0.05, 0.02)
+    Set ln1 = MappedLine(tag, 2, 0.05, 0.02, 0.05, 0.035)
+    Set ln2 = MappedLine(tag, 3, 0.05, 0.035, 0.01, 0.035)
+    Set ln3 = MappedLine(tag, 4, 0.01, 0.035, 0.01, 0.02)
+    If ln0 Is Nothing Or ln1 Is Nothing Or ln2 Is Nothing Or ln3 Is Nothing Then
+        WriteStep 2, "profile", "failed", "the mapped box profile is incomplete; the edit-follow pin is refused"
+        GoTo CaseCleanup
+    End If
+    WriteStep 2, "profile", "created", "four mapped lines at the mapped corners of SC u 0.010..0.050 v 0.020..0.035"
+    If Not ShapeContract(tag, ln0, ln1, ln2, ln3, axU, axV) Then
+        WriteStep 2, "shape", "failed", "the shape contract did not apply; the edit-follow pin is refused"
+        GoTo CaseCleanup
+    End If
+    WriteStep 2, "shape", "created", "4 sgCOINCIDENT + classified h/v (u class " & Trim(Str(axU)) & ", v class " & Trim(Str(axV)) & ") + sgFix on the corner"
+    If Not SizeDim(tag & "-length", ln0, 0.04, dmLen) Then
+        WriteStep 2, "dim-length", "failed", "the length dimension evidence is incomplete"
+        GoTo CaseCleanup
+    End If
+    If Not SizeDim(tag & "-width", ln1, 0.015, dmWid) Then
+        WriteStep 2, "dim-width", "failed", "the width dimension evidence is incomplete"
+        GoTo CaseCleanup
+    End If
+    ' The parameter change: drive the length dimension to 1.5x its drawn
+    ' value and let the solver follow. The emitter's own sequence applies:
+    ' EditRebuild3 EXITS sketch edit, so the sketch is re-entered by name
+    ' before any further sketch API call.
+    result = 1
+    Err.Clear
+    dmLen.SystemValue = 0.06
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("edit-length-" & tag, n, d, "stage=systemvalue write 0.06 (was 0.04)")
+    If n <> 0 Then
+        WriteStep 3, "edit", "failed", "the length value edit did not stick"
+        GoTo CaseCleanup
+    End If
+    If Not ReenterSketch(skName) Then
+        WriteStep 3, "edit", "failed", "the sketch could not be rebuilt and re-entered after the value edit"
+        GoTo CaseCleanup
+    End If
+    ReportCorners tag, ln0, ln1, ln2, ln3
+    WriteStep 3, "edit", "created", "the length value edit was applied and the corner readback is captured (see the corner records)"
+    WriteStep 4, "measure-" & tag, "created", "every endpoint coordinate, both edge lengths and the closure are captured"
+    result = 0
+CaseCleanup:
+    On Error Resume Next
+    If isFinal And mode = "keep" Then
+        ok = OwnedHandoffVerified(tag, handoffTitle)
+        If ok Then
+            WriteStep 5, "owned-document", "kept-open", handoffTitle
+        Else
+            WriteStep 5, "owned-document", "failed", "the keep-mode handoff is unverified; the document is not reported as retained"
+            result = 3
+            CloseOwnedDoc closedOk
+            If Not closedOk Then WriteStep 5, "close", "failed", "the unverified handoff could not be confirmed closed"
+        End If
+    Else
+        CloseOwnedDoc closedOk
+        If Not closedOk Then
+            WriteStep 5, "close", "failed", "the owned document could not be confirmed closed"
+            result = 3
+        End If
+    End If
+    Set swDoc = Nothing
+    Set swSketchMgr = Nothing
+    Set gFeatMgr = Nothing
+    RunEditCase = result
+End Function
+
+' The emitter's MapU/MapV exactly: s = u*gMap00 + v*gMap10, t =
+' u*gMap01 + v*gMap11 (the probe's own map state).
+Function MapU(ByVal u As Double, ByVal v As Double) As Double
+    MapU = u * gMap00 + v * gMap10
+End Function
+
+Function MapV(ByVal u As Double, ByVal v As Double) As Double
+    MapV = u * gMap01 + v * gMap11
+End Function
+
+' The emitter's AxisClass exactly: where the SC u (or v) direction lands
+' in the sketch axes - 0 = s, 1 = t, -1 = not axis-aligned.
+Function MapClass(ByVal isU As Boolean) As Long
+    Dim c0 As Double
+    Dim c1 As Double
+    MapClass = -1
+    If isU Then
+        c0 = gMap00
+        c1 = gMap01
+    Else
+        c0 = gMap10
+        c1 = gMap11
+    End If
+    If Abs(Abs(c0) - 1#) <= 0.000001 And Abs(c1) <= 0.000001 Then MapClass = 0
+    If Abs(Abs(c1) - 1#) <= 0.000001 And Abs(c0) <= 0.000001 Then MapClass = 1
+End Function
+
+' One mapped profile line: the emitter's CreateLine call shape with the
+' map applied to both endpoints. Nothing = the line is missing.
+Function MappedLine(ByVal tag As String, ByVal idx As Long, ByVal u1 As Double, ByVal v1 As Double, ByVal u2 As Double, ByVal v2 As Double) As Object
+    Dim ln As Object
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    Set MappedLine = Nothing
+    Err.Clear
+    Set ln = swSketchMgr.CreateLine(MapU(u1, v1), MapV(u1, v1), 0#, MapU(u2, v2), MapV(u2, v2), 0#)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("mapped-line" & Trim(Str(idx)) & "-" & tag, n, d, "stage=createline")
+        Exit Function
+    End If
+    If ln Is Nothing Then
+        WriteLine LineFor("mapped-line" & Trim(Str(idx)) & "-" & tag, -1, "returned Nothing", "stage=createline")
+        Exit Function
+    End If
+    WriteLine LineFor("mapped-line" & Trim(Str(idx)) & "-" & tag, 0, "", "created type=" & TypeName(ln) & " SC from " & Vec3Text(u1, v1, 0#) & " to " & Vec3Text(u2, v2, 0#))
+    Set MappedLine = ln
+End Function
+
+' The emitter's circle drawing: mapped centre, radius unchanged.
+Function MappedCircle(ByVal tag As String, ByVal u As Double, ByVal v As Double, ByVal r As Double) As Object
+    Dim ci As Object
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    Set MappedCircle = Nothing
+    Err.Clear
+    Set ci = swSketchMgr.CreateCircleByRadius(MapU(u, v), MapV(u, v), 0#, r)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("mapped-circle-" & tag, n, d, "stage=createcirclebyradius")
+        Exit Function
+    End If
+    If ci Is Nothing Then
+        WriteLine LineFor("mapped-circle-" & tag, -1, "returned Nothing", "stage=createcirclebyradius")
+        Exit Function
+    End If
+    WriteLine LineFor("mapped-circle-" & tag, 0, "", "created type=" & TypeName(ci) & " SC base " & Vec3Text(u, v, 0#) & " r " & Trim(Str(r)))
+    Set MappedCircle = ci
+End Function
+
+' The emitter's box shape contract: coincident corners closing the
+' contour, classified horizontal/vertical relations pinning rectangularity
+' and edge directions, and the corner fix anchoring the literal placement.
+' SketchAddConstraints has no return value (API doc), so each application
+' is established behaviourally - box-edit-follow's corner readback is the
+' evidence; at creation a pre-held predicate is indistinguishable (the
+' recorded limitation class). False = the contract did not fully apply.
+Function ShapeContract(ByVal tag As String, ByVal ln0 As Object, ByVal ln1 As Object, ByVal ln2 As Object, ByVal ln3 As Object, ByRef axU As Long, ByRef axV As Long) As Boolean
+    Dim pA As Object
+    Dim pB As Object
+    Dim nameU As String
+    Dim nameV As String
+    Dim ok As Boolean
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    ShapeContract = False
+    If Not CoincidentPair(tag, 1, ln0, ln1) Then Exit Function
+    If Not CoincidentPair(tag, 2, ln1, ln2) Then Exit Function
+    If Not CoincidentPair(tag, 3, ln2, ln3) Then Exit Function
+    If Not CoincidentPair(tag, 4, ln3, ln0) Then Exit Function
+    axU = MapClass(True)
+    axV = MapClass(False)
+    WriteLine LineFor("shape-class-" & tag, 0, "", "u class " & Trim(Str(axU)) & " v class " & Trim(Str(axV)))
+    If axU < 0 Or axV < 0 Then
+        WriteLine LineFor("shape-class-" & tag, -1, "not axis-aligned", "the classified relation kinds cannot be chosen on this map")
+        Exit Function
+    End If
+    If axU = 0 Then nameU = "sgHORIZONTAL2D" Else nameU = "sgVERTICAL2D"
+    If axV = 0 Then nameV = "sgHORIZONTAL2D" Else nameV = "sgVERTICAL2D"
+    If Not LevelLine(tag, 1, ln0, nameU) Then Exit Function
+    If Not LevelLine(tag, 3, ln2, nameU) Then Exit Function
+    If Not LevelLine(tag, 2, ln1, nameV) Then Exit Function
+    If Not LevelLine(tag, 4, ln3, nameV) Then Exit Function
+    Err.Clear
+    Set pA = ln0.GetStartPoint2
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("corner-fix-" & tag, n, d, "stage=corner-handle")
+    If n <> 0 Or pA Is Nothing Then
+        WriteLine LineFor("corner-fix-" & tag, -1, "returned Nothing", "stage=corner-handle")
+        Exit Function
+    End If
+    Err.Clear
+    ok = pA.Select(False)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("corner-fix-" & tag, n, d, "stage=select result=" & CStr(ok))
+    If n <> 0 Or Not ok Then Exit Function
+    Err.Clear
+    swDoc.SketchAddConstraints "sgFix"
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("corner-fix-" & tag, n, d, "stage=sgFix (no return value)")
+    swDoc.ClearSelection2 True
+    If n <> 0 Then Exit Function
+    ShapeContract = True
+End Function
+
+' One coincident corner: the end of one line with the start of the next.
+Function CoincidentPair(ByVal tag As String, ByVal idx As Long, ByVal lnA As Object, ByVal lnB As Object) As Boolean
+    Dim pA As Object
+    Dim pB As Object
+    Dim ok As Boolean
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    CoincidentPair = False
+    Err.Clear
+    Set pA = lnA.GetEndPoint2
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("corner" & Trim(Str(idx)) & "-" & tag, n, d, "stage=end-handle")
+    If n <> 0 Or pA Is Nothing Then Exit Function
+    Err.Clear
+    Set pB = lnB.GetStartPoint2
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("corner" & Trim(Str(idx)) & "-" & tag, n, d, "stage=start-handle")
+    If n <> 0 Or pB Is Nothing Then Exit Function
+    Err.Clear
+    ok = pA.Select(False)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("corner" & Trim(Str(idx)) & "-" & tag, n, d, "stage=select-first result=" & CStr(ok))
+    If n <> 0 Or Not ok Then Exit Function
+    Err.Clear
+    ok = pB.Select(True)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("corner" & Trim(Str(idx)) & "-" & tag, n, d, "stage=select-second result=" & CStr(ok))
+    If n <> 0 Or Not ok Then Exit Function
+    Err.Clear
+    swDoc.SketchAddConstraints "sgCOINCIDENT"
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("corner" & Trim(Str(idx)) & "-" & tag, n, d, "stage=sgCOINCIDENT (no return value)")
+    swDoc.ClearSelection2 True
+    If n <> 0 Then Exit Function
+    CoincidentPair = True
+End Function
+
+' One classified level relation on a line (the emitter's classified form).
+Function LevelLine(ByVal tag As String, ByVal idx As Long, ByVal ln As Object, ByVal relName As String) As Boolean
+    Dim ok As Boolean
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    LevelLine = False
+    Err.Clear
+    ok = ln.Select(False)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("level" & Trim(Str(idx)) & "-" & tag, n, d, "stage=select result=" & CStr(ok))
+    If n <> 0 Or Not ok Then Exit Function
+    Err.Clear
+    swDoc.SketchAddConstraints relName
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("level" & Trim(Str(idx)) & "-" & tag, n, d, "stage=" & relName & " (no return value)")
+    swDoc.ClearSelection2 True
+    If n <> 0 Then Exit Function
+    LevelLine = True
+End Function
+
+' One emitter-pattern size dimension on a line: created with the disabled
+' input-value toggle, its Name and SystemValue reported WITH THE SIGN, the
+' sign resolved as the emitter resolves it, the value written, and the
+' behavioural check run (the value edit must carry the measured length).
+Function SizeDim(ByVal tag As String, ByVal ln As Object, ByVal expect As Double, ByRef dmOut As Object) As Boolean
+    Dim ok As Boolean
+    Dim dd As Object
+    Dim n As Long
+    Dim d As String
+    Dim v As Variant
+    Dim created As Double
+    Dim signVal As Double
+    Dim chk As Double
+    Dim v1 As Variant
+    Dim v2 As Variant
+    On Error Resume Next
+    SizeDim = False
+    Set dmOut = Nothing
+    Err.Clear
+    ok = ln.Select(False)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("sizedim-" & tag, n, d, "stage=select result=" & CStr(ok))
+    If n <> 0 Or Not ok Then Exit Function
+    Err.Clear
+    Set dd = swDoc.AddDimension2(0#, 0#, 0#)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("sizedim-" & tag, n, d, "stage=adddimension2")
+    If n <> 0 Or dd Is Nothing Then Exit Function
+    Err.Clear
+    Set dmOut = dd.GetDimension2(0)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("sizedim-" & tag, n, d, "stage=getdimension2")
+    If n <> 0 Or dmOut Is Nothing Then Exit Function
+    Err.Clear
+    v = dmOut.Name
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("sizedim-" & tag, n, d, "stage=name -> " & CStr(v))
+    If n <> 0 Then Exit Function
+    Err.Clear
+    v = dmOut.SystemValue
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("sizedim-" & tag, n, d, "stage=systemvalue")
+        Exit Function
+    End If
+    If Not NumDecode("sizedim-" & tag, "systemvalue", v, created) Then Exit Function
+    WriteLine LineFor("sizedim-" & tag, 0, "", "created value=" & Trim(Str(created)) & " (SI, sign carried) against source " & Trim(Str(expect)))
+    If Abs(created - expect) <= 0.000001 Then
+        signVal = 1#
+    ElseIf Abs(created + expect) <= 0.000001 Then
+        signVal = -1#
+    Else
+        WriteLine LineFor("sizedim-" & tag, -1, "value mismatch", "created " & Trim(Str(created)) & " matches neither sign of " & Trim(Str(expect)))
+        Exit Function
+    End If
+    WriteLine LineFor("sizedim-" & tag, 0, "", "signVal=" & Trim(Str(signVal)))
+    Err.Clear
+    dmOut.SystemValue = signVal * expect
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("sizedim-" & tag, n, d, "stage=systemvalue write " & Trim(Str(signVal * expect)))
+    If n <> 0 Then Exit Function
+    Err.Clear
+    v1 = ln.GetStartPoint
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("sizedim-" & tag, n, d, "stage=behaviour start")
+    If n <> 0 Then Exit Function
+    Err.Clear
+    v2 = ln.GetEndPoint
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("sizedim-" & tag, n, d, "stage=behaviour end")
+    If n <> 0 Then Exit Function
+    If Not BehaviourLength("sizedim-" & tag, v1, v2, chk) Then Exit Function
+    If Abs(chk - expect) > 0.000001 Then
+        WriteLine LineFor("sizedim-" & tag, -1, "geometry did not follow", "length " & Trim(Str(chk)) & " after driving " & Trim(Str(expect)))
+        Exit Function
+    End If
+    WriteLine LineFor("sizedim-" & tag, 0, "", "behaviour check passed: length " & Trim(Str(chk)))
+    SizeDim = True
+End Function
+
+' The emitter-pattern circle dimension with the kind evidence: the created
+' value is reported against GetRadius AND twice it (the radius-kind vs
+' diameter-kind pin), then the emitter's kind guards run verbatim in
+' effect - ambiguity and the diameter-kind reading refuse exactly as the
+' emitter refuses them - and only a clean radius-kind reading writes the
+' value and reports kindOk = True.
+Function CircleDim(ByVal tag As String, ByVal ci As Object, ByVal r As Double, ByRef dmOut As Object, ByRef kindOk As Boolean) As Boolean
+    Dim ok As Boolean
+    Dim dd As Object
+    Dim n As Long
+    Dim d As String
+    Dim v As Variant
+    Dim created As Double
+    Dim rad As Double
+    Dim signVal As Double
+    On Error Resume Next
+    CircleDim = False
+    kindOk = False
+    Set dmOut = Nothing
+    Err.Clear
+    ok = ci.Select(False)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("circledim-" & tag, n, d, "stage=select result=" & CStr(ok))
+    If n <> 0 Or Not ok Then Exit Function
+    Err.Clear
+    Set dd = swDoc.AddDimension2(0#, 0#, 0#)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("circledim-" & tag, n, d, "stage=adddimension2")
+    If n <> 0 Or dd Is Nothing Then Exit Function
+    Err.Clear
+    Set dmOut = dd.GetDimension2(0)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("circledim-" & tag, n, d, "stage=getdimension2")
+    If n <> 0 Or dmOut Is Nothing Then Exit Function
+    Err.Clear
+    v = dmOut.Name
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("circledim-" & tag, n, d, "stage=name -> " & CStr(v))
+    If n <> 0 Then Exit Function
+    Err.Clear
+    v = dmOut.SystemValue
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("circledim-" & tag, n, d, "stage=systemvalue")
+        Exit Function
+    End If
+    If Not NumDecode("circledim-" & tag, "systemvalue", v, created) Then Exit Function
+    Err.Clear
+    v = ci.GetRadius
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("circledim-" & tag, n, d, "stage=getradius")
+        Exit Function
+    End If
+    If Not NumDecode("circledim-" & tag, "getradius", v, rad) Then Exit Function
+    WriteLine LineFor("circledim-" & tag, 0, "", "kind evidence: created=" & Trim(Str(created)) & " getradius=" & Trim(Str(rad)) & " twice-getradius=" & Trim(Str(2# * rad)))
+    If Abs(Abs(created) - r) <= 0.000001 And Abs(Abs(created) - 2# * r) <= 0.000001 Then
+        WriteLine LineFor("circledim-" & tag, -1, "kind ambiguous", "the radius- and diameter-kind readings coincide within tolerance at this scale (source r " & Trim(Str(r)) & ")")
+        Exit Function
+    End If
+    If Abs(Abs(created) - 2# * r) <= 0.000001 Then
+        WriteLine LineFor("circledim-" & tag, -1, "diameter-kind reading", "the created value matches twice the radius; the emitter refuses this reading")
+        Exit Function
+    End If
+    If Abs(Abs(created) - r) > 0.000001 Then
+        WriteLine LineFor("circledim-" & tag, -1, "value mismatch", "created " & Trim(Str(created)) & " matches neither radius nor diameter reading of " & Trim(Str(r)))
+        Exit Function
+    End If
+    kindOk = True
+    If Abs(created - r) <= 0.000001 Then
+        signVal = 1#
+    Else
+        signVal = -1#
+    End If
+    WriteLine LineFor("circledim-" & tag, 0, "", "radius-kind reading confirmed; signVal=" & Trim(Str(signVal)))
+    Err.Clear
+    dmOut.SystemValue = signVal * r
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("circledim-" & tag, n, d, "stage=systemvalue write " & Trim(Str(signVal * r)))
+    If n <> 0 Then Exit Function
+    Err.Clear
+    v = ci.GetRadius
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("circledim-" & tag, n, d, "stage=behaviour getradius")
+    If n <> 0 Then Exit Function
+    If Not NumDecode("circledim-" & tag, "behaviour getradius", v, rad) Then Exit Function
+    If Abs(rad - r) > 0.000001 Then
+        WriteLine LineFor("circledim-" & tag, -1, "geometry did not follow", "radius " & Trim(Str(rad)) & " after driving " & Trim(Str(r)))
+        Exit Function
+    End If
+    WriteLine LineFor("circledim-" & tag, 0, "", "behaviour check passed: radius " & Trim(Str(rad)))
+    CircleDim = True
+End Function
+
+' The full corner readback after the parameter change: every endpoint of
+' the four lines, both edge lengths and the closure distances - the shape
+' contract's behavioural evidence. The numbers are reported, never
+' interpreted here.
+Sub ReportCorners(ByVal tag As String, ByVal ln0 As Object, ByVal ln1 As Object, ByVal ln2 As Object, ByVal ln3 As Object)
+    Dim x1 As Double
+    Dim y1 As Double
+    Dim z1 As Double
+    Dim x2 As Double
+    Dim y2 As Double
+    Dim z2 As Double
+    Dim x3 As Double
+    Dim y3 As Double
+    Dim z3 As Double
+    Dim x4 As Double
+    Dim y4 As Double
+    Dim z4 As Double
+    Dim chk As Double
+    On Error Resume Next
+    If Not LineCorners("corner-readback-" & tag & "-ln0", ln0, x1, y1, z1, x2, y2, z2) Then Exit Sub
+    If Not LineCorners("corner-readback-" & tag & "-ln1", ln1, x3, y3, z3, x4, y4, z4) Then Exit Sub
+    chk = Sqr((x4 - x3) * (x4 - x3) + (y4 - y3) * (y4 - y3))
+    WriteLine LineFor("corner-readback-" & tag, 0, "", "ln1 length=" & Trim(Str(chk)))
+    If Not LineCorners("corner-readback-" & tag & "-ln2", ln2, x3, y3, z3, x4, y4, z4) Then Exit Sub
+    If Not LineCorners("corner-readback-" & tag & "-ln3", ln3, x3, y3, z3, x4, y4, z4) Then Exit Sub
+    chk = Sqr((x4 - x1) * (x4 - x1) + (y4 - y1) * (y4 - y1))
+    WriteLine LineFor("corner-readback-" & tag, 0, "", "closure ln3-end to ln0-start distance=" & Trim(Str(chk)))
+    chk = Sqr((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1))
+    WriteLine LineFor("corner-readback-" & tag, 0, "", "ln0 length=" & Trim(Str(chk)))
+End Sub
+
+' One line's endpoint pair as report records; False = a required readback
+' is missing.
+Function LineCorners(ByVal tag As String, ByVal ln As Object, ByRef x1 As Double, ByRef y1 As Double, ByRef z1 As Double, ByRef x2 As Double, ByRef y2 As Double, ByRef z2 As Double) As Boolean
+    Dim v As Variant
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    LineCorners = False
+    Err.Clear
+    v = ln.GetStartPoint
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor(tag, n, d, "stage=getstartpoint")
+    If n <> 0 Then Exit Function
+    If Not ReadVec(tag, "start", v, x1, y1, z1) Then Exit Function
+    Err.Clear
+    v = ln.GetEndPoint
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor(tag, n, d, "stage=getendpoint")
+    If n <> 0 Then Exit Function
+    If Not ReadVec(tag, "end", v, x2, y2, z2) Then Exit Function
+    WriteLine LineFor(tag, 0, "", "start " & Vec3Text(x1, y1, z1) & " end " & Vec3Text(x2, y2, z2))
+    LineCorners = True
+End Function
+
+' The three components of one returned vector, each extracted at its own
+' captured stage and decoded through NumDecode; a failed extraction is
+' recorded and can never pass.
+Function ReadVec(ByVal tag As String, ByVal stage As String, ByVal v As Variant, ByRef x As Double, ByRef y As Double, ByRef z As Double) As Boolean
+    Dim one As Variant
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    ReadVec = False
+    Err.Clear
+    one = v(0)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor(tag, n, d, "stage=" & stage & "-x extraction")
+        Exit Function
+    End If
+    If Not NumDecode(tag, stage & "-x", one, x) Then Exit Function
+    Err.Clear
+    one = v(1)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor(tag, n, d, "stage=" & stage & "-y extraction")
+        Exit Function
+    End If
+    If Not NumDecode(tag, stage & "-y", one, y) Then Exit Function
+    Err.Clear
+    one = v(2)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor(tag, n, d, "stage=" & stage & "-z extraction")
+        Exit Function
+    End If
+    If Not NumDecode(tag, stage & "-z", one, z) Then Exit Function
+    ReadVec = True
+End Function
+
+' The emitter's behavioural length check over a line's endpoint pair.
+Function BehaviourLength(ByVal tag As String, ByVal v1 As Variant, ByVal v2 As Variant, ByRef chk As Double) As Boolean
+    Dim x1 As Double
+    Dim y1 As Double
+    Dim z1 As Double
+    Dim x2 As Double
+    Dim y2 As Double
+    Dim z2 As Double
+    On Error Resume Next
+    BehaviourLength = False
+    chk = 0#
+    If Not ReadVec(tag, "behaviour-start", v1, x1, y1, z1) Then Exit Function
+    If Not ReadVec(tag, "behaviour-end", v2, x2, y2, z2) Then Exit Function
+    chk = Sqr((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1))
+    BehaviourLength = True
+End Function
+
+' The emitter's SolveSketch equivalent: EditRebuild3 EXITS sketch edit
+' (seat-measured), so the sketch is rebuilt and re-entered by name, and
+' the final state is verified.
+Function ReenterSketch(ByVal nm As String) As Boolean
+    Dim sk As Object
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    ReenterSketch = False
+    Err.Clear
+    swDoc.EditRebuild3
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("reenter-sketch", n, d, "stage=editrebuild3 (exits sketch edit)")
+    If n <> 0 Then Exit Function
+    Err.Clear
+    Set sk = swSketchMgr.ActiveSketch
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("reenter-sketch", n, d, "stage=activesketch")
+    If n <> 0 Then Exit Function
+    If sk Is Nothing Then
+        Err.Clear
+        swDoc.Extension.SelectByID2 nm, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault
+        n = Err.Number
+        d = Err.Description
+        WriteLine LineFor("reenter-sketch", n, d, "stage=selectbyname " & nm)
+        If n <> 0 Then Exit Function
+        Err.Clear
+        swSketchMgr.InsertSketch True
+        n = Err.Number
+        d = Err.Description
+        WriteLine LineFor("reenter-sketch", n, d, "stage=insertsketch")
+        If n <> 0 Then Exit Function
+        Err.Clear
+        Set sk = swSketchMgr.ActiveSketch
+        n = Err.Number
+        d = Err.Description
+        WriteLine LineFor("reenter-sketch", n, d, "stage=activesketch-reget")
+        If n <> 0 Then Exit Function
+    End If
+    If sk Is Nothing Then
+        WriteLine LineFor("reenter-sketch", -1, "not re-entered", "sketch " & nm & " could not be re-entered")
+        Exit Function
+    End If
+    WriteLine LineFor("reenter-sketch", 0, "", "verified: sketch " & nm & " is active again")
+    ReenterSketch = True
+End Function
+
+' The adaptation map from the probed frame, fail-closed exactly like the
+' emitter's PublishMap: the 16-entry transform form, finite decoded
+' entries, scale 1, unit axes, mutual orthogonality, the right-handed 3D
+' frame and the normal parallel to the source +Z. For the source-XY plane
+' the map entries are m00 = a(0), m01 = a(1), m10 = a(3), m11 = a(4) and
+' the side is sign(a(8)) (source u = +X, v = +Y, n = +Z). Nothing is
+' stored before the complete validation passes.
+Function ComputeMap() As Boolean
+    Dim skObj As Object
+    Dim tr As Object
+    Dim a As Variant
+    Dim n As Long
+    Dim d As String
+    Dim lb As Long
+    Dim ub As Long
+    Dim ux As Double
+    Dim uy As Double
+    Dim uz As Double
+    Dim vx As Double
+    Dim vy As Double
+    Dim vz As Double
+    Dim nx As Double
+    Dim ny As Double
+    Dim nz As Double
+    Dim sc As Double
+    Dim x9 As Double
+    Dim x10 As Double
+    Dim x11 As Double
+    Dim m00 As Double
+    Dim m01 As Double
+    Dim m10 As Double
+    Dim m11 As Double
+    Dim side As Long
+    On Error Resume Next
+    ComputeMap = False
+    Err.Clear
+    Set skObj = swSketchMgr.ActiveSketch
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("map", n, d, "stage=activesketch")
+    If n <> 0 Or skObj Is Nothing Then Exit Function
+    Err.Clear
+    Set tr = skObj.ModelToSketchTransform
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("map", n, d, "stage=transform")
+    If n <> 0 Or tr Is Nothing Then Exit Function
+    Err.Clear
+    a = tr.ArrayData
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("map", n, d, "stage=arraydata")
+    If n <> 0 Then Exit Function
+    Err.Clear
+    lb = LBound(a)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("map", n, d, "stage=lbound")
+    If n <> 0 Then Exit Function
+    Err.Clear
+    ub = UBound(a)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("map", n, d, "stage=ubound")
+    If n <> 0 Then Exit Function
+    If lb <> 0 Or ub <> 15 Then
+        WriteLine LineFor("map", -1, "unexpected form", "lbound=" & Trim(Str(lb)) & " ubound=" & Trim(Str(ub)) & " (expected zero-based 0..15)")
+        Exit Function
+    End If
+    If Not NumDecode("map", "scale", a(12), sc) Then Exit Function
+    If Abs(sc - 1#) > 0.000001 Then
+        WriteLine LineFor("map", -1, "scale not 1", "scale " & Trim(Str(sc)))
+        Exit Function
+    End If
+    If Not NumDecode("map", "translation-x", a(9), x9) Then Exit Function
+    If Not NumDecode("map", "translation-y", a(10), x10) Then Exit Function
+    If Not NumDecode("map", "translation-z", a(11), x11) Then Exit Function
+    If Abs(x9) > 0.000001 Or Abs(x10) > 0.000001 Or Abs(x11) > 0.000001 Then
+        WriteLine LineFor("map", -1, "translation not at origin", Vec3Text(x9, x10, x11))
+        Exit Function
+    End If
+    If Not NumDecode("map", "axis-ux", a(0), ux) Then Exit Function
+    If Not NumDecode("map", "axis-uy", a(3), uy) Then Exit Function
+    If Not NumDecode("map", "axis-uz", a(6), uz) Then Exit Function
+    If Not NumDecode("map", "axis-vx", a(1), vx) Then Exit Function
+    If Not NumDecode("map", "axis-vy", a(4), vy) Then Exit Function
+    If Not NumDecode("map", "axis-vz", a(7), vz) Then Exit Function
+    If Not NumDecode("map", "axis-nx", a(2), nx) Then Exit Function
+    If Not NumDecode("map", "axis-ny", a(5), ny) Then Exit Function
+    If Not NumDecode("map", "axis-nz", a(8), nz) Then Exit Function
+    If Abs(Sqr(ux * ux + uy * uy + uz * uz) - 1#) > 0.000001 Then
+        WriteLine LineFor("map", -1, "u not unit", Vec3Text(ux, uy, uz))
+        Exit Function
+    End If
+    If Abs(Sqr(vx * vx + vy * vy + vz * vz) - 1#) > 0.000001 Then
+        WriteLine LineFor("map", -1, "v not unit", Vec3Text(vx, vy, vz))
+        Exit Function
+    End If
+    If Abs(Sqr(nx * nx + ny * ny + nz * nz) - 1#) > 0.000001 Then
+        WriteLine LineFor("map", -1, "n not unit", Vec3Text(nx, ny, nz))
+        Exit Function
+    End If
+    If Abs(ux * vx + uy * vy + uz * vz) > 0.000001 Then
+        WriteLine LineFor("map", -1, "u and v not orthogonal", "")
+        Exit Function
+    End If
+    If Abs(ux * nx + uy * ny + uz * nz) > 0.000001 Then
+        WriteLine LineFor("map", -1, "u and n not orthogonal", "")
+        Exit Function
+    End If
+    If Abs(vx * nx + vy * ny + vz * nz) > 0.000001 Then
+        WriteLine LineFor("map", -1, "v and n not orthogonal", "")
+        Exit Function
+    End If
+    If Abs((uy * vz - uz * vy) - nx) > 0.000001 Or Abs((uz * vx - ux * vz) - ny) > 0.000001 Or Abs((ux * vy - uy * vx) - nz) > 0.000001 Then
+        WriteLine LineFor("map", -1, "frame not right-handed", "u x v does not equal n")
+        Exit Function
+    End If
+    If Abs(Abs(nz) - 1#) > 0.000001 Then
+        WriteLine LineFor("map", -1, "normal not parallel to +Z", Vec3Text(nx, ny, nz))
+        Exit Function
+    End If
+    m00 = ux
+    m01 = vx
+    m10 = uy
+    m11 = vy
+    side = 1
+    If nz < 0 Then side = -1
+    gMap00 = m00
+    gMap01 = m01
+    gMap10 = m10
+    gMap11 = m11
+    gMapSide = side
+    WriteLine LineFor("map", 0, "", "published m00=" & Trim(Str(m00)) & " m01=" & Trim(Str(m01)) & " m10=" & Trim(Str(m10)) & " m11=" & Trim(Str(m11)) & " side=" & Trim(Str(side)))
+    ComputeMap = True
+End Function
+
+' The emitter's PlaneIsSource("XY") acceptance exactly: the probe sketch
+' must sit on the geometric source plane - translation at the model
+' origin and the normal parallel to +Z (either sign). Strict frame
+' equality is NOT required (the map adapts); every probed frame is
+' reported by the caller through FrameTextEx.
+Function PlaneIsSourceXY() As Boolean
+    Dim skObj As Object
+    Dim tr As Object
+    Dim a As Variant
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    PlaneIsSourceXY = False
+    Err.Clear
+    Set skObj = swSketchMgr.ActiveSketch
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("plane-accept", n, d, "stage=activesketch")
+    If n <> 0 Or skObj Is Nothing Then Exit Function
+    Err.Clear
+    Set tr = skObj.ModelToSketchTransform
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("plane-accept", n, d, "stage=transform")
+    If n <> 0 Or tr Is Nothing Then Exit Function
+    Err.Clear
+    a = tr.ArrayData
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("plane-accept", n, d, "stage=arraydata")
+    If n <> 0 Then Exit Function
+    If Abs(a(9)) > 0.000001 Or Abs(a(10)) > 0.000001 Or Abs(a(11)) > 0.000001 Then
+        WriteLine LineFor("plane-accept", -1, "translation not at origin", Vec3Text(a(9), a(10), a(11)))
+        Exit Function
+    End If
+    If Abs(Abs(a(8)) - 1#) > 0.000001 Then
+        WriteLine LineFor("plane-accept", -1, "normal not parallel to +Z", Vec3Text(a(2), a(5), a(8)))
+        Exit Function
+    End If
+    WriteLine LineFor("plane-accept", 0, "", "accepted source-XY geometric plane: " & FrameTextEx())
+    PlaneIsSourceXY = True
+End Function
+
+' Open a sketch on the first plane-like feature whose probe sketch sits on
+' the source-XY geometric plane (the emitter's acceptance); fail-closed on
+' every uncertain state. The sketch's feature identity is acquired at its
+' own captured, Nothing-checked stage (the documented Sketch->Feature
+' assignment; ISketch exposes no GetFeature) and its name is returned for
+' the later explicit selection. Every call emits its own named capture
+' record and every failure is recorded in gProbeLog with its captured
+' error. A rejected plane's probe sketch is deleted by the verified
+' DiscardProbeSketch algorithm; if that deletion cannot be confirmed, the
+' run is failed.
+Function OpenSketchOnPlaneXY(ByRef skNameOut As String) As Boolean
+    Dim feat As Object
+    Dim skObj As Object
+    Dim skFeat As SldWorks.Feature
+    Dim nm As String
+    Dim fn As String
+    Dim ok As Boolean
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    OpenSketchOnPlaneXY = False
+    skNameOut = ""
+    gProbeLog = ""
+    Err.Clear
+    Set feat = swDoc.FirstFeature
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("plane-probe", n, d, "stage=firstfeature")
+    If n <> 0 Then
+        gProbeLog = gProbeLog & "stage=firstfeature err=" & Trim(Str(n)) & " " & d & "; "
+        Exit Function
+    End If
+    Do While Not feat Is Nothing
+        Err.Clear
+        nm = feat.GetTypeName2()
+        n = Err.Number
+        d = Err.Description
+        WriteLine LineFor("plane-probe", n, d, "stage=typename")
+        If n <> 0 Then
+            gProbeLog = gProbeLog & "stage=typename err=" & Trim(Str(n)) & " " & d & "; "
+            Exit Function
+        End If
+        If InStr(1, nm, "lane", vbTextCompare) > 0 Then
+            Err.Clear
+            fn = feat.Name
+            n = Err.Number
+            d = Err.Description
+            WriteLine LineFor("plane-probe", n, d, "stage=name")
+            If n <> 0 Then
+                gProbeLog = gProbeLog & "stage=name err=" & Trim(Str(n)) & " " & d & "; "
+                Exit Function
+            End If
+            Err.Clear
+            ok = feat.Select(False)
+            n = Err.Number
+            d = Err.Description
+            WriteLine LineFor("plane-probe", n, d, "stage=select plane=" & fn & " result=" & CStr(ok))
+            If n <> 0 Then
+                gProbeLog = gProbeLog & fn & ": select err=" & Trim(Str(n)) & " " & d & "; "
+            ElseIf Not ok Then
+                gProbeLog = gProbeLog & fn & ": select returned false; "
+            Else
+                Err.Clear
+                swSketchMgr.InsertSketch True
+                n = Err.Number
+                d = Err.Description
+                WriteLine LineFor("plane-probe", n, d, "stage=insertsketch plane=" & fn)
+                If n <> 0 Then
+                    gProbeLog = gProbeLog & fn & ": insertsketch err=" & Trim(Str(n)) & " " & d & "; "
+                    Exit Function
+                End If
+                Err.Clear
+                Set skObj = swSketchMgr.ActiveSketch
+                n = Err.Number
+                d = Err.Description
+                WriteLine LineFor("plane-probe", n, d, "stage=activesketch plane=" & fn)
+                If n <> 0 Then
+                    gProbeLog = gProbeLog & fn & ": activesketch err=" & Trim(Str(n)) & " " & d & "; "
+                    Exit Function
+                End If
+                If skObj Is Nothing Then
+                    gProbeLog = gProbeLog & fn & ": opened but no active sketch object; "
+                Else
+                    Err.Clear
+                    Set skFeat = skObj
+                    n = Err.Number
+                    d = Err.Description
+                    WriteLine LineFor("plane-probe", n, d, "stage=sketch-feature-acquire plane=" & fn)
+                    If n <> 0 Then
+                        gProbeLog = gProbeLog & fn & ": sketch-feature acquire err=" & Trim(Str(n)) & " " & d & "; "
+                        Exit Function
+                    End If
+                    If skFeat Is Nothing Then
+                        gProbeLog = gProbeLog & fn & ": sketch-feature acquire returned Nothing; "
+                        Exit Function
+                    End If
+                    If PlaneIsSourceXY() Then
+                        Err.Clear
+                        skNameOut = skFeat.Name
+                        n = Err.Number
+                        d = Err.Description
+                        WriteLine LineFor("plane-probe", n, d, "stage=sketch-feature-name plane=" & fn & " name=" & skNameOut)
+                        If n <> 0 Or Trim(skNameOut) = "" Then
+                            gProbeLog = gProbeLog & fn & ": sketch-feature name err=" & Trim(Str(n)) & " " & d & "; "
+                            Exit Function
+                        End If
+                        gProbeLog = gProbeLog & fn & ": opened; frame " & FrameTextEx() & "; "
+                        OpenSketchOnPlaneXY = True
+                        Exit Function
+                    Else
+                        gProbeLog = gProbeLog & fn & ": " & FrameTextEx() & "; "
+                        If Not DiscardProbeSketch(skFeat) Then
+                            gProbeLog = gProbeLog & "PROBE SKETCH NOT CONFIRMED DELETED; "
+                            Exit Function
+                        End If
+                    End If
+                End If
+            End If
+        End If
+        Err.Clear
+        Set feat = feat.GetNextFeature
+        n = Err.Number
+        d = Err.Description
+        WriteLine LineFor("plane-probe", n, d, "stage=nextfeature")
+        If n <> 0 Then
+            gProbeLog = gProbeLog & "stage=nextfeature err=" & Trim(Str(n)) & " " & d & "; "
+            Exit Function
+        End If
+    Loop
+End Function
+
+' The body's bounding box: the exact returned form (zero-based
+' one-dimensional, 6 components - rank probed, not assumed) and every
+' component extracted with its own captured error BEFORE decoding (a
+' failed extraction is recorded and can never pass), then decoded
+' through NumDecode. Required evidence: the call must succeed and all
+' six components must decode; a different form is reported verbatim and
+' refused - components are never interpreted against a wrong form and
+' never substituted with defaults.
+Sub BoxEvidence(ByVal tag As String, ByRef ok As Boolean)
+    Dim pb As SldWorks.PartDoc
+    Dim v As Variant
+    Dim n As Long
+    Dim d As String
+    Dim tmp As String
+    Dim lb As Long
+    Dim ub As Long
+    Dim i As Long
+    Dim vOne As Variant
+    Dim comps As String
+    Dim bad As Boolean
+    Dim x As Double
+    On Error Resume Next
+    ok = False
+    bad = False
+    WriteLine LineFor("getpartbox-" & tag, 0, "", "entering: IPartDoc.GetPartBox(True) keeps system units (SI metres)")
+    Err.Clear
+    Set pb = swDoc
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("getpartbox-" & tag, n, d, "stage=partdoc-acquire")
+    If n <> 0 Or pb Is Nothing Then Exit Sub
+    Err.Clear
+    v = pb.GetPartBox(True)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("getpartbox-" & tag, n, d, "stage=call outcome")
+        Exit Sub
+    End If
+    WriteLine LineFor("getpartbox-" & tag, 0, "", "stage=call outcome: a value came back")
+    Err.Clear
+    tmp = TypeName(v)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("getpartbox-" & tag, n, d, "stage=form typename")
+        Exit Sub
+    End If
+    Err.Clear
+    lb = LBound(v)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("getpartbox-" & tag, n, d, "stage=form lbound (type=" & tmp & ")")
+        Exit Sub
+    End If
+    Err.Clear
+    ub = UBound(v)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("getpartbox-" & tag, n, d, "stage=form ubound (type=" & tmp & ")")
+        Exit Sub
+    End If
+    WriteLine LineFor("getpartbox-" & tag, 0, "", "stage=form type=" & tmp & " lbound=" & Trim(Str(lb)) & " ubound=" & Trim(Str(ub)))
+    If lb <> 0 Or ub <> 5 Then
+        WriteLine LineFor("getpartbox-" & tag, -1, "unexpected form", "stage=form check: zero-based 6 components (0..5) expected; the values are not interpreted")
+        Exit Sub
+    End If
+    Err.Clear
+    ub = UBound(v, 2)
+    n = Err.Number
+    d = Err.Description
+    If n = 0 Then
+        WriteLine LineFor("getpartbox-" & tag, -1, "a second dimension exists", "stage=rank-probe")
+        Exit Sub
+    End If
+    WriteLine LineFor("getpartbox-" & tag, n, d, "stage=rank-probe (error 9 = one-dimensional, expected)")
+    If n <> 9 Then Exit Sub
+    comps = ""
+    For i = 0 To 5
+        Err.Clear
+        vOne = Empty
+        vOne = v(i)
+        n = Err.Number
+        d = Err.Description
+        If n <> 0 Then
+            WriteLine LineFor("getpartbox-" & tag, n, d, "stage=component" & Trim(Str(i)) & " extraction")
+            bad = True
+        ElseIf NumDecode("getpartbox-" & tag, "component" & Trim(Str(i)), vOne, x) Then
+            tmp = Trim(Str(x))
+            comps = comps & " c" & Trim(Str(i)) & "=" & tmp
+        Else
+            bad = True
+        End If
+    Next i
+    If bad Then Exit Sub
+    WriteLine LineFor("getpartbox-" & tag, 0, "", "box components:" & comps & " (documented form: c0..c2 one diagonal corner, c3..c5 the other; approximate)")
+    ok = True
+End Sub
+
+' One dimension identity: the lookup key, the returned Name and the
+' SystemValue in SI base units (lengths in metres, angles in radians),
+' each at its own captured stage. Required evidence: a nonblank returned
+' Name and a decoded numeric SystemValue - neither is ever substituted
+' with a default. required = True makes a missing identity a measurement
+' failure; required = False is an informative look (absence is not fatal)
+' and is labeled so in every record.
+Sub DimEvidence(ByVal tag As String, ByVal key As String, ByVal required As Boolean, ByRef ok As Boolean)
+    Dim dm As Object
+    Dim n As Long
+    Dim d As String
+    Dim tmp As String
+    Dim v As Variant
+    Dim sv As Double
+    On Error Resume Next
+    ok = False
+    WriteLine LineFor(tag, 0, "", "entering: Parameter(" & key & ") required=" & CStr(required))
+    Err.Clear
+    Set dm = swDoc.Parameter(key)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor(tag, n, d, "stage=lookup " & key & " required=" & CStr(required))
+        Exit Sub
+    End If
+    If dm Is Nothing Then
+        WriteLine LineFor(tag, -1, "returned Nothing", "stage=lookup " & key & " required=" & CStr(required))
+        Exit Sub
+    End If
+    Err.Clear
+    v = dm.Name
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor(tag, n, d, "stage=name " & key)
+        Exit Sub
+    End If
+    Err.Clear
+    tmp = CStr(v)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor(tag, n, d, "stage=name-convert " & key)
+        Exit Sub
+    End If
+    If Trim(tmp) = "" Then
+        WriteLine LineFor(tag, -1, "blank name", "stage=name " & key & " returned a blank identity")
+        Exit Sub
+    End If
+    WriteLine LineFor(tag, 0, "", "stage=name " & key & " -> " & tmp)
+    Err.Clear
+    v = dm.SystemValue
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor(tag, n, d, "stage=systemvalue " & key)
+        Exit Sub
+    End If
+    If Not NumDecode(tag, "systemvalue " & key, v, sv) Then Exit Sub
+    WriteLine LineFor(tag, 0, "", "stage=systemvalue " & key & " = " & Trim(Str(sv)) & " (SI)")
+    ok = True
+End Sub
+
+' One numeric component: Empty/Null/nonnumeric values are rejected
+' BEFORE any coercion (CDbl(Empty) would silently become zero), and the
+' conversion is captured at its own named stage. True = x holds the
+' decoded value; nothing is ever substituted with a default.
+Function NumDecode(ByVal tag As String, ByVal stage As String, ByVal v As Variant, ByRef x As Double) As Boolean
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    NumDecode = False
+    x = 0#
+    If IsEmpty(v) Or IsNull(v) Then
+        WriteLine LineFor(tag, -1, "Empty/Null value", "stage=" & stage & " decode refused")
+        Exit Function
+    End If
+    If Not IsNumeric(v) Then
+        WriteLine LineFor(tag, -1, "nonnumeric value", "stage=" & stage & " decode refused (type=" & TypeName(v) & ")")
+        Exit Function
+    End If
+    Err.Clear
+    x = CDbl(v)
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor(tag, n, d, "stage=" & stage & " decode")
+        Exit Function
+    End If
+    WriteLine LineFor(tag, 0, "", "stage=" & stage & " value=" & Trim(Str(x)))
+    NumDecode = True
+End Function
+
+Function LineFor(ByVal which As String, ByVal n As Long, ByVal d As String, ByVal detail As String) As String
+    LineFor = "{""type"":""probe"",""member"":""" & JsonStr(which) & """,""err"":" & Trim(Str(n)) & ",""errdesc"":""" & JsonStr(d) & """,""detail"":""" & JsonStr(detail) & """}"
+End Function
+
+' Direction equality with sign, on normalized vectors.
+Function VecIs(ByVal ax As Double, ByVal ay As Double, ByVal az As Double, ByVal bx As Double, ByVal by As Double, ByVal bz As Double) As Boolean
+    Dim L As Double
+    L = Sqr(ax * ax + ay * ay + az * az)
+    If Abs(L) < 0.000001 Then Exit Function
+    VecIs = Abs(ax / L - bx) < 0.000001 And Abs(ay / L - by) < 0.000001 And Abs(az / L - bz) < 0.000001
+End Function
+
+' The active sketch's frame as report text. The active-sketch
+' acquisition and the transform acquisition are separate captured
+' stages; every decode is captured too.
+Function FrameTextEx() As String
+    Dim skObj As Object
+    Dim tr As Object
+    Dim a As Variant
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    Err.Clear
+    Set skObj = swSketchMgr.ActiveSketch
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        FrameTextEx = "(frame unavailable: activesketch err " & Trim(Str(n)) & " " & d & ")"
+        Exit Function
+    End If
+    If skObj Is Nothing Then
+        FrameTextEx = "(frame unavailable: activesketch returned Nothing)"
+        Exit Function
+    End If
+    Err.Clear
+    Set tr = skObj.ModelToSketchTransform
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        FrameTextEx = "(frame unavailable: transform err " & Trim(Str(n)) & " " & d & ")"
+        Exit Function
+    End If
+    If tr Is Nothing Then
+        FrameTextEx = "(frame unavailable: transform returned Nothing)"
+        Exit Function
+    End If
+    Err.Clear
+    a = tr.ArrayData
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        FrameTextEx = "(frame unavailable: arraydata err " & Trim(Str(n)) & " " & d & ")"
+        Exit Function
+    End If
+    Err.Clear
+    FrameTextEx = "u=(" & Vec3Text(a(0), a(3), a(6)) & ") v=(" & Vec3Text(a(1), a(4), a(7)) & ") n=(" & Vec3Text(a(2), a(5), a(8)) & ") o=(" & Vec3Text(a(9), a(10), a(11)) & ")"
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then FrameTextEx = "(frame unavailable: index err " & Trim(Str(n)) & " " & d & ")"
+End Function
+
+' Verify the named context against the live sketch state; False = the
+' context is NOT verified and no named measurement may proceed.
+Sub ReportContext(ByVal ctx As String, ByRef verified As Boolean)
+    Dim sk As Object
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    verified = False
+    Err.Clear
+    Set sk = swSketchMgr.ActiveSketch
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then
+        WriteLine LineFor("context-" & ctx, n, d, "active-sketch query failed; context NOT verified")
+        Exit Sub
+    End If
+    If ctx = "active" Then
+        If sk Is Nothing Then
+            WriteLine LineFor("context-active", -1, "no active sketch", "context NOT verified")
+        Else
+            verified = True
+            WriteLine LineFor("context-active", 0, "", "verified: a sketch is active")
+        End If
+    Else
+        If sk Is Nothing Then
+            verified = True
+            WriteLine LineFor("context-closed", 0, "", "verified: no sketch is active")
+        Else
+            WriteLine LineFor("context-closed", -1, "a sketch is still active", "context NOT verified")
+        End If
+    End If
+End Sub
+
+Function Vec3Text(ByVal x As Double, ByVal y As Double, ByVal z As Double) As String
+    Vec3Text = Trim(Str(x)) & "," & Trim(Str(y)) & "," & Trim(Str(z))
+End Function
+
+' A live feature-tree lookup by name. Returns the feature when a complete
+' walk found it; returns Nothing with uncertain = False only when a
+' complete walk proves it absent; uncertain = True whenever the walk or
+' the name failed. Absence is never inferred from a failed query, and an
+' empty name is never sent to any API. Every call is captured at its own
+' named stage and recorded.
+Function FindFeatureByName(ByVal nm As String, ByRef uncertain As Boolean) As SldWorks.Feature
+    Dim feat As SldWorks.Feature
+    Dim fn As String
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    Set FindFeatureByName = Nothing
+    uncertain = True
+    If nm = "" Then Exit Function
+    Err.Clear
+    Set feat = swDoc.FirstFeature
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("find-feature", n, d, "stage=firstfeature")
+    If n <> 0 Then Exit Function
+    Do While Not feat Is Nothing
+        Err.Clear
+        fn = feat.Name
+        n = Err.Number
+        d = Err.Description
+        WriteLine LineFor("find-feature", n, d, "stage=name")
+        If n <> 0 Then Exit Function
+        If fn = nm Then
+            Set FindFeatureByName = feat
+            uncertain = False
+            WriteLine LineFor("find-feature", 0, "", "found " & nm)
+            Exit Function
+        End If
+        Err.Clear
+        Set feat = feat.GetNextFeature
+        n = Err.Number
+        d = Err.Description
+        WriteLine LineFor("find-feature", n, d, "stage=nextfeature")
+        If n <> 0 Then Exit Function
+    Loop
+    uncertain = False
+    WriteLine LineFor("find-feature", 0, "", "complete walk: " & nm & " is absent")
+End Function
+
+' Close the probe sketch and delete exactly the feature that was created
+' for it - never a blind EditDelete, never a stale-object test. The name
+' is captured while the object is alive and validated; the close is
+' confirmed; the delete runs only from a captured, error-checked
+' selection of the one feature the live tree returns (a raised selection
+' never falls through to EditDelete); and the deletion is verified the
+' same way. Closing an empty sketch may already have removed it - that
+' is a clean result. True = the probe sketch is proven gone; every
+' uncertain state fails closed. Every call is captured at its own named
+' stage and recorded.
+Function DiscardProbeSketch(ByVal skFeat As SldWorks.Feature) As Boolean
+    Dim nm As String
+    Dim cur As Object
+    Dim live As SldWorks.Feature
+    Dim uncertain As Boolean
+    Dim selOk As Boolean
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    DiscardProbeSketch = False
+    Err.Clear
+    nm = skFeat.Name
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("discard-probe-sketch", n, d, "stage=name")
+    If n <> 0 Then Exit Function
+    If nm = "" Then Exit Function
+    Err.Clear
+    Set cur = swSketchMgr.ActiveSketch
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("discard-probe-sketch", n, d, "stage=activesketch")
+    If n <> 0 Then Exit Function
+    If Not cur Is Nothing Then
+        Err.Clear
+        swSketchMgr.InsertSketch True
+        n = Err.Number
+        d = Err.Description
+        WriteLine LineFor("discard-probe-sketch", n, d, "stage=insertsketch-close")
+        If n <> 0 Then Exit Function
+        Err.Clear
+        Set cur = swSketchMgr.ActiveSketch
+        n = Err.Number
+        d = Err.Description
+        WriteLine LineFor("discard-probe-sketch", n, d, "stage=activesketch-reget")
+        If n <> 0 Then Exit Function
+        If Not cur Is Nothing Then Exit Function
+    End If
+    Set live = FindFeatureByName(nm, uncertain)
+    If live Is Nothing Then
+        DiscardProbeSketch = Not uncertain
+        WriteLine LineFor("discard-probe-sketch", 0, "", "stage=find outcome: absent=" & CStr(Not uncertain))
+        Exit Function
+    End If
+    Err.Clear
+    swDoc.ClearSelection2 True
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("discard-probe-sketch", n, d, "stage=clearselection")
+    If n <> 0 Then Exit Function
+    Err.Clear
+    selOk = live.Select(False)
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("discard-probe-sketch", n, d, "stage=select result=" & CStr(selOk))
+    If n <> 0 Or Not selOk Then Exit Function
+    Err.Clear
+    swDoc.EditDelete
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("discard-probe-sketch", n, d, "stage=editdelete")
+    If n <> 0 Then Exit Function
+    Set live = FindFeatureByName(nm, uncertain)
+    DiscardProbeSketch = (live Is Nothing) And (Not uncertain)
+    WriteLine LineFor("discard-probe-sketch", 0, "", "stage=verify deleted=" & CStr(DiscardProbeSketch))
+End Function
+
+' Live enumeration of the open documents answering to the title: how
+' many match, and is the single match the object this macro owns? Every
+' call is captured at its own named stage and recorded. False = a query
+' failed, which proves nothing and leaves every caller's outcome
+' unverified.
+Function DocEnumeration(ByVal t As String, ByRef cnt As Long, ByRef isOurs As Boolean) As Boolean
+    Dim dd As Object
+    Dim t2 As String
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    DocEnumeration = False
+    cnt = 0
+    isOurs = False
+    Err.Clear
+    Set dd = swApp.GetFirstDocument
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("doc-enum", n, d, "stage=getfirstdocument")
+    If n <> 0 Then Exit Function
+    Do While Not dd Is Nothing
+        Err.Clear
+        t2 = dd.GetTitle
+        n = Err.Number
+        d = Err.Description
+        WriteLine LineFor("doc-enum", n, d, "stage=gettitle t=" & t2)
+        If n <> 0 Then Exit Function
+        If t2 = t Then
+            cnt = cnt + 1
+            If dd Is swDoc Then isOurs = True
+        End If
+        Err.Clear
+        Set dd = dd.GetNext
+        n = Err.Number
+        d = Err.Description
+        WriteLine LineFor("doc-enum", n, d, "stage=getnext")
+        If n <> 0 Then Exit Function
+    Loop
+    WriteLine LineFor("doc-enum", 0, "", "complete: matches=" & Trim(Str(cnt)) & " ours=" & CStr(isOurs))
+    DocEnumeration = True
+End Function
+
+' Close exactly the document this macro created - never any other - and
+' verify it by a live enumeration of open documents: before the close, the
+' title must identify exactly our object among open documents (an empty
+' title is refused); after it, no open document may answer to the title.
+' A failed query proves nothing and leaves the run failed. Every call is
+' captured at its own named stage and recorded. The owner rule: runs
+' leave no documents open.
+Sub CloseOwnedDoc(ByRef closedOk As Boolean)
+    Dim exact As String
+    Dim cnt As Long
+    Dim isOurs As Boolean
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    closedOk = False
+    If swDoc Is Nothing Then
+        closedOk = True
+        WriteLine LineFor("close-owned-document", 0, "", "no owned document to close")
+        Exit Sub
+    End If
+    Err.Clear
+    exact = swDoc.GetTitle
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("close-owned-document", n, d, "stage=title")
+    If n <> 0 Then Exit Sub
+    If Trim(exact) = "" Then
+        WriteLine LineFor("close-owned-document", -1, "empty title", "refusing to close: an empty title would target the active document")
+        Exit Sub
+    End If
+    If Not DocEnumeration(exact, cnt, isOurs) Then
+        WriteLine LineFor("close-owned-document", -1, "enumeration failed", "refusing to close: the open-document query failed")
+        Exit Sub
+    End If
+    If cnt <> 1 Or Not isOurs Then
+        WriteLine LineFor("close-owned-document", -1, "matches=" & Trim(Str(cnt)) & " ours=" & CStr(isOurs), "refusing to close: the title does not identify exactly our document")
+        Exit Sub
+    End If
+    Err.Clear
+    swApp.CloseDoc exact
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("close-owned-document", n, d, "stage=closedoc " & exact)
+    If n <> 0 Then Exit Sub
+    If Not DocEnumeration(exact, cnt, isOurs) Then
+        WriteLine LineFor("close-owned-document", -1, "enumeration failed", "closure NOT verified: the open-document query failed")
+        Exit Sub
+    End If
+    If cnt = 0 Then
+        closedOk = True
+        WriteLine LineFor("close-owned-document", 0, "", "verified closed: no open document answers to " & exact)
+    Else
+        WriteLine LineFor("close-owned-document", -1, "matches=" & Trim(Str(cnt)), "closure NOT verified: an open document still answers to the title")
+    End If
+End Sub
+
+' The keep-mode handoff must be a live, nonempty, uniquely owned
+' document: the title must be nonempty and a complete enumeration must
+' find exactly one match, ours. False = the handoff is unverified and
+' the document is never reported as retained.
+Function OwnedHandoffVerified(ByVal tag As String, ByRef titleOut As String) As Boolean
+    Dim cnt As Long
+    Dim isOurs As Boolean
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    OwnedHandoffVerified = False
+    titleOut = ""
+    Err.Clear
+    titleOut = swDoc.GetTitle
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("handoff-" & tag, n, d, "stage=title")
+    If n <> 0 Then Exit Function
+    If Trim(titleOut) = "" Then
+        WriteLine LineFor("handoff-" & tag, -1, "empty title", "handoff NOT verified")
+        Exit Function
+    End If
+    If Not DocEnumeration(titleOut, cnt, isOurs) Then
+        WriteLine LineFor("handoff-" & tag, -1, "enumeration failed", "handoff NOT verified")
+        Exit Function
+    End If
+    If cnt = 1 And isOurs Then
+        WriteLine LineFor("handoff-" & tag, 0, "", "verified live and owned: " & titleOut)
+        OwnedHandoffVerified = True
+    Else
+        WriteLine LineFor("handoff-" & tag, -1, "matches=" & Trim(Str(cnt)) & " ours=" & CStr(isOurs), "handoff NOT verified")
+    End If
+End Function
+
+' The proven minimal.swb helper, retained at the task's helper list; the
+' keep report uses the VERIFIED handoffTitle instead of this second
+' query. Its own API call is captured and recorded.
+Function OwnedDocTitle() As String
+    Dim n As Long
+    Dim d As String
+    On Error Resume Next
+    OwnedDocTitle = ""
+    If swDoc Is Nothing Then Exit Function
+    Err.Clear
+    OwnedDocTitle = "" & swDoc.GetTitle
+    n = Err.Number
+    d = Err.Description
+    WriteLine LineFor("owned-doc-title", n, d, "title=" & OwnedDocTitle)
+End Function
+
+' The first feature type names in the tree, with any captured walk error
+' embedded in the text: the report names what the scan actually saw when
+' plane selection fails.
+Function TreeSummary() As String
+    Dim feat As SldWorks.Feature
+    Dim s As String
+    Dim planes As String
+    Dim errs As String
+    Dim nm As String
+    Dim fn As String
+    Dim i As Long
+    Dim n As Long
+    Dim d As String
+    Dim n2 As Long
+    Dim d2 As String
+    On Error Resume Next
+    Err.Clear
+    Set feat = swDoc.FirstFeature
+    n = Err.Number
+    d = Err.Description
+    If n <> 0 Then errs = errs & "firstfeature err=" & Trim(Str(n)) & " " & d & "; "
+    Do While Not feat Is Nothing And i < 300
+        Err.Clear
+        nm = feat.GetTypeName2()
+        n = Err.Number
+        d = Err.Description
+        If n <> 0 Then errs = errs & "typename err=" & Trim(Str(n)) & " " & d & "; "
+        If n = 0 Then
+            If InStr(1, nm, "lane", vbTextCompare) > 0 Then
+                Err.Clear
+                fn = feat.Name
+                n2 = Err.Number
+                d2 = Err.Description
+                If n2 <> 0 Then
+                    errs = errs & "name err=" & Trim(Str(n2)) & " " & d2 & "; "
+                Else
+                    planes = planes & nm & "/" & fn & " "
+                End If
+            End If
+            If i < 10 Then s = s & nm & " "
+        End If
+        i = i + 1
+        Err.Clear
+        Set feat = feat.GetNextFeature
+        n = Err.Number
+        d = Err.Description
+        If n <> 0 Then errs = errs & "nextfeature err=" & Trim(Str(n)) & " " & d & "; "
+    Loop
+    TreeSummary = Trim(Str(i)) & " features; plane-like: [" & Trim(planes) & "]; first: " & s & "; walk-errs: " & errs
+End Function
+
+' The report path travels in a one-line file under the TEMP directory that
+' the host rewrites before every run: preferred over CRAFT_BRIDGE_REPORT,
+' because the macro runs inside the SolidWorks process, which may be an
+' instance that started long ago with a stale environment. The environment
+' variable is only the fallback for when the path file is missing or blank.
+' Host-file plumbing: it suppresses its own I/O errors by design and is
+' outside the per-call SolidWorks API evidence contract.
+Function ReportPathFromHost() As String
+    Dim p As String
+    Dim f As Integer
+    Dim oneLine As String
+    Dim got As Boolean
+    ReportPathFromHost = ""
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p <> "" Then
+        p = p & "\craft-bridge-report-path.txt"
+        Err.Clear
+        f = FreeFile
+        Open p For Input As #f
+        If Err.Number = 0 Then
+            Err.Clear
+            Line Input #f, oneLine
+            got = (Err.Number = 0)
+            Err.Clear
+            Close #f
+            If got Then
+                oneLine = Trim(oneLine)
+                If oneLine <> "" Then
+                    ReportPathFromHost = oneLine
+                    Exit Function
+                End If
+            End If
+        End If
+        Err.Clear
+    End If
+    ReportPathFromHost = Trim(Environ$("CRAFT_BRIDGE_REPORT"))
+End Function
+
+' Truncate the report so this run never inherits a previous run's lines.
+' Host-file plumbing, as above.
+Sub StartReport()
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Output As #f
+    Close #f
+End Sub
+
+' One line, one fresh handle: open, print, close. Nothing to leak, nothing
+' to collide with. Host-file plumbing, as above.
+Sub WriteLine(ByVal text As String)
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Append As #f
+    Print #f, text
+    Close #f
+End Sub
+
+Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)
+    WriteLine "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
+End Sub
+
+' JSON string escaping. This is not VBA-literal escaping: it is only for the
+' report file. Generated code strings are escaped separately by the generator.
+Function JsonStr(ByVal s As String) As String
+    Dim t As String
+    t = Replace(s, "\", "\\")
+    t = Replace(t, """", "\""")
+    t = Replace(t, vbCrLf, "\n")
+    t = Replace(t, vbCr, "\n")
+    t = Replace(t, vbLf, "\n")
+    t = Replace(t, vbTab, "\t")
+    JsonStr = t
+End Function
+
+' Cleanup authorization from the host's path file: "close" (third line
+' reads close-after-run), "keep" (a two-line file) or "unknown". Host-
+' file plumbing, as above.
+Function CloseMode() As String
+    Dim p As String
+    Dim f As Integer
+    Dim oneLine As String
+    Dim ok As Boolean
+    Dim e3 As Long
+    CloseMode = "unknown"
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p = "" Then Exit Function
+    p = p & "\craft-bridge-report-path.txt"
+    Err.Clear
+    f = FreeFile
+    Open p For Input As #f
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    Line Input #f, oneLine
+    ok = (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    ok = ok And (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    e3 = Err.Number
+    Close #f
+    If Not ok Then Exit Function
+    If e3 = 0 Then
+        If Trim(oneLine) = "close-after-run" Then CloseMode = "close" Else CloseMode = "unknown"
+    ElseIf e3 = 62 And ok Then
+        CloseMode = "keep"
+    End If
+End Function
