@@ -227,3 +227,17 @@ The checker then verifies the absence two-way: a clean zero volume gives
 prove absence and fails named. Items without the declaration keep the
 fail-closed data gate: a missing, unreadable or nonpositive rebuilt
 volume is `check:mass=fail`. Real designs never declare `solid=none`.
+
+## The proven FeatureExtrusion2 call carries Merge/scope flags (2026-11-17)
+
+The public API research (docs/solidworks-api-research.md, A2) names the
+23 positional arguments: position 18 = Merge, 19 = UseFeatScope,
+20 = UseAutoSelect. Our corpus-proven emission passes True, True, True:
+the extrude MERGES with automatically selected bodies in feature scope.
+The corpus is single-body, so this never distinguished `new_body` from
+`join` - which is exactly why the operation gate stops at new_body and
+the merge/scope probe (P04) is required before Phase B claims any
+multibody semantics. Also documented there: source join/cut/intersect do
+NOT all map to this boss call - subtractive extrusions use the cut
+feature API and intersections use InsertCombineFeature (marks: target 1,
+tools 2; operation constants 15903/15902/15901).
