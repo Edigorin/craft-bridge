@@ -66,6 +66,7 @@ Sub main()
     Dim eqForm As String
     Dim eqErr As Long
     Dim eqText As String
+    Dim eqDrives As String
     Dim globalText As String
     Dim rbGlobal As String
     Dim rb As String
