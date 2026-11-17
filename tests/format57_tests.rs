@@ -309,30 +309,169 @@ fn suppression_skips_without_stopping() {
 }
 
 #[test]
-fn offset_and_construction_plane_sketches_stop_named() {
+fn offset_planes_plan_with_bound_distance_equations() {
+    // Inline offset form (the plaque's): the sketch step owns the plane
+    // and its distance equation.
     let points = r#"{ "id": "origin", "pos": [0.0, 0.0], "fixed": true },
-        { "id": "p1", "pos": [50.0, 0.0] },
-        { "id": "p2", "pos": [12.0, 30.0] }"#;
-    let offset =
+        { "id": "p1", "pos": [50.0, 0.0], "fixed": true },
+        { "id": "p2", "pos": [12.0, 30.0], "fixed": true }"#;
+    let plane =
         r#"{ "type": "offset", "base": { "type": "origin", "name": "XY" }, "distance": "W" }"#;
-    let steps = plan_of(&sketch_design(7, offset, points));
+    let steps = plan_of(&sketch_design(7, plane, points));
+    let sketch = match &steps[1].work {
+        Work::Sketch(s) => s,
+        _ => panic!(),
+    };
+    match &sketch.plane_binding {
+        replay::PlaneBinding::Offset { distance } => {
+            assert!((distance.expect_si - 0.05).abs() < 1e-12, "{distance:?}");
+            assert!(distance.rhs.contains("W"), "{}", distance.rhs);
+        }
+        other => panic!("expected an owned offset plane: {other:?}"),
+    }
+    // A zero offset binds to the base plane (defined behavior).
+    let zero =
+        r#"{ "type": "offset", "base": { "type": "origin", "name": "XY" }, "distance": "0 mm" }"#;
+    let steps = plan_of(&sketch_design(7, zero, points));
+    let sketch = match &steps[1].work {
+        Work::Sketch(s) => s,
+        _ => panic!(),
+    };
+    assert_eq!(sketch.plane_binding, replay::PlaneBinding::Origin);
+    // A negative offset selects the unprobed side: named stop.
+    let neg = r#"{ "type": "offset", "base": { "type": "origin", "name": "XY" }, "distance": "0 mm - W" }"#;
+    let steps = plan_of(&sketch_design(7, neg, points));
     assert!(matches!(steps[1].work, Work::Unmappable));
     assert!(
-        steps[1]
-            .detail
-            .contains("offset plane (offset from XY by W)"),
+        steps[1].detail.contains("negative offset"),
         "{}",
         steps[1].detail
     );
-    assert!(steps[1].detail.contains("offset-plane probe"));
-    let construction = r#"{ "type": "construction", "feature": 16 }"#;
-    let steps = plan_of(&sketch_design(7, construction, points));
+}
+
+#[test]
+fn construction_plane_steps_plan_and_sketches_bind_to_them() {
+    // Micro-D01 shape: a construction_plane feature (offset form) followed
+    // by a sketch that references it; the reference resolves to the plane
+    // step's dense index.
+    let design = r#"{"format": "solidcraft/57", "units": "mm",
+        "params": [{ "name": "W", "expr": "50 mm", "unit": "mm" }],
+        "features": [
+          {"id": 40, "name": "PlaquePlane", "suppressed": false, "type": "construction_plane",
+           "plane": {"type": "offset", "base": {"type": "origin", "name": "XY"}, "distance": "W"}},
+          {"id": 41, "name": "S", "suppressed": false, "type": "sketch",
+           "plane": {"type": "construction", "feature": 40},
+           "sketch": {
+             "points": [{"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+                        {"id": "p1", "pos": [50.0, 0.0], "fixed": true},
+                        {"id": "p2", "pos": [12.0, 30.0], "fixed": true}],
+             "curves": [
+               {"id": "l1", "type": "line", "a": 0, "b": 1},
+               {"id": "l2", "type": "line", "a": 1, "b": 2},
+               {"id": "l3", "type": "line", "a": 2, "b": 0}],
+             "constraints": [], "counters": {"l": 3, "p": 3}}}
+        ]}"#;
+    let steps = plan_of(design);
+    let plane = match &steps[1].work {
+        Work::OffsetPlane(p) => p,
+        _ => panic!(
+            "the construction_plane must plan as a plane step: {:?}",
+            steps[1]
+        ),
+    };
+    assert_eq!(plane.name, "CB_Plane_1");
+    let expect = plane.distance.as_ref().map(|d| d.expect_si).unwrap_or(0.0);
+    assert!((expect - 0.05).abs() < 1e-12);
+    let sketch = match &steps[2].work {
+        Work::Sketch(s) => s,
+        _ => panic!(),
+    };
+    assert_eq!(
+        sketch.plane_binding,
+        replay::PlaneBinding::Constructed {
+            step: 1,
+            expect_si: 0.05
+        }
+    );
+}
+
+#[test]
+fn construction_plane_references_refuse_named_per_case() {
+    let points = r#"{ "id": "origin", "pos": [0.0, 0.0], "fixed": true },
+        { "id": "p1", "pos": [50.0, 0.0], "fixed": true },
+        { "id": "p2", "pos": [12.0, 30.0], "fixed": true }"#;
+    let sketch = |plane: &str| sketch_design(7, plane, points);
+    // Wrong type: the referenced feature is not a construction_plane.
+    let steps = plan_of(&sketch(r#"{ "type": "construction", "feature": 3 }"#));
     assert!(matches!(steps[1].work, Work::Unmappable));
     assert!(
-        steps[1].detail.contains("construction_plane feature 16"),
+        steps[1].detail.contains("not a construction_plane step"),
         "{}",
         steps[1].detail
     );
+    // Absent feature.
+    let steps = plan_of(&sketch(r#"{ "type": "construction", "feature": 999 }"#));
+    assert!(matches!(steps[1].work, Work::Unmappable));
+    assert!(
+        steps[1].detail.contains("not a construction_plane step"),
+        "{}",
+        steps[1].detail
+    );
+    // Suppressed plane step.
+    let design = r#"{"format": "solidcraft/57", "units": "mm", "params": [],
+        "features": [
+          {"id": 40, "name": "P", "suppressed": true, "type": "construction_plane",
+           "plane": {"type": "offset", "base": {"type": "origin", "name": "XY"}, "distance": "12 mm"}},
+          {"id": 41, "name": "S", "suppressed": false, "type": "sketch",
+           "plane": {"type": "construction", "feature": 40},
+           "sketch": {"points": [{"id": "origin", "pos": [0.0, 0.0], "fixed": true}],
+             "curves": [], "constraints": [], "counters": {"l": 0, "p": 1}}}
+        ]}"#;
+    let steps = plan_of(design);
+    assert!(matches!(steps[1].work, Work::Unmappable));
+    assert!(
+        steps[1].detail.contains("suppressed"),
+        "{}",
+        steps[1].detail
+    );
+    // Forward reference: the plane step comes after the sketch.
+    let design = r#"{"format": "solidcraft/57", "units": "mm", "params": [],
+        "features": [
+          {"id": 41, "name": "S", "suppressed": false, "type": "sketch",
+           "plane": {"type": "construction", "feature": 40},
+           "sketch": {"points": [{"id": "origin", "pos": [0.0, 0.0], "fixed": true}],
+             "curves": [], "constraints": [], "counters": {"l": 0, "p": 1}}},
+          {"id": 40, "name": "P", "suppressed": false, "type": "construction_plane",
+           "plane": {"type": "offset", "base": {"type": "origin", "name": "XY"}, "distance": "12 mm"}}
+        ]}"#;
+    let steps = plan_of(design);
+    // params: [] - the sketch is the first step and it stops named.
+    assert!(matches!(steps[0].work, Work::Unmappable));
+    assert!(
+        steps[0].detail.contains("forward reference"),
+        "{}",
+        steps[0].detail
+    );
+    // A non-replayed plane form on the construction_plane itself.
+    let design = r#"{"format": "solidcraft/57", "units": "mm", "params": [],
+        "features": [
+          {"id": 40, "name": "P", "suppressed": false, "type": "construction_plane",
+           "plane": {"type": "along_path", "path": {"type": "point", "p": [0,0,0]}, "t": "0"}},
+          {"id": 41, "name": "S", "suppressed": false, "type": "sketch",
+           "plane": {"type": "construction", "feature": 40},
+           "sketch": {"points": [{"id": "origin", "pos": [0.0, 0.0], "fixed": true}],
+             "curves": [], "constraints": [], "counters": {"l": 0, "p": 1}}}
+        ]}"#;
+    let steps = plan_of(design);
+    assert!(matches!(steps[0].work, Work::Unmappable));
+    assert!(
+        steps[0].detail.contains("only origin-based offset planes"),
+        "{}",
+        steps[0].detail
+    );
+    // The stop rule then carries the downstream sketch as not-executed -
+    // the plane step's named reason is the record.
+    assert!(matches!(steps[1].work, Work::AfterStop));
 }
 
 #[test]
@@ -834,4 +973,143 @@ fn fix_constraints_pin_endpoints_as_fix_relations() {
     for (_, eq) in &sketch.dim_equations {
         assert!(eq.rhs.contains("+ 3.2mm"), "{}", eq.rhs);
     }
+}
+
+#[test]
+fn offset_plane_emission_uses_the_probe_pinned_shapes() {
+    // The generated macro must carry the probe-backed call shapes
+    // (docs/source-probe-evidence.md): the exact InsertRefPlane form, the
+    // discovered-name dimension binding (never a hardcoded D1), the
+    // feature-object sketch opening, the componentwise signed placement
+    // check, the offset-aware restoration, and the plane fallback
+    // lifecycle. Independently authored synthetic fixture.
+    let design = r#"{"format": "solidcraft/57", "units": "mm",
+        "params": [{ "name": "W", "expr": "50 mm", "unit": "mm" }],
+        "features": [
+          {"id": 40, "name": "P", "suppressed": false, "type": "construction_plane",
+           "plane": {"type": "offset", "base": {"type": "origin", "name": "XY"}, "distance": "W"}},
+          {"id": 41, "name": "OnPlane", "suppressed": false, "type": "sketch",
+           "plane": {"type": "construction", "feature": 40},
+           "sketch": {
+             "points": [{"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+                        {"id": "p1", "pos": [50.0, 0.0], "fixed": true},
+                        {"id": "p2", "pos": [12.0, 30.0], "fixed": true}],
+             "curves": [
+               {"id": "l1", "type": "line", "a": 0, "b": 1},
+               {"id": "l2", "type": "line", "a": 1, "b": 2},
+               {"id": "l3", "type": "line", "a": 2, "b": 0}],
+             "constraints": [], "counters": {"l": 3, "p": 3}}},
+          {"id": 42, "name": "InlinePlane", "suppressed": false, "type": "sketch",
+           "plane": {"type": "offset", "base": {"type": "origin", "name": "XY"}, "distance": "12"},
+           "sketch": {
+             "points": [{"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+                        {"id": "p1", "pos": [50.0, 0.0], "fixed": true},
+                        {"id": "p2", "pos": [12.0, 30.0], "fixed": true}],
+             "curves": [
+               {"id": "l1", "type": "line", "a": 0, "b": 1},
+               {"id": "l2", "type": "line", "a": 1, "b": 2},
+               {"id": "l3", "type": "line", "a": 2, "b": 0}],
+             "constraints": [], "counters": {"l": 3, "p": 3}}}
+        ]}"#;
+    let dir = tempfile::tempdir().unwrap();
+    let recipe_path = dir.path().join("design.json");
+    let step_path = dir.path().join("part.step");
+    let artifact = dir.path().join("design.craftx");
+    let out: PathBuf = dir.path().join("design.swb");
+    fs::write(&recipe_path, design).unwrap();
+    fs::write(&step_path, STEP_FIXTURE).unwrap();
+    pack::pack(
+        &PackOptions {
+            recipe: &recipe_path,
+            step: &step_path,
+            out: &artifact,
+            warnings: None,
+            name: None,
+            overwrite: false,
+            snapshots: vec![(2usize, step_path.as_path())],
+            final_snapshot: None,
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    build::build(
+        &BuildOptions {
+            artifact: &artifact,
+            out: &out,
+            plan: None,
+            plan_text: None,
+            overwrite: true,
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    let m = fs::read_to_string(&out).unwrap();
+    // The probe-pinned creation call shape, exactly.
+    assert!(
+        m.contains("gFeatMgr.InsertRefPlane(8, "),
+        "{:?}",
+        "InsertRefPlane form"
+    );
+    assert!(
+        m.contains("0#, 0#, 0#, 0#)"),
+        "unused slots must be explicit zeros"
+    );
+    // Discovered-name binding: the dimension OBJECT, never a literal D1.
+    assert!(
+        m.contains("AddDimEquation(dm, "),
+        "the binding must use the discovered dimension"
+    );
+    assert!(
+        !m.contains("\"D1@"),
+        "no hardcoded dimension name may appear"
+    );
+    // Unit-suffixed equation text (bare SolidWorks numbers are document units).
+    assert!(
+        m.contains("12mm"),
+        "the bare literal distance must be unit-suffixed"
+    );
+    // Feature-object sketch opening and the offset acceptance twin.
+    assert!(m.contains("OpenSketchOnNamedPlane("));
+    assert!(m.contains("AcceptAndPublishOffset("));
+    // Componentwise signed placement check.
+    assert!(m.contains("refusing a mirrored or tangential placement"));
+    // Restoration re-accepts with the offset twin (never AcceptAndPublish).
+    assert!(m.contains("could not be re-accepted after recreation: "));
+    let clean_idx = m.find("Function CleanSketch").expect("CleanSketch exists");
+    let clean_end = m[clean_idx..]
+        .find("End Function")
+        .map(|e| clean_idx + e)
+        .unwrap();
+    let clean_body = &m[clean_idx..clean_end];
+    assert!(
+        clean_body.contains("AcceptAndPublishOffset("),
+        "the restoration path must use the offset acceptance: {clean_body}"
+    );
+    assert!(
+        !clean_body.contains("AcceptAndPublish(5, ")
+            && !clean_body.contains("AcceptAndPublish(6, "),
+        "the restoration must not use the origin-only acceptance for offset sketches"
+    );
+    // The fallback lifecycle deletes owned planes and clears their bindings.
+    let del_idx = m.find("Sub DeleteCreated()").expect("DeleteCreated exists");
+    let del_end = m[del_idx..].find("End Sub").map(|e| del_idx + e).unwrap();
+    let del_body = &m[del_idx..del_end];
+    assert!(
+        del_body.contains("planeName"),
+        "planes must be deleted in fallback"
+    );
+    assert!(
+        del_body.contains("planeFeat"),
+        "plane bindings must be cleared"
+    );
+    // Registry sizing covers the plane equations (slots 0 and 1 here).
+    assert!(
+        m.contains("Dim regName(0 To 1) As String"),
+        "registry sizing must include plane slots"
+    );
+    // The plane evidence reaches the runtime report (never overwritten).
+    assert!(
+        m.contains(" | plane: "),
+        "the sketch success message must carry the plane evidence"
+    );
 }

@@ -225,9 +225,26 @@ repository), never inferred from the plane-name letters. The XY row is
 seat-verified behaviour; the XZ and YZ rows are source-verified semantics
 whose seat compatibility awaits its first corpus item.
 
-An offset origin is still **refused** and the step fails closed; the report
-names every probed plane's observed frame (with its strict-match diagnostic)
-so a mismatch is legible. Preserving the original *view* orientation in
+An offset origin is replayed (2026-11-17): an `offset` plane from an
+origin base - inline on a sketch or as a `construction_plane` step - is
+created with the probe-pinned `InsertRefPlane(8, d, 0, 0, 0, 0)` call, its
+signed distance bound to the discovered plane dimension by equation, and
+the sketch frame accepted by a COMPONENTWISE check of the inverse-
+transformed sketch origin against `distance * base normal`. Either
+sketch-normal orientation is acceptable; either offset side is not - a
+mirrored or tangential placement is refused named. A zero offset binds to
+the base plane itself; a negative offset selects the unprobed side and is
+refused until the flip probe lands. Sketches on `construction` references
+resolve only to earlier, successfully planned plane steps (forward,
+suppressed, rolled-back and wrong-type references refuse with their own
+reasons).
+
+**Evidence boundary (plan review):** the probe-evidence above is the
+CALL SHAPE validated on the seat by
+`corpus/compat-check/probe-refplane.swb` (docs/source-probe-evidence.md);
+the GENERATED emitter path built from it has offline structural coverage
+only (tests/format57_tests.rs) and still awaits its first seat run before
+any acceptance claim. Preserving the original *view* orientation in
 SolidWorks is a later nicety, not part of fidelity.
 
 **Frame adaptation (the map):** each accepted probe publishes a 2x2 map from

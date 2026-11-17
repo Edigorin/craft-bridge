@@ -738,7 +738,6 @@ fn real_part_artifacts_stay_untracked() {
     }
 }
 
-
 // ---- the solid=none contract (a no-solid corpus item verifies absence
 // two-way; a solid-expected item keeps the fail-closed data gate) ----
 

@@ -121,6 +121,7 @@ pub enum Work {
         dim: expr::Dim,
     },
     Sketch(SketchStep),
+    OffsetPlane(PlaneStep),
     Extrude(ExtrudeStep),
     Revolve(RevolveStep),
     Primitive(PrimStep),
@@ -142,12 +143,153 @@ pub enum OriginPlane {
     Yz,
 }
 
+/// Who owns the physical plane a sketch opens on. Mutually exclusive:
+/// the source frame stays on `SketchStep.plane` (the base origin plane's
+/// (u,v) semantics); this binding says who CREATES the plane.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlaneBinding {
+    /// A SolidWorks origin plane carries the sketch directly.
+    Origin,
+    /// The sketch step owns an inline offset plane: created with its step,
+    /// its distance driven by this equation (a signed distance along the
+    /// base normal; zero binds to the base plane instead).
+    Offset {
+        /// The distance equation (rhs/segs/slot/expect_si in metres,
+        /// signed). Participates in registry sizing like any equation.
+        distance: DimEquation,
+    },
+    /// An earlier plan step owns the plane (dense index of a
+    /// `Work::OffsetPlane` step); the sketch only selects it. expect_si is
+    /// the signed distance for frame validation (0 = the base plane).
+    Constructed { step: usize, expect_si: f64 },
+}
+
+/// A construction-plane step: `construction_plane` with an offset plane.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlaneStep {
+    /// The stable feature name the emitter renames the plane to.
+    pub name: String,
+    /// The base origin plane (frame semantics and base normal).
+    pub base: OriginPlane,
+    /// The signed distance along the base normal. None = zero offset: the
+    /// plane IS the base plane (no creation).
+    pub distance: Option<DimEquation>,
+}
+
+/// Resolution context for `plane: {type: "construction", feature: N}`:
+/// earlier successfully planned plane steps, and why the others are not
+/// available (named refusals, never a guess).
+pub struct PlaneResolver<'a> {
+    /// Earlier planned planes: (source feature id, dense step index, base,
+    /// signed distance).
+    pub planned: &'a [(u64, usize, OriginPlane, f64)],
+    /// Source ids whose plane step did not plan (suppressed, rolled back,
+    /// stopped): named reasons, never a guess.
+    pub unavailable: &'a [(u64, String)],
+    /// Every construction_plane source id with its feature position (the
+    /// forward-reference check).
+    pub universe: &'a [(u64, usize)],
+    /// The referencing feature's own position in the features array.
+    pub position: usize,
+}
+
+/// Resolve a `plane: {type: "construction", feature: N}` reference to the
+/// plane step that owns it. Only earlier, successfully planned plane
+/// steps resolve; everything else refuses with its named reason.
+pub fn resolve_construction_plane<'a>(
+    resolver: &'a PlaneResolver<'a>,
+    fid: u64,
+) -> std::result::Result<(usize, OriginPlane, f64), String> {
+    if let Some((step, base, expect)) = resolver
+        .planned
+        .iter()
+        .find(|(id, _, _, _)| *id == fid)
+        .map(|(_, step, base, expect)| (*step, *base, *expect))
+    {
+        return Ok((step, base, expect));
+    }
+    if let Some((_, reason)) = resolver.unavailable.iter().find(|(id, _)| *id == fid) {
+        return Err(reason.clone());
+    }
+    if let Some((_, pos)) = resolver.universe.iter().find(|(id, _)| *id == fid) {
+        return Err(format!(
+            "the referenced construction_plane feature {fid} at feature position {pos} is not an earlier planned plane step (forward reference or unprocessed)"
+        ));
+    }
+    Err(format!(
+        "feature {fid} is not a construction_plane step in this design"
+    ))
+}
+
+/// The signed offset distance of a plane: a `distance` expression along
+/// the base normal. Zero binds to the base plane (defined behavior); a
+/// negative value selects the unprobed side of the base plane and refuses
+/// named until the flip probe pins it.
+fn plane_distance_binding(
+    plane_v: &Value,
+    env: &ParamEnv,
+    design_factor: f64,
+    design_text: &'static str,
+    model_slots: &mut [(String, usize)],
+    next_slot: &mut usize,
+) -> std::result::Result<PlaneBinding, Error> {
+    let distance = plane_v
+        .get("distance")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            Error::Unsupported("the offset plane has no distance expression".to_string())
+        })?;
+    let node = expr::parse(distance)
+        .map_err(|e| Error::Unsupported(format!("the offset distance does not parse: {e}")))?;
+    let ctx = expr::Context::for_unit("", design_factor, design_text);
+    let q = expr::eval(&node, &ctx, &env.lookup())
+        .map_err(|e| Error::Unsupported(format!("the offset distance does not evaluate: {e}")))?;
+    if q.dim != expr::Dim::Length {
+        return Err(Error::Unsupported(format!(
+            "the offset distance is not a length (its dimension is {:?})",
+            q.dim
+        )));
+    }
+    if q.value.abs() < 1e-12 {
+        // A zero offset IS the base plane: no creation, no equation.
+        return Ok(PlaneBinding::Origin);
+    }
+    if q.value < 0.0 {
+        return Err(Error::Unsupported(format!(
+            "the offset distance {distance} evaluates to {} m: a negative offset selects the unprobed side of the base plane; refusing until the flip probe pins the side",
+            q.value
+        )));
+    }
+    let segs =
+        expr::translate_with(&node, &ctx, &|n| resolve_name(n, env, model_slots)).map_err(|e| {
+            Error::Unsupported(format!(
+                "the offset distance is not expressible as an equation: {e}"
+            ))
+        })?;
+    let rhs = expr::translate(&node, &ctx);
+    let slot = *next_slot;
+    *next_slot += 1;
+    Ok(PlaneBinding::Offset {
+        distance: DimEquation {
+            which: 0,
+            rhs,
+            segs: coalesce(segs.into_iter().map(seg_from).collect()),
+            expect_si: q.value,
+            slot,
+        },
+    })
+}
+
 /// A sketch that can be replayed: lines and circles on an origin plane, only
 /// the relation and dimension kinds listed in docs/mapping.md.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SketchStep {
     pub name: String,
     pub plane: OriginPlane,
+    /// Who owns the physical plane (origin plane, inline offset, or an
+    /// earlier construction-plane step). Mutually exclusive with `plane`,
+    /// which stays the SOURCE frame the coordinates live in.
+    pub plane_binding: PlaneBinding,
     /// Millimetres, recipe order.
     pub points: Vec<[f64; 2]>,
     pub lines: Vec<LineT>,
@@ -426,6 +568,7 @@ pub struct RevolveStep {
 /// shapes: the script's `parameters.add` step and a solidcraft/57 `params`
 /// entry. A text parameter or an expression outside the supported subset is
 /// a recorded note, never a stop.
+#[allow(clippy::too_many_arguments)]
 fn plan_user_param(
     index: usize,
     source_id: String,
@@ -574,6 +717,12 @@ pub fn plan(
                 &sketch_steps,
                 &mut model_slots,
                 &mut next_slot,
+                &PlaneResolver {
+                    planned: &[],
+                    unavailable: &[],
+                    universe: &[],
+                    position: 0,
+                },
             )?,
             _ => PlannedStep {
                 index,
@@ -648,6 +797,16 @@ fn plan57(
         .get("marker")
         .and_then(Value::as_u64)
         .unwrap_or(u64::MAX) as usize;
+    // Construction-plane reference universe: every construction_plane
+    // feature id with its position (the forward-reference check).
+    let plane_universe: Vec<(u64, usize)> = crate::recipe::features_of(recipe)?
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.get("type").and_then(Value::as_str) == Some("construction_plane"))
+        .map(|(pos, f)| (f.get("id").and_then(Value::as_u64).unwrap_or(0), pos))
+        .collect();
+    let mut planned_planes: Vec<(u64, usize, OriginPlane, f64)> = Vec::new();
+    let mut plane_unavailable: Vec<(u64, String)> = Vec::new();
     for p in crate::recipe::params57_of(recipe)? {
         let name = p
             .get("name")
@@ -701,6 +860,12 @@ fn plan57(
                 work: Work::AfterStop,
             }
         } else {
+            let resolver = PlaneResolver {
+                planned: &planned_planes,
+                unavailable: &plane_unavailable,
+                universe: &plane_universe,
+                position,
+            };
             plan_feature57(
                 index,
                 f,
@@ -712,6 +877,7 @@ fn plan57(
                 &sketch_steps,
                 &mut model_slots,
                 &mut next_slot,
+                &resolver,
             )?
         };
         if matches!(
@@ -723,6 +889,23 @@ fn plan57(
                 | Work::Modifier(_)
         ) {
             sketch_steps.push((fid, index));
+        }
+        // Construction-plane steps: record what resolved so later sketches
+        // can bind to exactly the planes that planned.
+        if f.get("type").and_then(Value::as_str) == Some("construction_plane") {
+            match &planned.work {
+                Work::OffsetPlane(pl) => {
+                    let expect = pl.distance.as_ref().map(|d| d.expect_si).unwrap_or(0.0);
+                    planned_planes.push((fid, index, pl.base, expect));
+                }
+                _ => {
+                    let reason = match planned.work {
+                        Work::Note => planned.detail.clone(),
+                        _ => planned.detail.clone(),
+                    };
+                    plane_unavailable.push((fid, reason));
+                }
+            }
         }
         let stop_here = matches!(planned.work, Work::Unmappable)
             && snapshots.get(&index) != Some(&crate::profile::SnapshotScope::Boundary);
@@ -751,6 +934,7 @@ fn plan_feature57(
     sketch_steps: &[(u64, usize)],
     model_slots: &mut Vec<(String, usize)>,
     next_slot: &mut usize,
+    plane_resolver: &PlaneResolver<'_>,
 ) -> Result<PlannedStep> {
     let kind = feature.get("type").and_then(Value::as_str).unwrap_or("");
     let fid = feature.get("id").and_then(Value::as_u64).unwrap_or(0);
@@ -799,6 +983,7 @@ fn plan_feature57(
                 sketch_steps,
                 model_slots,
                 next_slot,
+                plane_resolver,
             )?;
             planned.source_id = source_id;
             // Named-stop contract: the refusal keeps the feature's name as
@@ -820,7 +1005,73 @@ fn plan_feature57(
         "combine" => Ok(unmappable(format!(
             "combine {name:?} needs the source-body-to-runtime-body registry and the merge/scope probe (Phase B)"
         ))),
-        "construction_plane" | "construction_axis" | "construction_point" | "sweep" | "loft"
+        "construction_plane" => {
+            // The replayed variant is an offset plane from an origin base
+            // (its creation and equation chain are seat-probe-backed).
+            // Every other plane construction stops named with its form.
+            let plane_v = match feature.get("plane") {
+                Some(v) => v,
+                None => {
+                    return Ok(unmappable(format!(
+                        "construction_plane {name:?} has no plane definition"
+                    )))
+                }
+            };
+            if plane_v.get("type").and_then(Value::as_str) != Some("offset") {
+                let form = plane_v.get("type").and_then(Value::as_str).unwrap_or("?");
+                return Ok(unmappable(format!(
+                    "construction_plane {name:?} is a {form:?} plane; only origin-based offset planes replay (Phase C for the rest)"
+                )));
+            }
+            let base = match (
+                plane_v.get("base").and_then(|b| b.get("type")).and_then(Value::as_str),
+                plane_v.get("base").and_then(|b| b.get("name")).and_then(Value::as_str),
+            ) {
+                (Some("origin"), Some("XY")) => OriginPlane::Xy,
+                (Some("origin"), Some("XZ")) => OriginPlane::Xz,
+                (Some("origin"), Some("YZ")) => OriginPlane::Yz,
+                (bt, bn) => {
+                    return Ok(unmappable(format!(
+                        "construction_plane {name:?} is offset from {bt:?}/{bn:?}: only origin-plane bases replay"
+                    )))
+                }
+            };
+            match plane_distance_binding(plane_v, env, design_factor, design_text, model_slots, next_slot) {
+                Ok(PlaneBinding::Offset { distance }) => Ok(PlannedStep {
+                    index,
+                    source_id,
+                    command: kind.to_string(),
+                    status: PlanStatus::Mapped,
+                    detail: format!(
+                        "construction_plane {name:?}: offset plane from {base:?}, the distance driven by its equation"
+                    ),
+                    work: Work::OffsetPlane(PlaneStep {
+                        name: format!("CB_Plane_{index}"),
+                        base,
+                        distance: Some(distance),
+                    }),
+                }),
+                Ok(_) => Ok(PlannedStep {
+                    index,
+                    source_id,
+                    command: kind.to_string(),
+                    status: PlanStatus::Mapped,
+                    detail: format!(
+                        "construction_plane {name:?}: a zero offset - the plane is the {base:?} base plane itself"
+                    ),
+                    work: Work::OffsetPlane(PlaneStep {
+                        name: format!("CB_Plane_{index}"),
+                        base,
+                        distance: None,
+                    }),
+                }),
+                Err(Error::Unsupported(reason)) => {
+                    Ok(unmappable(format!("construction_plane {name:?}: {reason}")))
+                }
+                Err(e) => Err(e),
+            }
+        }
+        "construction_axis" | "construction_point" | "sweep" | "loft"
         | "torus" | "sphere" | "cone" | "coil" | "pipe" | "pattern" | "mirror" => {
             Ok(unmappable(format!(
                 "{kind} {name:?} is a feature class without a replay mapping yet (Phase C)"
@@ -848,6 +1099,7 @@ fn plan_feature(
     sketch_steps: &[(u64, usize)],
     model_slots: &mut Vec<(String, usize)>,
     next_slot: &mut usize,
+    plane_resolver: &PlaneResolver<'_>,
 ) -> Result<PlannedStep> {
     let feature = params
         .and_then(|p| p.get("feature"))
@@ -903,7 +1155,7 @@ fn plan_feature(
         }
     }
     Ok(match kind {
-        "sketch" => match parse_sketch(name, feature, limits, &model_exprs, env, design_factor, design_text, model_slots, next_slot) {
+        "sketch" => match parse_sketch(name, feature, limits, &model_exprs, env, design_factor, design_text, model_slots, next_slot, plane_resolver) {
             Ok((sketch, degrade)) => {
                 let dropped = sketch.dropped_constraints.len();
                 let detail = if degrade {
@@ -1143,47 +1395,60 @@ fn parse_sketch(
     design_text: &'static str,
     model_slots: &mut Vec<(String, usize)>,
     next_slot: &mut usize,
+    plane_resolver: &PlaneResolver<'_>,
 ) -> Result<(SketchStep, bool)> {
     let plane_v = feature
         .get("plane")
         .ok_or_else(|| Error::InvalidRecipe("sketch has no plane".to_string()))?;
-    let plane = match (
+    let (plane, plane_binding) = match (
         plane_v.get("type").and_then(Value::as_str),
         plane_v.get("name").and_then(Value::as_str),
     ) {
-        (Some("origin"), Some("XY")) => OriginPlane::Xy,
-        (Some("origin"), Some("XZ")) => OriginPlane::Xz,
-        (Some("origin"), Some("YZ")) => OriginPlane::Yz,
+        (Some("origin"), Some("XY")) => (OriginPlane::Xy, PlaneBinding::Origin),
+        (Some("origin"), Some("XZ")) => (OriginPlane::Xz, PlaneBinding::Origin),
+        (Some("origin"), Some("YZ")) => (OriginPlane::Yz, PlaneBinding::Origin),
         (Some("offset"), _) => {
-            // The 57 offset plane is fully understood (base plane, driven
-            // distance); what is missing is plane CREATION in the emitted
-            // macro - that API shape is unpinned until the offset-plane
-            // probe lands. Named, never guessed.
-            let base = plane_v
-                .get("base")
-                .and_then(|b| b.get("name"))
-                .and_then(Value::as_str)
-                .unwrap_or("?");
-            let distance = plane_v
-                .get("distance")
-                .and_then(Value::as_str)
-                .unwrap_or("?");
-            return Err(Error::Unsupported(format!(
-                "sketch plane is an offset plane (offset from {base} by {distance});                  plane creation is unpinned until the offset-plane probe lands"
-            )));
+            // Signed distance along the base normal (source semantics:
+            // "offset by signed expression distance along base normal").
+            let base = match (
+                plane_v.get("base").and_then(|b| b.get("type")).and_then(Value::as_str),
+                plane_v.get("base").and_then(|b| b.get("name")).and_then(Value::as_str),
+            ) {
+                (Some("origin"), Some("XY")) => OriginPlane::Xy,
+                (Some("origin"), Some("XZ")) => OriginPlane::Xz,
+                (Some("origin"), Some("YZ")) => OriginPlane::Yz,
+                (bt, bn) => {
+                    return Err(Error::Unsupported(format!(
+                        "sketch plane is offset from {bt:?}/{bn:?}: only origin-plane bases are replayed"
+                    )))
+                }
+            };
+            let binding = plane_distance_binding(
+                plane_v,
+                env,
+                design_factor,
+                design_text,
+                model_slots,
+                next_slot,
+            )?;
+            (base, binding)
         }
         (Some("construction"), _) => {
-            // A sketch on a construction_plane feature (the solidcraft/57
-            // associative form): needs plane creation AND the reference
-            // chain to the feature.
-            let feature = plane_v
-                .get("feature")
-                .and_then(Value::as_u64)
-                .map(|f| f.to_string())
-                .unwrap_or_else(|| "?".to_string());
-            return Err(Error::Unsupported(format!(
-                "sketch plane references construction_plane feature {feature}; plane creation is unpinned until the offset-plane probe lands"
-            )));
+            let fid = plane_v.get("feature").and_then(Value::as_u64).unwrap_or(0);
+            match resolve_construction_plane(plane_resolver, fid) {
+                Ok((step, base, expect_si)) => {
+                    if expect_si.abs() < 1e-12 {
+                        (base, PlaneBinding::Origin)
+                    } else {
+                        (base, PlaneBinding::Constructed { step, expect_si })
+                    }
+                }
+                Err(reason) => {
+                    return Err(Error::Unsupported(format!(
+                        "sketch plane references construction_plane feature {fid}: {reason}"
+                    )))
+                }
+            }
         }
         (Some(other), _) => {
             return Err(Error::Unsupported(format!(
@@ -1575,6 +1840,7 @@ fn parse_sketch(
     let mut sketch = SketchStep {
         name,
         plane,
+        plane_binding,
         points,
         lines,
         circles,

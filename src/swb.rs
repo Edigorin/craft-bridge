@@ -205,7 +205,20 @@ pub fn emit(
     let max_slot = steps
         .iter()
         .filter_map(|s| match &s.work {
-            Work::Sketch(sk) => sk.dim_equations.iter().map(|(_, e)| e.slot).max(),
+            // Plane distance equations (construction-plane steps and the
+            // inline planes owned by sketches) share the registry arrays:
+            // omitting their slots would size the arrays out from under a
+            // runtime write (plan review).
+            Work::Sketch(sk) => sk
+                .dim_equations
+                .iter()
+                .map(|(_, e)| e.slot)
+                .chain(match &sk.plane_binding {
+                    crate::replay::PlaneBinding::Offset { distance } => Some(distance.slot),
+                    _ => None,
+                })
+                .max(),
+            Work::OffsetPlane(pl) => pl.distance.as_ref().map(|e| e.slot),
             Work::Extrude(ex) => ex.equations.iter().map(|e| e.slot).max(),
             Work::Revolve(rv) => rv.equations.iter().map(|e| e.slot).max(),
             Work::Primitive(pr) => pr
@@ -279,6 +292,19 @@ pub fn emit(
             Work::Extrude(_) | Work::Revolve(_) | Work::Primitive(_) | Work::Modifier(_)
         ) {
             out.push_str(&format!("Dim feat{} As SldWorks.Feature\n", s.index));
+        }
+        // Owned planes (construction-plane steps and the inline planes of
+        // offset-bound sketches) carry their live feature and name.
+        let owns_plane = match &s.work {
+            Work::OffsetPlane(_) => true,
+            Work::Sketch(sk) => {
+                matches!(sk.plane_binding, crate::replay::PlaneBinding::Offset { .. })
+            }
+            _ => false,
+        };
+        if owns_plane {
+            out.push_str(&format!("Dim planeFeat{} As SldWorks.Feature\n", s.index));
+            out.push_str(&format!("Dim planeName{} As String\n", s.index));
         }
     }
     for (index, sk) in &sketches {
@@ -389,6 +415,25 @@ pub fn emit(
                     vb_lit(&step.command),
                     vb_lit(&step.detail)
                 ));
+            }
+            Work::OffsetPlane(pl) => {
+                out.push_str("    If Not stopModel Then\n");
+                if pl.distance.is_some() {
+                    out.push_str(&format!("        st = BuildPlane{}()\n", step.index));
+                } else {
+                    // A zero offset is the base plane itself: defined
+                    // behavior, no creation call.
+                    out.push_str(&format!(
+                        "        st = \"created\"\n        gMsg = \"the offset is zero: the plane is the {} base plane itself\"\n",
+                        plane_code(pl.base)
+                    ));
+                }
+                out.push_str("    Else\n        st = \"not-executed\"\n        gMsg = \"after the first stopped step\"\n    End If\n");
+                out.push_str(&format!(
+                    "    WriteStep stepIdx, {}, st, gMsg\n",
+                    vb_lit(&step.command)
+                ));
+                out.push_str("    If st = \"failed\" Then stopModel = True\n\n");
             }
             Work::Sketch(_) => {
                 out.push_str("    If Not stopModel Then\n");
@@ -536,6 +581,37 @@ pub fn emit(
         .collect();
     for (index, pt) in &pats {
         out.push_str(&emit_pat_subs(*index, pt));
+    }
+    // Plane support (construction-plane steps and offset-bound sketches):
+    // the probe-backed helpers and one builder per owned plane. Conditional
+    // emission keeps legacy macros byte-identical.
+    let needs_planes = steps.iter().any(|s| match &s.work {
+        Work::OffsetPlane(p) => p.distance.is_some(),
+        Work::Sketch(sk) => !matches!(sk.plane_binding, crate::replay::PlaneBinding::Origin),
+        _ => false,
+    });
+    if needs_planes {
+        out.push_str(&emit_plane_helpers());
+        for s in steps {
+            match &s.work {
+                Work::OffsetPlane(pl) => {
+                    if pl.distance.is_some() {
+                        out.push_str(&emit_plane_creation(s.index, pl));
+                    }
+                }
+                Work::Sketch(sk) => {
+                    if let crate::replay::PlaneBinding::Offset { distance } = &sk.plane_binding {
+                        let inline = crate::replay::PlaneStep {
+                            name: format!("CB_Plane_{}", s.index),
+                            base: sk.plane,
+                            distance: Some(distance.clone()),
+                        };
+                        out.push_str(&emit_plane_creation(s.index, &inline));
+                    }
+                }
+                _ => {}
+            }
+        }
     }
     // Fallback builders for snapshot-covered steps, and the transaction
     // helpers they share: restore the pre-step state (delete everything
@@ -1440,6 +1516,212 @@ End Function\n",
 
 /// Per-sketch subs: BuildSketchN (orchestrator with the restore path),
 /// DrawGeometryN, RelationsN, DimsN, VerifySketchN, CleanSketchN.
+/// Shared macro helpers for plane support (conditional emission; legacy
+/// macros stay byte-identical). The call shapes are the probe-pinned ones
+/// (docs/source-probe-evidence.md): the base plane is found by frame
+/// probing (names and tree positions are never trusted), the plane is
+/// created with InsertRefPlane(8, d, 0, 0, 0, 0), and the offset frame is
+/// accepted with a COMPONENTWISE signed-origin check - either sketch
+/// normal orientation, never either offset side.
+fn emit_plane_helpers() -> String {
+    let mut out = String::new();
+    out.push_str(
+        "' Select the origin plane carrying the source frame for base use:\n\
+Function SelectPlaneOriginByFrame(ByVal which As String) As Boolean\n\
+    Dim feat As SldWorks.Feature\n\
+    Dim sk As Object\n\
+    Dim ok As Boolean\n\
+    SelectPlaneOriginByFrame = False\n\
+    Set feat = swDoc.FirstFeature\n\
+    Do While Not feat Is Nothing\n\
+        If InStr(1, feat.GetTypeName2(), \"lane\", vbTextCompare) > 0 Then\n\
+            swDoc.ClearSelection2 True\n\
+            ok = feat.Select(False)\n\
+            If ok Then\n\
+                swSketchMgr.InsertSketch True\n\
+                Set sk = swSketchMgr.ActiveSketch\n\
+                If Not sk Is Nothing Then\n\
+                    If PlaneIsSource(which) Then\n\
+                        swSketchMgr.InsertSketch True\n\
+                        swDoc.ClearSelection2 True\n\
+                        If feat.Select(False) Then\n\
+                            SelectPlaneOriginByFrame = True\n\
+                            Exit Function\n\
+                        End If\n\
+                    Else\n\
+                        swSketchMgr.InsertSketch True\n\
+                    End If\n\
+                End If\n\
+            End If\n\
+        End If\n\
+        Set feat = feat.GetNextFeature\n\
+    Loop\n\
+End Function\n\n",
+    );
+    out.push_str(
+        "' Accept a probe sketch on a plane parallel to the source plane at\n\
+' signed distance distM along the source normal and publish its map: the\n\
+' inverse-transformed sketch origin must equal the complete expected\n\
+' model-space vector, componentwise. Either sketch-normal orientation is\n\
+' acceptable; either offset side is not. Transactional like\n\
+' AcceptAndPublish: the map publishes only after validation passes.\n\
+Function AcceptAndPublishOffset(ByVal idx As Long, ByVal which As String, ByVal distM As Double, ByRef reason As String) As Boolean\n\
+    Dim tr As Object\n\
+    Dim a As Variant\n\
+    Dim uPx As Double, uPy As Double, uPz As Double\n\
+    Dim vPx As Double, vPy As Double, vPz As Double\n\
+    Dim nPx As Double, nPy As Double, nPz As Double\n\
+    Dim ox As Double, oy As Double, oz As Double\n\
+    Dim ex As Double, ey As Double, ez As Double\n\
+    On Error GoTo AccFailO\n\
+    AcceptAndPublishOffset = False\n\
+    reason = \"\"\n\
+    Select Case which\n\
+    Case \"XY\"\n\
+        uPx = 1#: uPy = 0#: uPz = 0#\n\
+        vPx = 0#: vPy = 1#: vPz = 0#\n\
+        nPx = 0#: nPy = 0#: nPz = 1#\n\
+    Case \"XZ\"\n\
+        uPx = 1#: uPy = 0#: uPz = 0#\n\
+        vPx = 0#: vPy = 0#: vPz = -1#\n\
+        nPx = 0#: nPy = 1#: nPz = 0#\n\
+    Case \"YZ\"\n\
+        uPx = 0#: uPy = 1#: uPz = 0#\n\
+        vPx = 0#: vPy = 0#: vPz = 1#\n\
+        nPx = 1#: nPy = 0#: nPz = 0#\n\
+    Case Else\n\
+        reason = \"unknown source plane \" & which\n\
+        Exit Function\n\
+    End Select\n\
+    Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform\n\
+    If tr Is Nothing Then\n\
+        reason = \"the transform is missing\"\n\
+        Exit Function\n\
+    End If\n\
+    a = tr.ArrayData\n\
+    ' the sketch origin in model space: O = -(trans . axes)\n\
+    ox = -(a(9) * a(0) + a(10) * a(1) + a(11) * a(2))\n\
+    oy = -(a(9) * a(3) + a(10) * a(4) + a(11) * a(5))\n\
+    oz = -(a(9) * a(6) + a(10) * a(7) + a(11) * a(8))\n\
+    ex = distM * nPx: ey = distM * nPy: ez = distM * nPz\n\
+    If Abs(ox - ex) > 0.000001 Or Abs(oy - ey) > 0.000001 Or Abs(oz - ez) > 0.000001 Then\n\
+        reason = \"the sketch origin is \" & Vec3Text(ox, oy, oz) & \" in model space, expected \" & Vec3Text(ex, ey, ez) & \" (signed distance \" & Trim(Str(distM)) & \" along the \" & which & \" source normal); refusing a mirrored or tangential placement\"\n\
+        Exit Function\n\
+    End If\n\
+    If Not PublishMap(idx, uPx, uPy, uPz, vPx, vPy, vPz, nPx, nPy, nPz, reason) Then Exit Function\n\
+    AcceptAndPublishOffset = True\n\
+    Exit Function\n\
+AccFailO:\n\
+    reason = \"the frame read failed: err \" & Trim(Str(Err.Number)) & \": \" & Err.Description\n\
+End Function\n\n",
+    );
+    out.push_str(
+        "' Open a sketch on the NAMED plane this macro created and accept its\n\
+' offset frame. The plane feature object is selected by its captured name.\n\
+Function OpenSketchOnNamedPlane(ByVal idx As Long, ByVal planeName As String, ByVal which As String, ByVal distM As Double) As Boolean\n\
+    Dim feat As SldWorks.Feature\n\
+    Dim sk As Object\n\
+    Dim uncertain As Boolean\n\
+    OpenSketchOnNamedPlane = False\n\
+    If planeName = \"\" Then Exit Function\n\
+    Set feat = FindFeatureByName(planeName, uncertain)\n\
+    If feat Is Nothing Then Exit Function\n\
+    swDoc.ClearSelection2 True\n\
+    If Not feat.Select(False) Then Exit Function\n\
+    swSketchMgr.InsertSketch True\n\
+    Set sk = swSketchMgr.ActiveSketch\n\
+    If sk Is Nothing Then Exit Function\n\
+    If Not AcceptAndPublishOffset(idx, which, distM, gProbeReason) Then\n\
+        gProbeLog = gProbeLog & planeName & \": offset frame refused: \" & gProbeReason & \"; \"\n\
+        Exit Function\n\
+    End If\n\
+    OpenSketchOnNamedPlane = True\n\
+End Function\n\n",
+    );
+    out
+}
+
+/// One plane-creation function: the probe-pinned InsertRefPlane form, the
+/// signed componentwise placement check, and the distance dimension bound
+/// through the discovered name (AddDimEquation reads it back and verifies
+/// the driven value - never a hardcoded D1).
+fn emit_plane_creation(index: usize, pl: &crate::replay::PlaneStep) -> String {
+    let dist = pl
+        .distance
+        .as_ref()
+        .map(|d| vba_num(d.expect_si))
+        .unwrap_or_else(|| "0#".to_string());
+    let (nx, ny, nz) = match pl.base {
+        OriginPlane::Xy => ("0#", "0#", "1#"),
+        OriginPlane::Xz => ("0#", "1#", "0#"),
+        OriginPlane::Yz => ("1#", "0#", "0#"),
+    };
+    let which = plane_code(pl.base);
+    let (rhs, expect, slot) = match &pl.distance {
+        Some(d) => (rhs_vba(d), vba_num(d.expect_si), d.slot as i64),
+        None => ("\"\"".to_string(), "0#".to_string(), -1),
+    };
+    format!(
+        "' Plane step {index}: create the offset plane at signed distance\n\
+' along the {which} source normal and bind its distance dimension - the\n\
+' dimension NAME is discovered and read back, never assumed.\n\
+Function BuildPlane{index}() As String\n\
+    On Error GoTo PlaneFail\n\
+    Dim ok As Boolean\n\
+    Dim feat As SldWorks.Feature\n\
+    Dim rp As Object\n\
+    Dim tr As Object\n\
+    Dim a As Variant\n\
+    Dim dd As SldWorks.DisplayDimension\n\
+    Dim dm As SldWorks.Dimension\n\
+    Dim ox As Double, oy As Double, oz As Double\n\
+    Dim ex As Double, ey As Double, ez As Double\n\
+    gMsg = \"\"\n\
+    ok = SelectPlaneOriginByFrame(\"{which}\")\n\
+    If ok = False Then gMsg = \"no origin plane carries the {which} frame for the offset base; probed: \" & gProbeLog & \"; tree scan saw: \" & TreeSummary(): GoTo PlaneFail\n\
+    Set feat = gFeatMgr.InsertRefPlane(8, {dist}, 0#, 0#, 0#, 0#)\n\
+    If feat Is Nothing Then gMsg = \"InsertRefPlane(8, {dist}, 0, 0, 0, 0) returned nothing\": GoTo PlaneFail\n\
+    swDoc.EditRebuild3\n\
+    feat.Name = \"{pname}\"\n\
+    If feat.Name <> \"{pname}\" Then gMsg = \"the plane feature would not take the name {pname} (reads \" & feat.Name & \")\": GoTo PlaneFail\n\
+    Set rp = Nothing\n\
+    Set rp = feat.GetSpecificFeature2\n\
+    If rp Is Nothing Then gMsg = \"the created plane has no reference-plane face\": GoTo PlaneFail\n\
+    Set tr = rp.Transform\n\
+    If tr Is Nothing Then gMsg = \"the created plane has no transform\": GoTo PlaneFail\n\
+    a = tr.ArrayData\n\
+    If Not IsArray(a) Then gMsg = \"the plane transform ArrayData is not an array\": GoTo PlaneFail\n\
+    If UBound(a) <> 15 Then gMsg = \"the plane transform has \" & Trim(Str(UBound(a) + 1)) & \" entries; expected 16\": GoTo PlaneFail\n\
+    ox = a(9): oy = a(10): oz = a(11)\n\
+    ex = {dist} * {nx}: ey = {dist} * {ny}: ez = {dist} * {nz}\n\
+    If Abs(ox - ex) > 0.000001 Or Abs(oy - ey) > 0.000001 Or Abs(oz - ez) > 0.000001 Then\n\
+        gMsg = \"the created plane sits at \" & Vec3Text(ox, oy, oz) & \", expected \" & Vec3Text(ex, ey, ez) & \" (signed distance {dist} along the {which} normal); refusing a mirrored or tangential placement\"\n\
+        GoTo PlaneFail\n\
+    End If\n\
+    Set dd = feat.GetFirstDisplayDimension\n\
+    If dd Is Nothing Then gMsg = \"the offset plane carries no display dimension to drive\": GoTo PlaneFail\n\
+    Set dm = dd.GetDimension2(0)\n\
+    If dm Is Nothing Then gMsg = \"the offset dimension has no core dimension\": GoTo PlaneFail\n\
+    If Not AddDimEquation(dm, {rhs}, {expect}, {slot}, 1#, \"{pname}\", 1#) Then GoTo PlaneFail\n\
+    Set planeFeat{index} = feat\n\
+    planeName{index} = \"{pname}\"\n\
+    BuildPlane{index} = \"created\"\n\
+    gMsg = \"offset plane {pname} created at \" & Vec3Text(ox, oy, oz) & \"; dimension \" & dm.Name & \" bound and verified\"\n\
+    Exit Function\n\
+PlaneFail:\n\
+    BuildPlane{index} = \"failed\"\n\
+End Function\n\n",
+        index = index,
+        which = which,
+        dist = dist,
+        nx = nx, ny = ny, nz = nz,
+        pname = vb_lit(&pl.name),
+        rhs = rhs,
+        expect = expect,
+        slot = slot,
+    )
+}
+
 fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     let mut out = String::new();
     let initial_status = if sk.dropped_constraints.is_empty() {
@@ -1466,19 +1748,41 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
         initial_msg.push_str(&format!("; driver notes: {}", sk.driver_notes.join("; ")));
     }
     out.push_str(&format!("' Sketch step {index}: {}\n", vb_lit(&sk.name)));
+    let (extra_dims, open_calls) = match &sk.plane_binding {
+        crate::replay::PlaneBinding::Origin => (
+            String::new(),
+            format!(
+                "    ok = OpenSketchOnPlane({}, {})\n    If ok = False Then gMsg = \"no origin plane carries the {} frame {}; probed: \" & gProbeLog & \"; tree scan saw: \" & TreeSummary(): GoTo SketchFailed\n",
+                index,
+                vb_lit(plane_code(sk.plane)),
+                plane_code(sk.plane),
+                frame_desc(solidcraft_frame(sk.plane))
+            ),
+        ),
+        crate::replay::PlaneBinding::Offset { distance } => (
+            "    Dim st As String\n    Dim planeMsg As String\n".to_string(),
+            format!(
+                "    st = BuildPlane{index}()\n    If st <> \"created\" Then gMsg = \"the inline offset plane could not be created: \" & gMsg: GoTo SketchFailed\n    planeMsg = gMsg\n    ok = OpenSketchOnNamedPlane({index}, planeName{index}, \"{which}\", {dist})\n    If ok = False Then gMsg = \"the sketch would not open on its offset plane \" & planeName{index} & \"; probed: \" & gProbeLog: GoTo SketchFailed\n",
+                index = index,
+                which = plane_code(sk.plane),
+                dist = vba_num(distance.expect_si),
+            ),
+        ),
+        crate::replay::PlaneBinding::Constructed { step, expect_si } => (
+            String::new(),
+            format!(
+                "    ok = OpenSketchOnNamedPlane({index}, planeName{pstep}, \"{which}\", {dist})\n    If ok = False Then gMsg = \"the sketch would not open on the plane of construction step {pstep} (name=<\" & planeName{pstep} & \">); probed: \" & gProbeLog: GoTo SketchFailed\n",
+                index = index,
+                pstep = step,
+                which = plane_code(sk.plane),
+                dist = vba_num(*expect_si),
+            ),
+        ),
+    };
     out.push_str(&format!(
-        "Function BuildSketch{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim skFeat As SldWorks.Feature\n    Dim uncertain As Boolean\n    gMsg = \"\"\n    gOmit = \"\"\n"
+        "Function BuildSketch{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim skFeat As SldWorks.Feature\n    Dim uncertain As Boolean\n    gMsg = \"\"\n    gOmit = \"\"\n{extra_dims}"
     ));
-    out.push_str(&format!(
-        "    ok = OpenSketchOnPlane({}, {})\n",
-        index,
-        vb_lit(plane_code(sk.plane))
-    ));
-    out.push_str(&format!(
-        "    If ok = False Then gMsg = \"no origin plane carries the {} frame {}; probed: \" & gProbeLog & \"; tree scan saw: \" & TreeSummary(): GoTo SketchFailed\n",
-        plane_code(sk.plane),
-        frame_desc(solidcraft_frame(sk.plane))
-    ));
+    out.push_str(&open_calls);
     out.push_str(&format!(
         "    Set skFeat = swSketchMgr.ActiveSketch\n    Set skFeat{index} = LastFeature()\n    If skFeat{index} Is Nothing Then gMsg = \"the new sketch feature is missing from the tree\": GoTo SketchFailed\n    skName{index} = skFeat{index}.Name\n    Set skFeat{index} = FindFeatureByName(skName{index}, uncertain)\n    If skFeat{index} Is Nothing Then gMsg = \"the sketch feature object could not be captured for later selection: name=<\" & skName{index} & \">, tree scan saw: \" & TreeSummary(): GoTo SketchFailed\n",
     ));
@@ -1490,9 +1794,15 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     out.push_str(&format!(
         "    If Not NoSketchIsOpen() Then gMsg = \"the sketch context did not close\": GoTo SketchFailed\n    If Not VerifySketch{index}() Then gMsg = \"closed-context verification failed: the solved geometry differs after closing\": GoTo SketchFailed\n"
     ));
+    let success_msg = match &sk.plane_binding {
+        crate::replay::PlaneBinding::Offset { .. } => {
+            format!("{} & \" | plane: \" & planeMsg", vb_lit(&initial_msg))
+        }
+        _ => vb_lit(&initial_msg),
+    };
     out.push_str(&format!(
         "    gMsg = {}\n    BuildSketch{index} = \"{}\"\n    If gOmit <> \"\" Then\n        gMsg = gMsg & \" | omitted: \" & gOmit\n        BuildSketch{index} = \"degraded\"\n    End If\n    Exit Function\n\n",
-        vb_lit(&initial_msg),
+        success_msg,
         initial_status
     ));
     out.push_str(
@@ -1668,10 +1978,23 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     out.push_str(
         "    ' Verify the deletion through the pinned point enumeration (every\n    ' line endpoint and circle centre is a sketch point): only a PROVEN-\n    ' EMPTY collection counts. A fetch, type or bounds failure refuses -\n    ' a failed query is never proof of emptiness.\n    On Error Resume Next\n    Err.Clear\n    pts = swSketchMgr.ActiveSketch.GetSketchPoints2\n    If Err.Number <> 0 Then\n    On Error GoTo CleanFail\n    gMsg = \"the point collection could not be read after deletion: err \" & Trim(Str(Err.Number))\n    GoTo CleanFail\n    End If\n    If IsArray(pts) Then\n    Err.Clear\n    ub = UBound(pts)\n    If Err.Number = 0 Then\n    On Error GoTo CleanFail\n    gMsg = \"sketch contents deletion is not verified: \" & Trim(Str(ub + 1)) & \" points remain\"\n    GoTo CleanFail\n    End If\n    If Err.Number <> 9 Then\n    On Error GoTo CleanFail\n    gMsg = \"the point collection bounds could not be established: err \" & Trim(Str(Err.Number))\n    GoTo CleanFail\n    End If\n    Else\n    ' The seat-proven empty signature (2026-11-16, revolve-axes run): a\n    ' successful fetch on a deleted sketch returns Empty, not an empty\n    ' array. Any other non-array value refuses.\n    If Not IsEmpty(pts) Then\n    On Error GoTo CleanFail\n    gMsg = \"the point collection came back as an unexpected non-array value\"\n    GoTo CleanFail\n    End If\n    End If\n    On Error GoTo CleanFail\n",
     );
-    out.push_str(&format!(
-        "    If Not AcceptAndPublish({index}, {}, gProbeReason) Then gMsg = \"the sketch frame could not be re-accepted after recreation: \" & gProbeReason: GoTo CleanFail\n",
-        vb_lit(plane_code(sk.plane))
-    ));
+    let reaccept = match &sk.plane_binding {
+        crate::replay::PlaneBinding::Origin => format!(
+            "    If Not AcceptAndPublish({index}, {}, gProbeReason) Then gMsg = \"the sketch frame could not be re-accepted after recreation: \" & gProbeReason: GoTo CleanFail\n",
+            vb_lit(plane_code(sk.plane))
+        ),
+        crate::replay::PlaneBinding::Offset { distance } => format!(
+            "    If Not AcceptAndPublishOffset({index}, \"{}\", {}, gProbeReason) Then gMsg = \"the sketch frame could not be re-accepted after recreation: \" & gProbeReason: GoTo CleanFail\n",
+            plane_code(sk.plane),
+            vba_num(distance.expect_si)
+        ),
+        crate::replay::PlaneBinding::Constructed { expect_si, .. } => format!(
+            "    If Not AcceptAndPublishOffset({index}, \"{}\", {}, gProbeReason) Then gMsg = \"the sketch frame could not be re-accepted after recreation: \" & gProbeReason: GoTo CleanFail\n",
+            plane_code(sk.plane),
+            vba_num(*expect_si)
+        ),
+    };
+    out.push_str(&reaccept);
     out.push_str(&format!(
         "    Set skFeat{index} = LastFeature()\n    If skFeat{index} Is Nothing Then gMsg = \"the recreated sketch is missing from the tree\": GoTo CleanFail\n",
     ));
@@ -3133,6 +3456,14 @@ Function Fallback{index}() As String\n\
     out
 }
 
+/// Delete one owned plane and clear its binding.
+fn emit_plane_delete(index: usize) -> String {
+    format!(
+        "    If planeName{idx} <> \"\" Then\n        selOk = False\n        If Not planeFeat{idx} Is Nothing Then selOk = planeFeat{idx}.Select(False)\n        If selOk Then swDoc.EditDelete\n        Set planeFeat{idx} = Nothing\n        planeName{idx} = \"\"\n    End If\n",
+        idx = index
+    )
+}
+
 /// Delete every feature and sketch the macro has created so far (restore to
 /// the pre-step state) and clear their live bindings.
 fn emit_delete_created(steps: &[PlannedStep]) -> String {
@@ -3146,11 +3477,20 @@ fn emit_delete_created(steps: &[PlannedStep]) -> String {
                     idx = step.index
                 ));
             }
-            Work::Sketch(_) => {
+            Work::Sketch(sk) => {
                 out.push_str(&format!(
                     "    If skName{idx} <> \"\" Then\n        selOk = False\n        If Not skFeat{idx} Is Nothing Then selOk = skFeat{idx}.Select(False)\n        If Not selOk Then selOk = swDoc.Extension.SelectByID2(skName{idx}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n        If selOk Then swDoc.EditDelete\n        Set skFeat{idx} = Nothing\n        skName{idx} = \"\"\n        ClearMap {idx}\n    End If\n",
                     idx = step.index
                 ));
+                // An inline plane is owned by its sketch: delete it AFTER
+                // the sketch and clear its binding (later selection then
+                // refuses named instead of touching a stale plane).
+                if matches!(sk.plane_binding, crate::replay::PlaneBinding::Offset { .. }) {
+                    out.push_str(&emit_plane_delete(step.index));
+                }
+            }
+            Work::OffsetPlane(_) => {
+                out.push_str(&emit_plane_delete(step.index));
             }
             _ => {}
         }
