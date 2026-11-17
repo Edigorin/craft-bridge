@@ -190,6 +190,8 @@ pub struct CircleT {
 /// Relations reference endpoint slots (see the module docs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelationT {
+    /// Pin one sketch point (sgFix). The slot is a point handle.
+    Fix(usize),
     PointsCoincident(usize, usize),
     PointsHorizontal(usize, usize),
     PointsVertical(usize, usize),
@@ -1211,6 +1213,7 @@ fn parse_sketch(
     let mut points = Vec::with_capacity(points_v.len());
     // solidcraft/57 coordinates may carry per-axis driver expressions.
     let mut point_exprs: Vec<[Option<String>; 2]> = Vec::with_capacity(points_v.len());
+    let mut point_fixed: Vec<bool> = Vec::with_capacity(points_v.len());
     for (i, p) in points_v.iter().enumerate() {
         let mut exprs: [Option<String>; 2] = [None, None];
         match p.get("exprs") {
@@ -1235,6 +1238,7 @@ fn parse_sketch(
             }
         }
         point_exprs.push(exprs);
+        point_fixed.push(p.get("fixed").and_then(Value::as_bool).unwrap_or(false));
         let pos = p
             .get("pos")
             .and_then(Value::as_array)
@@ -1371,6 +1375,7 @@ fn parse_sketch(
     }
     let mut dimensions = Vec::new();
     let mut dropped_constraints: Vec<String> = Vec::new();
+    let mut fix_constrained: Vec<bool> = vec![false; points.len()];
     for (i, k) in constraints_v.iter().enumerate() {
         let ctype = k
             .get("type")
@@ -1392,8 +1397,12 @@ fn parse_sketch(
                 )));
             }
             rep[p].ok_or_else(|| {
-                Error::InvalidRecipe(format!(
-                    "constraint {i} references point {p}, which no curve endpoint occupies"
+                // Valid source data (the sketch origin is a legitimate
+                // reference) with no selectable entity in the replayed
+                // subset: degrade the constraint named, never refuse the
+                // build.
+                Error::Unsupported(format!(
+                    "constraint {i} ({ctype}) references point {p}, which no curve endpoint occupies (no entity to constrain)"
                 ))
             })
         };
@@ -1440,14 +1449,26 @@ fn parse_sketch(
             }
             match ctype.as_str() {
                 "fix" => {
-                    // Pin of one point: replay places every point at its
-                    // evaluated position already, so the pin changes no
-                    // geometry. Validate the reference, do nothing.
+                    // A point pin: becomes a real sgFix relation so the
+                    // SolidWorks solver holds the point like the source
+                    // solver does (it is also the natural driver anchor).
+                    // The sketch origin is fixed by construction; a free
+                    // non-origin point has no entity to pin and degrades.
                     let p = number("p")?;
                     if p >= points.len() {
                         return Err(Error::InvalidRecipe(format!(
                             "constraint {i} references point {p} which does not exist"
                         )));
+                    }
+                    match rep[p] {
+                        Some(slot) => {
+                            fix_constrained[p] = true;
+                            relations.push(RelationT::Fix(slot));
+                        }
+                        None if p == 0 => {}
+                        None => dropped_constraints.push(format!(
+                            "fix (point {p}): no curve endpoint occupies it, there is no entity to pin"
+                        )),
                     }
                 }
                 "coincident" => relations.push(RelationT::PointsCoincident(
@@ -1678,9 +1699,26 @@ fn parse_sketch(
                 },
             })
         };
+        let pinned = |pi: usize| (point_fixed[pi] || fix_constrained[pi]) && nonmoving(pi);
         let base_point = (0..sketch.points.len())
-            .filter(|&pi| rep[pi].is_some() && at_origin(pi) && nonmoving(pi))
-            .min_by_key(|&pi| evals[pi].iter().filter(|e| e.is_some()).count());
+            .filter(|&pi| rep[pi].is_some() && pinned(pi))
+            .min_by_key(|&pi| {
+                (
+                    !at_origin(pi),
+                    evals[pi].iter().filter(|e| e.is_some()).count(),
+                )
+            });
+        // The anchor becomes a real sgFix pin (or already carries one from
+        // its source fix constraint), so the SolidWorks solver holds it
+        // where the source solver holds it.
+        if let Some(bp) = base_point {
+            if !fix_constrained[bp] {
+                if let Some(slot) = rep[bp] {
+                    sketch.relations.push(RelationT::Fix(slot));
+                    fix_constrained[bp] = true;
+                }
+            }
+        }
         // Phase 3: the drivers.
         for (pi, pe) in point_exprs.iter().enumerate() {
             for axis in 0..2 {
@@ -1692,10 +1730,14 @@ fn parse_sketch(
                     Some(e) => e,
                     None => continue, // phase 1 recorded the degrade already
                 };
-                let pos_mm = sketch.points[pi][axis];
-                if pos_mm.abs() < 1e-9 {
+                let base_axis = match base_point {
+                    Some(bp) => sketch.points[bp][axis],
+                    None => 0.0,
+                };
+                let delta_mm = sketch.points[pi][axis] - base_axis;
+                if delta_mm.abs() < 1e-9 {
                     sketch.driver_notes.push(format!(
-                        "point {pi} {axis_name}: zero coordinate carries no driver dimension (position verified)"
+                        "point {pi} {axis_name}: zero delta from the anchor carries no zero-length dimension (position verified)"
                     ));
                     continue;
                 }
@@ -1712,7 +1754,7 @@ fn parse_sketch(
                     Some(slot) => slot,
                     None => {
                         sketch.dropped_constraints.push(format!(
-                            "point {pi} {axis_name}: no fixed curve endpoint anchors the sketch origin, the coordinate binding cannot become a dimension"
+                            "point {pi} {axis_name}: no pinned (fixed or fix-constrained) curve endpoint anchors the sketch, the coordinate binding cannot become a dimension"
                         ));
                         continue;
                     }
@@ -1734,7 +1776,25 @@ fn parse_sketch(
                         continue;
                     }
                 };
-                let rhs = expr::translate(node, &ctx);
+                // The dimension measures the delta from the anchor, so the
+                // equation is the expression minus the anchor's fixed
+                // offset (both the report text and the emitted segments).
+                let mut mapped: Vec<RhsSeg> = Vec::new();
+                let mut rhs = expr::translate(node, &ctx);
+                if base_axis != 0.0 {
+                    let correction = if base_axis > 0.0 {
+                        format!(" - {base_axis}mm")
+                    } else {
+                        format!(" + {}mm", -base_axis)
+                    };
+                    rhs = format!("({rhs}){correction}");
+                    mapped.push(RhsSeg::Text("(".to_string()));
+                    mapped.extend(segs.into_iter().map(seg_from));
+                    mapped.push(RhsSeg::Text(")".to_string()));
+                    mapped.push(RhsSeg::Text(correction));
+                } else {
+                    mapped.extend(segs.into_iter().map(seg_from));
+                }
                 let di = sketch.dimensions.len();
                 sketch.dimensions.push(DimensionT {
                     kind: if axis == 0 {
@@ -1744,7 +1804,7 @@ fn parse_sketch(
                     },
                     a: base_slot,
                     b: Some(target_slot),
-                    value: pos_mm,
+                    value: delta_mm,
                     param: None,
                 });
                 let slot = *next_slot;
@@ -1754,8 +1814,8 @@ fn parse_sketch(
                     DimEquation {
                         which: 0,
                         rhs,
-                        segs: coalesce(segs.into_iter().map(seg_from).collect()),
-                        expect_si: pos_mm / 1000.0,
+                        segs: coalesce(mapped),
+                        expect_si: delta_mm / 1000.0,
                         slot,
                     },
                 ));

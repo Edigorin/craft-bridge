@@ -1731,6 +1731,13 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
         )
     };
     match *rel {
+        RelationT::Fix(slot) => {
+            // A point pin (sgFix): the same anchoring vocabulary the
+            // primitives use for their literal placements. The evidence is
+            // behavioural like every relation - VerifySketchN reads every
+            // endpoint back against its planned position afterwards.
+            select_point(slot, false) + &apply("sgFix")
+        }
         RelationT::PointsCoincident(a, b) => {
             let label = format!("points-coincident {a}-{b}");
             select_point(a, false)

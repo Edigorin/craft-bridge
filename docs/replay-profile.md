@@ -97,17 +97,25 @@ indices to `points` (never the string ids). `construction`, `centerline`
 and `infinite` curves all sit outside profile detection and replay as
 construction geometry. An `angle` constraint with `flip: true` selects
 the supplementary branch and degrades named (never a wrong angle). The
-`fix {p}` constraint is a point pin and a faithful no-op.
+`fix {p}` constraint is a point pin and replays as a real `sgFix`
+relation on the point's endpoint (the sketch origin is fixed by
+construction; a free non-origin point has no entity to pin and degrades
+named). A constraint referencing a point no curve endpoint occupies
+degrades named - valid source data never refuses the build.
 
 **Coordinate drivers.** A sketch point may carry `exprs: {x?, y?}`. The
 expression is the source of truth (the source engine fixes expression
 points at their evaluated positions before solve; `pos` is a cache): each
 expressed coordinate becomes a native driver - a DistanceX/DistanceY
-dimension to the anchored sketch origin bound by an equation to the
-expression - so parameter edits carry the sketch geometry. Precedence: the
-expression drives even when the point is `fixed` (the dimension both pins
-and parametrizes it). A zero coordinate cannot carry a zero-length
-dimension: it is position-verified and recorded as a driver note. An
+dimension bound by an equation to the expression - so parameter edits
+carry the sketch geometry. Precedence: the expression drives even when
+the point is `fixed` (the dimension both pins and parametrizes it). The
+drivers measure DELTAS from one pinned anchor: a curve endpoint the
+source pins (`fix` or `fixed` with no moving expression) that is held by
+a real `sgFix` relation, at the sketch origin when possible. The anchor's
+fixed offset folds into the equation. No pinned anchor degrades the
+drivers named. A zero delta cannot carry a zero-length dimension: it is
+position-verified and recorded as a driver note. An
 expression outside the supported subset degrades named. A `fix` constraint
 is a point pin and a faithful no-op (points are placed at their evaluated
 positions already).

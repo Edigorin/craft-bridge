@@ -112,7 +112,7 @@ fn design57_coordinate_drivers_become_native_dimensions() {
     assert_eq!(sketch.dim_equations.len(), 5);
     assert_eq!(sketch.driver_notes.len(), 2);
     for note in &sketch.driver_notes {
-        assert!(note.contains("zero coordinate"), "{note}");
+        assert!(note.contains("zero delta"), "{note}");
     }
     // The fix constraint is a faithful no-op and must not degrade.
     assert!(sketch.dropped_constraints.is_empty());
@@ -666,10 +666,8 @@ fn the_driver_anchor_is_chosen_after_evaluation_and_must_hold() {
         _ => panic!(),
     };
     assert!(
-        sketch
-            .dropped_constraints
-            .iter()
-            .any(|d| d.contains("no fixed curve endpoint anchors the sketch origin")),
+        sketch.dropped_constraints.iter().any(|d| d
+            .contains("no pinned (fixed or fix-constrained) curve endpoint anchors the sketch")),
         "{:?}",
         sketch.dropped_constraints
     );
@@ -712,4 +710,86 @@ fn the_plan_report_publishes_source_identity_and_driver_notes() {
     assert_eq!(sketch_step.notes.len(), 2, "{:?}", sketch_step.notes);
     // The parameter steps carry their source names too.
     assert_eq!(report.steps[0].source_id, "parameter VaneSpan");
+}
+
+#[test]
+fn constraints_on_unoccupied_points_degrade_instead_of_refusing() {
+    // The micro designs tie curve endpoints to the sketch origin with a
+    // coincident constraint. The origin point occupies no curve endpoint,
+    // so the relation cannot be replayed - but the design is valid and
+    // the build must proceed with a named degrade, not refuse.
+    let design = r#"{"format": "solidcraft/57", "units": "mm", "params": [], "features": [
+        {"id": 1, "name": "s", "suppressed": false, "type": "sketch",
+         "plane": {"type": "origin", "name": "XY"},
+         "sketch": {
+           "points": [{"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+                      {"id": "p1", "pos": [10.0, 0.0], "fixed": true},
+                      {"id": "p2", "pos": [3.0, 7.0], "fixed": true}],
+           "curves": [
+             {"id": "l1", "type": "line", "a": 1, "b": 2},
+             {"id": "l2", "type": "line", "a": 2, "b": 1}
+           ],
+           "constraints": [
+             {"id": "k1", "type": "coincident", "p": 0, "q": 1},
+             {"id": "k2", "type": "fix", "p": 1}
+           ], "counters": {"l": 2, "p": 3}}}]}"#;
+    let steps = plan_of(design);
+    assert_eq!(steps[0].status, PlanStatus::DegradePlanned);
+    let sketch = match &steps[0].work {
+        Work::Sketch(s) => s,
+        _ => panic!(),
+    };
+    assert!(
+        sketch
+            .dropped_constraints
+            .iter()
+            .any(|d| d.contains("no curve endpoint occupies")),
+        "{:?}",
+        sketch.dropped_constraints
+    );
+    // The fix on a real endpoint becomes a real sgFix pin relation.
+    assert!(
+        sketch
+            .relations
+            .iter()
+            .any(|r| matches!(r, replay::RelationT::Fix(_))),
+        "{:?}",
+        sketch.relations
+    );
+}
+
+#[test]
+fn fix_constraints_pin_endpoints_as_fix_relations() {
+    // D02/D10 shape: the anchor arrives as a source fix constraint on a
+    // curve endpoint, and the coordinate drivers anchor on it.
+    let points = r#"{ "id": "p0", "pos": [-3.2, 1.3], "fixed": false },
+        { "id": "p1", "pos": [34.5, 0.0], "fixed": true, "exprs": { "x": "W - 2.8 mm" } },
+        { "id": "p2", "pos": [39.2, 7.6], "fixed": true, "exprs": { "x": "W + 1.9 mm" } }"#;
+    let design = sketch_design(7, r#"{ "type": "origin", "name": "XY" }"#, points).replace(
+        "\"constraints\": []",
+        "\"constraints\": [{ \"id\": \"k1\", \"type\": \"fix\", \"p\": 0 }]",
+    );
+    let steps = plan_of(&design);
+    let sketch = match &steps[1].work {
+        Work::Sketch(s) => s,
+        _ => panic!(),
+    };
+    assert!(
+        sketch.dropped_constraints.is_empty(),
+        "{:?}",
+        sketch.dropped_constraints
+    );
+    // The fix relation exists (from the constraint) and the drivers use
+    // the delta form against the pinned point: Width drives x offsets from
+    // p0 at -3.2 mm, so the equations carry the anchor correction.
+    let fix_count = sketch
+        .relations
+        .iter()
+        .filter(|r| matches!(r, replay::RelationT::Fix(_)))
+        .count();
+    assert_eq!(fix_count, 1, "{:?}", sketch.relations);
+    assert_eq!(sketch.dim_equations.len(), 2);
+    for (_, eq) in &sketch.dim_equations {
+        assert!(eq.rhs.contains("+ 3.2mm"), "{}", eq.rhs);
+    }
 }

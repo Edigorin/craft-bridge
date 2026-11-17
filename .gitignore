@@ -5,3 +5,5 @@
 uploads/
 runs/
 # Real-part derived artifacts stay private too (the exception's rule).
+# Owner-provided parts (real and test deliveries): never committed.
+upload/
