@@ -1224,6 +1224,7 @@ Function BuildExtrude3() As String
     Dim ok As Boolean
     Dim feat As SldWorks.Feature
     Dim dm As SldWorks.Dimension
+    Dim objState As String
     Dim wantSide As Long
     Dim dirFlag As Boolean
     If Not gMapValid(1) Then gMsg = "frame adaptation: the profile sketch carries no valid adaptation map; refusing to report created": GoTo ExFail
@@ -1231,9 +1232,14 @@ Function BuildExtrude3() As String
     wantSide = 1 * gMapSide(1)
     dirFlag = (wantSide = TT_EX_DIR_TRUE_SIDE)
     ok = False
-    If Not skFeat1 Is Nothing Then ok = skFeat1.Select(False)
+    objState = "missing"
+    If Not skFeat1 Is Nothing Then
+    objState = "name=<" & skFeat1.Name & ">"
+    ok = skFeat1.Select(False)
+    objState = objState & " select-result=" & CStr(ok)
+    End If
     If Not ok Then ok = swDoc.Extension.SelectByID2(skName1, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-    If Not ok Then gMsg = "could not select the sketch for the extrude (object and name selection both failed): name=<" & skName1 & ">, tree scan saw: " & TreeSummary(): GoTo ExFail
+    If Not ok Then gMsg = "could not select the sketch for the extrude: " & objState & " name=<" & skName1 & ">; tree scan saw: " & TreeSummary(): GoTo ExFail
     Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.03, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)
     If feat Is Nothing Then gMsg = "the extrude was not created": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
@@ -2114,7 +2120,7 @@ End If
 idx = eqMgr.Add(-1, eqText)
 If idx < 0 Then gMsg = "the dimension equation was not accepted: " & eqText: GoTo EqFail
 swDoc.EditRebuild3
-If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = "the driven value does not match": GoTo EqFail
+If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = "the driven value does not match: equation <" & eqText & "> drove " & Trim(Str(dm.SystemValue)) & " but the expectation is " & Trim(Str(expect)): GoTo EqFail
 
 If eqMgr.Equation(idx) <> eqText Then gMsg = "the stored equation reads back differently": GoTo EqFail
 If slot >= 0 Then regName(slot) = qName

@@ -3106,12 +3106,12 @@ fn sketch_selection_uses_the_stored_feature_object() {
     // Selection: object first, named fallback, TreeSummary on refusal.
     let extrude = builder_region(&text, "BuildExtrude3");
     assert!(
-        extrude.contains("If Not skFeat2 Is Nothing Then ok = skFeat2.Select(False)"),
+        extrude.contains("ok = skFeat2.Select(False)") && extrude.contains("select-result="),
         "the extrude does not select through the stored feature object"
     );
     assert!(
         extrude.contains("If Not ok Then ok = swDoc.Extension.SelectByID2(skName2,")
-            && extrude.contains("object and name selection both failed")
+            && extrude.contains("could not select the sketch for the extrude: ")
             && extrude.contains("TreeSummary()"),
         "the extrude lost its named fallback or the TreeSummary refusal"
     );

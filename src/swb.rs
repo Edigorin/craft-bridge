@@ -1418,7 +1418,7 @@ End If
 idx = eqMgr.Add(-1, eqText)
 If idx < 0 Then gMsg = \"the dimension equation was not accepted: \" & eqText: GoTo EqFail
 swDoc.EditRebuild3
-If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = \"the driven value does not match\": GoTo EqFail
+If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = \"the driven value does not match: equation <\" & eqText & \"> drove \" & Trim(Str(dm.SystemValue)) & \" but the expectation is \" & Trim(Str(expect)): GoTo EqFail
 
 If eqMgr.Equation(idx) <> eqText Then gMsg = \"the stored equation reads back differently\": GoTo EqFail
 If slot >= 0 Then regName(slot) = qName
@@ -2075,7 +2075,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
     let mut out = String::new();
     out.push_str(&format!("' Extrude step {index}: {}\n", vb_lit(&ex.name)));
     let mut locals = String::from(
-        "    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n",
+        "    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n    Dim objState As String\n",
     );
     let mut body = String::new();
     // The map guard precedes every direction decision: the side decisions
@@ -2085,7 +2085,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
         "    If Not gMapValid({sk}) Then gMsg = \"frame adaptation: the profile sketch carries no valid adaptation map; refusing to report created\": GoTo ExFail\n"
     ));
     let select_sketch = format!(
-        "    ok = False\n    If Not skFeat{sk} Is Nothing Then ok = skFeat{sk}.Select(False)\n    If Not ok Then ok = swDoc.Extension.SelectByID2(skName{sk}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n    If Not ok Then gMsg = \"could not select the sketch for the extrude (object and name selection both failed): name=<\" & skName{sk} & \">, tree scan saw: \" & TreeSummary(): GoTo ExFail\n"
+        "    ok = False\n    objState = \"missing\"\n    If Not skFeat{sk} Is Nothing Then\n    objState = \"name=<\" & skFeat{sk}.Name & \">\"\n    ok = skFeat{sk}.Select(False)\n    objState = objState & \" select-result=\" & CStr(ok)\n    End If\n    If Not ok Then ok = swDoc.Extension.SelectByID2(skName{sk}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n    If Not ok Then gMsg = \"could not select the sketch for the extrude: \" & objState & \" name=<\" & skName{sk} & \">; tree scan saw: \" & TreeSummary(): GoTo ExFail\n"
     );
     let no_depth_note =
         "    ' through-all: the end condition is the geometry; depth readback does not apply\n";

@@ -1228,7 +1228,7 @@ End If
 idx = eqMgr.Add(-1, eqText)
 If idx < 0 Then gMsg = "the dimension equation was not accepted: " & eqText: GoTo EqFail
 swDoc.EditRebuild3
-If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = "the driven value does not match": GoTo EqFail
+If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = "the driven value does not match: equation <" & eqText & "> drove " & Trim(Str(dm.SystemValue)) & " but the expectation is " & Trim(Str(expect)): GoTo EqFail
 
 If eqMgr.Equation(idx) <> eqText Then gMsg = "the stored equation reads back differently": GoTo EqFail
 If slot >= 0 Then regName(slot) = qName
