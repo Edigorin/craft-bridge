@@ -1,15 +1,49 @@
 ' check-part.vbs - verify the rebuilt part in the running SolidWorks session
 ' against an expect file, and against the STEP reference body's mass
-' properties. Invoked only by tools/seat-harness.ps1.
+' properties. Invoked only by tools/seat-harness.ps1 and
+' tools/seat-run-real.ps1.
 '
 ' Usage: cscript //nologo check-part.vbs <expect-file> <step-reference> <out-file> <owned-title>
 ' The owned title is the run-bound handoff from the macro's report: the
-' only document this checker will ever close. It is never guessed from
-' whatever happens to be active.
-' Expect file lines: feature:<name>=<kind>, dim:<name>=<metres>, volume_tol=<rel>
-' Output file lines: check:<name>=pass|fail, detail:<name>=<text>, volume:<side>=<value>
+' only document this checker will ever close on the macro's behalf. It is
+' never guessed from whatever happens to be active. The STEP reference
+' document is independently owned by THIS checker: it is opened here and
+' closed here with the same verified-close discipline (a live enumeration
+' before and after), reported as check:ref_close.
+'
+' Expect file lines: feature:<name>=<kind>, dim:<name>=<metres>,
+'   min_features=<n>, ref_bodies=<n>, volume_tol=<rel>, volume_tol_abs=<m3>,
+'   placement_tol=<m>, volume_compare=skip
+'   ref_bodies    expected solid body count of the STEP reference import
+'                 (and of the replayed part); required unless skipped.
+'   volume_tol    relative volume tolerance (REQUIRED unless skipped; the
+'                 hardcoded relative tolerance is gone - this parameter is
+'                 honored and validated at the tooling boundary).
+'   volume_tol_abs  absolute volume floor in m3 (optional, default 0).
+'   placement_tol centroid distance tolerance in metres (REQUIRED unless
+'                 skipped).
+'   volume_compare=skip  the synthetic corpus placeholder: no reference is
+'                 loaded and the mass entries report skipped.
+' Output file lines: check:<name>=pass|fail|skipped, detail:<name>=<text>,
+'   volume:<side>=<value>. The mass comparison entry is ALWAYS emitted:
+'   missing, invalid, nonpositive or unreadable values fail named and are
+'   never an absent entry. Volume passes iff
+'   |rebuilt - reference| <= max(volume_tol * reference, volume_tol_abs);
+'   the body-count and placement checks run alongside it - volume
+'   agreement alone never proves replay. The pure decision code lives in
+'   check-part-logic.vbs (loaded below, also driven offline by
+'   check-part-logic.tests.vbs); this file owns only the COM calls.
 Option Explicit
 Dim swApp, swDoc, expectPath, stepPath, outPath, ownedTitle, f, line, parts
+Dim logicPath, logicText, logicFile
+Dim mp, rebuiltText, rebuiltCx, rebuiltCy, rebuiltCz, rebuiltSolidsText, rebuiltAcquireErr
+Dim bodiesArr
+Dim skipVolume, minFeatures, volumeTol, volumeTolAbs, placementTol, refBodies
+Dim scan, scanFso
+Dim treeCount, featWalk
+Dim refDoc, refTitle, refText, refCx, refCy, refCz
+Dim docTypeText, solidsText, sheetsText, refAcquireErr
+Dim distText, blocks, dtRaw, refBodiesArr, refSheetsArr, refCloseLines
 If WScript.Arguments.Count < 4 Then
   WScript.Echo "usage: check-part.vbs <expect> <step-reference> <out> <owned-title>"
   WScript.Quit 4
@@ -46,42 +80,74 @@ Dim fso
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set outFile = fso.CreateTextFile(outPath, True)
 
-' VBScript has no Str(); CStr follows the host locale's decimal separator.
-' Normalize to a period so the report parses anywhere. The separator is
-' extracted from CStr(1.5) rather than assumed.
-Function NumStr(ByVal n)
-  Dim s, sep
-  s = CStr(n)
-  sep = Replace(Replace(CStr(1.5), "1", ""), "5", "")
-  If sep <> "." And sep <> "" Then s = Replace(s, sep, ".")
-  NumStr = s
-End Function
+' ---- the pure decision logic (shared with the offline test driver) ----
+' Fail closed: without the logic module no verdict can be trusted, so the
+' required entries are written by hand as failures and the checker exits.
+logicPath = fso.GetParentFolderName(WScript.ScriptFullName) & "\check-part-logic.vbs"
+Err.Clear
+Set logicFile = fso.OpenTextFile(logicPath, 1)
+If Err.Number <> 0 Then
+  outFile.WriteLine "detail:mass=check-part-logic.vbs is missing; the decision logic cannot run"
+  outFile.WriteLine "check:mass=fail"
+  outFile.WriteLine "check:mass_vs_reference=fail"
+  outFile.Close
+  WScript.Quit 4
+End If
+logicText = logicFile.ReadAll
+logicFile.Close
+Err.Clear
+ExecuteGlobal logicText
+If Err.Number <> 0 Then
+  outFile.WriteLine "detail:mass=check-part-logic.vbs does not execute: " & Err.Description
+  outFile.WriteLine "check:mass=fail"
+  outFile.WriteLine "check:mass_vs_reference=fail"
+  outFile.Close
+  WScript.Quit 4
+End If
 
-' ---- the rebuilt part's mass properties ----
-Dim rebuiltVol, mp
+' ---- the rebuilt part's mass properties (acquired; verdicts below) ----
+rebuiltText = ""
+rebuiltSolidsText = ""
+rebuiltAcquireErr = ""
 Err.Clear
 Set mp = swDoc.Extension.CreateMassProperty()
 If Err.Number = 0 Then
-  rebuiltVol = mp.Volume
-  outFile.WriteLine "volume:rebuilt=" & NumStr(rebuiltVol)
+  rebuiltText = NumStr(mp.Volume)
+  rebuiltCx = mp.centerofmass(0)
+  rebuiltCy = mp.centerofmass(1)
+  rebuiltCz = mp.centerofmass(2)
 Else
-  outFile.WriteLine "check:mass=fail"
-  outFile.WriteLine "detail:mass=cannot read the rebuilt part's mass properties: " & Err.Description
+  rebuiltAcquireErr = "cannot read the rebuilt part's mass properties: " & Err.Description
+End If
+Err.Clear
+bodiesArr = swDoc.GetBodies2(0)
+If Err.Number = 0 Then
+  If IsArray(bodiesArr) Then
+    rebuiltSolidsText = NumStr(UBound(bodiesArr) - LBound(bodiesArr) + 1)
+  Else
+    rebuiltSolidsText = "1"
+  End If
+Else
+  rebuiltSolidsText = "missing or unreadable"
 End If
 
-' ---- the STEP reference body's mass properties (both sides by SolidWorks);
-' skipped when the expect file says the reference is not a real export ----
-Dim refDoc, refVol, skipVolume, minFeatures, treeCount, featWalk
+' ---- the expect parameters (raw text; validated by the logic module) ----
 skipVolume = False
 minFeatures = 0
-Dim scan
-Dim scanFso
+volumeTol = ""
+volumeTolAbs = ""
+placementTol = ""
+refBodies = ""
 Set scanFso = CreateObject("Scripting.FileSystemObject")
 Set scan = scanFso.OpenTextFile(expectPath, 1)
 Do Until scan.AtEndOfStream
   line = Trim(scan.ReadLine)
   If line = "volume_compare=skip" Then skipVolume = True
   If Left(line, 12) = "min_features=" Then minFeatures = CInt(Mid(line, 13))
+  If Left(line, 15) = "volume_tol_abs=" Then volumeTolAbs = Mid(line, 16)
+  If Left(line, 11) = "volume_tol=" Then volumeTol = Mid(line, 12)
+  If Left(line, 14) = "placement_tol=" Then placementTol = Mid(line, 15)
+  If Left(line, 11) = "ref_bodies=" Then refBodies = Mid(line, 12)
 Loop
 scan.Close
 
@@ -101,34 +167,111 @@ Else
   outFile.WriteLine "detail:tree_count=expected at least " & NumStr(minFeatures)
 End If
 
+' ---- the STEP reference: import validation, mass, bodies, placement ----
+' Every outcome is decided by the pure logic module; this block only
+' acquires values and closes the reference document it opened.
+refText = ""
+docTypeText = "unreadable"
+solidsText = "missing or unreadable"
+sheetsText = "unreadable"
+refAcquireErr = ""
+refTitle = ""
+distText = ""
+blocks = ""
 If skipVolume Then
-  outFile.WriteLine "check:mass=skipped"
-End If
-If Not skipVolume Then
-Err.Clear
-Set refDoc = swApp.LoadFile4(stepPath, "r", Nothing, "")
-If Err.Number <> 0 Or refDoc Is Nothing Then
-  outFile.WriteLine "check:step_reference=fail"
-  outFile.WriteLine "detail:step_reference=cannot load the STEP reference: " & Err.Description
+  blocks = MassSkipLines(rebuiltText)
+  blocks = blocks & RefImportSkipLines()
+  blocks = blocks & BodiesSkipLines()
+  blocks = blocks & PlacementSkipLines()
+  outFile.Write blocks
+  outFile.WriteLine "check:ref_close=skipped"
 Else
-  Set mp = refDoc.Extension.CreateMassProperty()
-  If Err.Number = 0 Then
-    refVol = mp.Volume
-    outFile.WriteLine "volume:step_reference=" & NumStr(refVol)
-    If rebuiltVol > 0 And refVol > 0 Then
-      If Abs(rebuiltVol - refVol) / refVol < 0.001 Then
-        outFile.WriteLine "check:mass_vs_reference=pass"
-      Else
-        outFile.WriteLine "check:mass_vs_reference=fail"
-        outFile.WriteLine "detail:mass_vs_reference=rebuilt " & NumStr(rebuiltVol) & " reference " & NumStr(refVol)
+  Err.Clear
+  Set refDoc = swApp.LoadFile4(stepPath, "r", Nothing, "")
+  If Err.Number <> 0 Or refDoc Is Nothing Then
+    refAcquireErr = "cannot load the STEP reference: " & Err.Description
+    docTypeText = "unreadable"
+    solidsText = "missing or unreadable"
+    sheetsText = "unreadable"
+  Else
+    Err.Clear
+    refTitle = refDoc.GetTitle
+    If Err.Number <> 0 Then refTitle = ""
+    Err.Clear
+    dtRaw = refDoc.GetType
+    If Err.Number = 0 Then
+      If dtRaw = 1 Then docTypeText = "part"
+      ElseIf dtRaw = 2 Then docTypeText = "assembly"
+      ElseIf dtRaw = 3 Then docTypeText = "drawing"
+      Else docTypeText = "other"
       End If
+    Else
+      docTypeText = "unreadable"
+    End If
+    Err.Clear
+    refBodiesArr = refDoc.GetBodies2(0)
+    If Err.Number = 0 Then
+      If IsArray(refBodiesArr) Then
+        solidsText = NumStr(UBound(refBodiesArr) - LBound(refBodiesArr) + 1)
+      Else
+        solidsText = "1"
+      End If
+    Else
+      solidsText = "missing or unreadable"
+    End If
+    Err.Clear
+    refSheetsArr = refDoc.GetBodies2(1)
+    If Err.Number = 0 Then
+      If IsArray(refSheetsArr) Then
+        sheetsText = NumStr(UBound(refSheetsArr) - LBound(refSheetsArr) + 1)
+      Else
+        sheetsText = "1"
+      End If
+    Else
+      sheetsText = "unreadable"
+    End If
+    Err.Clear
+    Set mp = refDoc.Extension.CreateMassProperty()
+    If Err.Number = 0 Then
+      refText = NumStr(mp.Volume)
+      refCx = mp.centerofmass(0)
+      refCy = mp.centerofmass(1)
+      refCz = mp.centerofmass(2)
+    Else
+      refAcquireErr = "cannot read the STEP reference's mass properties: " & Err.Description
+    End If
+    If rebuiltText <> "" And refText <> "" Then
+      distText = NumStr(Sqr((rebuiltCx - refCx) ^ 2 + (rebuiltCy - refCy) ^ 2 + (rebuiltCz - refCz) ^ 2))
+    Else
+      distText = "missing or unreadable"
     End If
   End If
-  refDoc.Quit False
+
+  ' The reference document is opened and closed by this checker - verified
+  ' closed by a live enumeration (the CloseOwnedDoc discipline), reported
+  ' as check:ref_close on every path below.
+  refCloseLines = ""
+  If refDoc Is Nothing Then
+    refCloseLines = "check:ref_close=skipped" & vbCrLf
+    refCloseLines = refCloseLines & "detail:ref_close=no reference document was opened" & vbCrLf
+  Else
+    refCloseLines = VerifiedCloseLines(swApp, refDoc, refTitle)
+  End If
+
+  ' The verdicts: the required mass entry is always emitted, named.
+  blocks = MassLines(rebuiltText, refText, volumeTol, volumeTolAbs)
+  blocks = blocks & RefImportLines(refBodies, docTypeText, solidsText, sheetsText)
+  blocks = blocks & BodiesLines(refBodies, rebuiltSolidsText)
+  blocks = blocks & PlacementLines(distText, placementTol)
+  If refAcquireErr <> "" Then
+    blocks = blocks & "detail:mass=" & refAcquireErr & vbCrLf
+  End If
+  If rebuiltAcquireErr <> "" Then
+    blocks = blocks & "detail:mass=" & rebuiltAcquireErr & vbCrLf
+  End If
+  outFile.Write blocks
+  outFile.Write refCloseLines
 End If
-End If
-' Volume equality is only expected for fallback-free corpus items; the
-' harness decides per item whether the comparison applies.
 
 ' ---- expected features and dimensions ----
 Dim feat
@@ -268,3 +411,91 @@ End If
 outFile.WriteLine "check:close:=pass"
 outFile.Close
 WScript.Quit 0
+
+' Verified close of the independently owned STEP reference document: the
+' CloseOwnedDoc discipline - a live enumeration must identify exactly the
+' opened object before the close and prove its absence after. Every
+' failure path reports check:ref_close=fail and leaves the claim unmade.
+Function VerifiedCloseLines(ByVal app, ByVal doc, ByVal title)
+  Dim out, d2, t2, cnt, isOurs
+  On Error Resume Next
+  out = ""
+  If Trim(title) = "" Then
+    out = "check:ref_close=fail" & vbCrLf & "detail:ref_close=empty reference title; nothing closed" & vbCrLf
+    VerifiedCloseLines = out
+    Exit Function
+  End If
+  cnt = 0
+  isOurs = False
+  Err.Clear
+  Set d2 = app.GetFirstDocument
+  If Err.Number <> 0 Then
+    out = "check:ref_close=fail" & vbCrLf & "detail:ref_close=the open-document enumeration failed before the close" & vbCrLf
+    VerifiedCloseLines = out
+    Exit Function
+  End If
+  Do While Not d2 Is Nothing
+    Err.Clear
+    t2 = d2.GetTitle
+    If Err.Number <> 0 Then
+      out = "check:ref_close=fail" & vbCrLf & "detail:ref_close=a document title could not be read before the close" & vbCrLf
+      VerifiedCloseLines = out
+      Exit Function
+    End If
+    If t2 = title Then
+      cnt = cnt + 1
+      If d2 Is doc Then isOurs = True
+    End If
+    Err.Clear
+    Set d2 = d2.GetNext
+    If Err.Number <> 0 Then
+      out = "check:ref_close=fail" & vbCrLf & "detail:ref_close=the open-document enumeration broke before the close" & vbCrLf
+      VerifiedCloseLines = out
+      Exit Function
+    End If
+  Loop
+  If cnt <> 1 Or Not isOurs Then
+    out = "check:ref_close=fail" & vbCrLf & "detail:ref_close=the reference title does not identify exactly the opened document" & vbCrLf
+    VerifiedCloseLines = out
+    Exit Function
+  End If
+  Err.Clear
+  app.CloseDoc title
+  If Err.Number <> 0 Then
+    out = "check:ref_close=fail" & vbCrLf & "detail:ref_close=CloseDoc failed: " & Err.Description & vbCrLf
+    VerifiedCloseLines = out
+    Exit Function
+  End If
+  cnt = 0
+  Err.Clear
+  Set d2 = app.GetFirstDocument
+  If Err.Number <> 0 Then
+    out = "check:ref_close=fail" & vbCrLf & "detail:ref_close=the open-document enumeration failed after the close" & vbCrLf
+    VerifiedCloseLines = out
+    Exit Function
+  End If
+  Do While Not d2 Is Nothing
+    Err.Clear
+    t2 = d2.GetTitle
+    If Err.Number <> 0 Then
+      out = "check:ref_close=fail" & vbCrLf & "detail:ref_close=a document title could not be read after the close" & vbCrLf
+      VerifiedCloseLines = out
+      Exit Function
+    End If
+    If t2 = title Then cnt = cnt + 1
+    Err.Clear
+    Set d2 = d2.GetNext
+    If Err.Number <> 0 Then
+      out = "check:ref_close=fail" & vbCrLf & "detail:ref_close=the open-document enumeration broke after the close" & vbCrLf
+      VerifiedCloseLines = out
+      Exit Function
+    End If
+  Loop
+  If cnt <> 0 Then
+    out = "check:ref_close=fail" & vbCrLf & "detail:ref_close=the reference document still answers to its title after the close" & vbCrLf
+    VerifiedCloseLines = out
+    Exit Function
+  End If
+  out = "check:ref_close=pass" & vbCrLf
+  VerifiedCloseLines = out
+End Function

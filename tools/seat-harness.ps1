@@ -114,7 +114,20 @@ foreach ($item in $items) {
         if (-not (Test-Path $checkOut) -or (Get-Item $checkOut).Length -eq 0) { throw "${name}: the checker wrote no evidence" }
         $checks = @(Get-Content $checkOut)
         if (@($checks | Where-Object { $_ -notmatch '^(check|detail|volume):' }).Count -gt 0) { throw "${name}: malformed checker evidence" }
-        $itemFailed = ($bad.Count -gt 0) -or (@($checks | Where-Object { $_ -match '=fail' }).Count -gt 0)
+        # The mass gate: the checker's required comparison entry is never
+        # absent. A real comparison must PASS - real-design acceptance
+        # REQUIRES mass_vs_reference=pass - and the synthetic corpus keeps
+        # its skip-with-placeholder behavior, accepted only when the item's
+        # own expect file declares volume_compare=skip.
+        $massEntry = @($checks | Where-Object { $_ -match '^check:mass_vs_reference=' })
+        $expectSkipsVolume = [bool](Select-String -Path $expect -Pattern "^volume_compare=skip$")
+        $massOk = ($massEntry.Count -eq 1) -and (
+            ($massEntry[0] -eq "check:mass_vs_reference=pass") -or
+            (($massEntry[0] -eq "check:mass_vs_reference=skipped") -and $expectSkipsVolume))
+        if (-not $massOk) {
+            Write-Host "  checks: mass gate FAILED (entry='$($massEntry -join ',')' expectSkipsVolume=$expectSkipsVolume)"
+        }
+        $itemFailed = ($bad.Count -gt 0) -or (-not $massOk) -or (@($checks | Where-Object { $_ -match '=fail' }).Count -gt 0)
         if ($itemFailed) { $failed++ }
         $results += [ordered]@{ item = $name; runtime_ok = ($bad.Count -eq 0); checks = $checks; passed = -not $itemFailed }
         Write-Host "  checks: $(@($checks | Where-Object { $_ -match '=pass' }).Count) pass, $(@($checks | Where-Object { $_ -match '=fail' }).Count) fail"
