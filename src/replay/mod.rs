@@ -90,6 +90,10 @@ pub enum PlanStatus {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PlannedStep {
     pub index: usize,
+    /// Source-side identity (e.g. a solidcraft/57 feature id+name). Never
+    /// used as a runtime index: the runtime index above is dense 0..n and
+    /// bounds arrays and snapshot addressing.
+    pub source_id: String,
     pub command: String,
     pub status: PlanStatus,
     pub detail: String,
@@ -439,6 +443,7 @@ pub fn plan(
         if stopped {
             steps.push(PlannedStep {
                 index,
+                source_id: String::new(),
                 command: id,
                 status: PlanStatus::NotExecuted,
                 detail: "after the first unmapped step".to_string(),
@@ -462,6 +467,7 @@ pub fn plan(
                 };
                 PlannedStep {
                     index,
+                    source_id: String::new(),
                     command: id,
                     status: PlanStatus::NotExecuted,
                     detail: format!("units recorded ({unit}); values replay in millimetres"),
@@ -497,6 +503,7 @@ pub fn plan(
                         env.insert_global(&name, q);
                         PlannedStep {
                             index,
+                            source_id: String::new(),
                             command: id,
                             status: PlanStatus::Mapped,
                             detail: format!("equation \"{name}\" = {equation_rhs}"),
@@ -511,6 +518,7 @@ pub fn plan(
                     }
                     _ => PlannedStep {
                         index,
+                        source_id: String::new(),
                         command: id,
                         status: PlanStatus::NotExecuted,
                         detail:
@@ -536,6 +544,7 @@ pub fn plan(
             )?,
             _ => PlannedStep {
                 index,
+                source_id: String::new(),
                 command: id,
                 status: PlanStatus::FallbackPlanned,
                 detail: "no translation; a fallback body lands with the hybrid-fallback ticket"
@@ -597,6 +606,7 @@ fn plan_feature(
         .to_string();
     let unmappable = |detail: String| PlannedStep {
         index,
+        source_id: String::new(),
         command: id.to_string(),
         status: PlanStatus::FallbackPlanned,
         detail,
@@ -659,6 +669,7 @@ fn plan_feature(
                 };
                 PlannedStep {
                     index,
+                    source_id: String::new(),
                     command: id.to_string(),
                     status: if degrade {
                         PlanStatus::DegradePlanned
@@ -704,6 +715,7 @@ fn plan_feature(
                 };
                 PlannedStep {
                     index,
+                    source_id: String::new(),
                     command: id.to_string(),
                     status: PlanStatus::Mapped,
                     detail,
@@ -750,6 +762,7 @@ fn plan_feature(
                     };
                     PlannedStep {
                         index,
+                        source_id: String::new(),
                         command: id.to_string(),
                         status: PlanStatus::Mapped,
                         detail: format!("{detail} {axis}"),
@@ -778,6 +791,7 @@ fn plan_feature(
                     let degrade = !pattern.degraded_variants.is_empty();
                     PlannedStep {
                         index,
+                        source_id: String::new(),
                         command: id.to_string(),
                         status: if degrade {
                             PlanStatus::DegradePlanned
@@ -800,6 +814,7 @@ fn plan_feature(
                     let degrade = !modifier.degraded_variants.is_empty();
                     PlannedStep {
                         index,
+                        source_id: String::new(),
                         command: id.to_string(),
                         status: if degrade {
                             PlanStatus::DegradePlanned
@@ -840,6 +855,7 @@ fn plan_feature(
                     };
                     PlannedStep {
                         index,
+                        source_id: String::new(),
                         command: id.to_string(),
                         status: PlanStatus::Mapped,
                         detail: format!(

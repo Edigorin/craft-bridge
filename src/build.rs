@@ -65,14 +65,21 @@ pub fn build(opts: &BuildOptions, limits: &Limits) -> Result<BuildOutcome> {
             let final_exists = snapshots
                 .values()
                 .any(|s| *s == profile::SnapshotScope::Final);
-            step.detail = if boundary {
+            // The planner's named refusal reason is the record of WHY the
+            // feature stops (id/name/type and the specific reason). The
+            // snapshot-coverage note is APPENDED - never overwrites it.
+            let coverage = if boundary {
                 "no translation; the artifact carries a boundary snapshot (fallback body)"
-                    .to_string()
             } else if final_exists {
                 "no translation; only the final snapshot covers it (replay terminates there)"
-                    .to_string()
             } else {
-                "no translation and no snapshot; replay terminates here".to_string()
+                "no translation and no snapshot; replay terminates here"
+            };
+            let reason = step.detail.clone();
+            step.detail = if reason.is_empty() {
+                coverage.to_string()
+            } else {
+                format!("{reason}; {coverage}")
             };
         }
     }
