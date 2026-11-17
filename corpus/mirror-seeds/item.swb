@@ -572,10 +572,15 @@ Function BuildPat2() As String
     Dim ok As Boolean
     Dim feat As SldWorks.Feature
     Dim dm As SldWorks.Dimension
+    Dim pf As SldWorks.Feature
+    Dim uncertain As Boolean
     If feat1 Is Nothing Then gMsg = "a seed feature did not verify": GoTo ExFail
     gPlane = PlaneNameFor("XY")
     If gPlane = "" Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo ExFail
-    ok = swDoc.Extension.SelectByID2(gPlane, "PLANE", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    Set pf = FindFeatureByName(gPlane, uncertain)
+    ok = False
+    If Not pf Is Nothing Then ok = pf.Select(False)
+    If ok = False Then ok = swDoc.Extension.SelectByID2(gPlane, "PLANE", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If Not ok Then gMsg = "the mirror plane could not be selected": GoTo ExFail
     feat1.Select True
     ' feature call shape pending checkpoint verification

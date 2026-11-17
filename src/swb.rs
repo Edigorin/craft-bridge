@@ -1968,7 +1968,10 @@ fn emit_dimension(
         vba_num(si),
         vba_num(si)
     ));
-    tail.push_str(&format!("    dm.SystemValue = signVal * dimScale * {}\n", vba_num(si)));
+    tail.push_str(&format!(
+        "    dm.SystemValue = signVal * dimScale * {}\n",
+        vba_num(si)
+    ));
     // Behavioural kind evidence: setting the value must move exactly the
     // measured quantity. A wrong-kind dimension provably moves the wrong
     // axis (or the wrong measure) and fails here with both numbers named.
@@ -2317,7 +2320,7 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep, sk: Option<&SketchStep>) ->
         _ => {}
     }
     let mut locals = String::from(
-        "    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n    Dim ax As Object\n",
+        "    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n    Dim ax As Object\n    Dim objState As String\n",
     );
     let mut body = String::new();
     body.push_str(&format!(
@@ -2338,7 +2341,7 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep, sk: Option<&SketchStep>) ->
     )
     };
     let select_sketch = format!(
-        "    ok = False\n    If Not skFeat{sidx} Is Nothing Then ok = skFeat{sidx}.Select(False)\n    If Not ok Then ok = swDoc.Extension.SelectByID2(skName{sidx}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n    If Not ok Then gMsg = \"could not select the profile sketch (object and name selection both failed): name=<\" & skName{sidx} & \">, tree scan saw: \" & TreeSummary(): GoTo ExFail\n"
+        "    ok = False\n    objState = \"missing\"\n    If Not skFeat{sidx} Is Nothing Then\n    objState = \"name=<\" & skFeat{sidx}.Name & \">\"\n    ok = skFeat{sidx}.Select(False)\n    objState = objState & \" select-result=\" & CStr(ok)\n    End If\n    If ok = False Then ok = swDoc.Extension.SelectByID2(skName{sidx}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n    If ok = False Then gMsg = \"could not select the profile sketch: \" & objState & \" name=<\" & skName{sidx} & \">; tree scan saw: \" & TreeSummary(): GoTo ExFail\n"
     );
     if let Some(reason) = refusal {
         body.push_str(&format!(
@@ -3027,7 +3030,7 @@ fn emit_pat_subs(index: usize, pt: &crate::replay::PatStep) -> String {
     let mut out = String::new();
     out.push_str(&format!("' Pattern step {index}: {}\n", vb_lit(&pt.name)));
     out.push_str(&format!(
-        "Function BuildPat{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n"
+        "Function BuildPat{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n    Dim pf As SldWorks.Feature\n    Dim uncertain As Boolean\n"
     ));
     match &pt.kind {
         PatKind::Mirror { seeds, plane } => {
@@ -3048,7 +3051,7 @@ fn emit_pat_subs(index: usize, pt: &crate::replay::PatStep) -> String {
                 "    If gPlane = \"\" Then gMsg = \"no origin plane carries the {code} frame {desc}; probed: \" & gProbeLog & \"; tree scan saw: \" & TreeSummary(): GoTo ExFail\n",
                 desc = frame_desc(solidcraft_frame(*plane))
             ));
-            out.push_str("    ok = swDoc.Extension.SelectByID2(gPlane, \"PLANE\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n");
+            out.push_str("    Set pf = FindFeatureByName(gPlane, uncertain)\n    ok = False\n    If Not pf Is Nothing Then ok = pf.Select(False)\n    If ok = False Then ok = swDoc.Extension.SelectByID2(gPlane, \"PLANE\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n");
             out.push_str("    If Not ok Then gMsg = \"the mirror plane could not be selected\": GoTo ExFail\n");
             for seed in seeds {
                 out.push_str(&format!("    feat{seed}.Select True\n"));

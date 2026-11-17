@@ -97,8 +97,11 @@ pub const TT_REV_PROBE_CHIRALITY: i32 = -1;
 /// toward this many times the profile sketch normal `n_sk` (`+1` = toward
 /// `n_sk`).
 ///
-/// UNMEASURED (`0`) until `probe-primorient` runs on the seat. The
-/// composition it pins: the SolidCraft primitive extends toward +Z (the XY
+/// UNMEASURED (`0`) until `probe-primorient`'s reading is in hand. The
+/// 2026-11-17 run passed on the seat (exit 0) but its runtime report was
+/// lost before retrieval (docs/seat-acceptance.md, "Primitive orientation
+/// probe"), so the numbers it measured were never recovered and the cell
+/// stays 0 until a re-run provides them. The composition it pins: the SolidCraft primitive extends toward +Z (the XY
 /// source normal) from the base plane - source-pinned from the SolidCraft
 /// kernel (`box_solid(corner, corner + (l, w, h))`,
 /// `cylinder(base, +Z, r, h)`, with `parse_prim` forcing a base-plane

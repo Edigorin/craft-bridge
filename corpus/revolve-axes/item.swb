@@ -592,20 +592,31 @@ Function BuildRevolve1() As String
     Dim feat As SldWorks.Feature
     Dim dm As SldWorks.Dimension
     Dim ax As Object
+    Dim objState As String
     Dim revFlag As Boolean
     If Not gMapValid(0) Then gMsg = "frame adaptation: the profile sketch carries no valid adaptation map; refusing to report created": GoTo ExFail
     If gMapSide(0) * -1 <> TT_REV_PROBE_CHIRALITY Then gMsg = "the revolve sweep-direction evidence is scoped to the probe's configuration chirality (probe-revolvedir: one directed axis and one profile side); this map orientation and profile side are outside it and the candidate sweep laws disagree there; refusing to report created": GoTo ExFail
     If TT_REV_SENSE = 0 Then gMsg = "the revolve sweep-direction truth table is unmeasured: probe-revolvedir has not established which side ReverseDir=False sweeps toward; refusing to report created": GoTo ExFail
     revFlag = (TT_REV_SENSE <> -1)
     ok = False
-    If Not skFeat0 Is Nothing Then ok = skFeat0.Select(False)
-    If Not ok Then ok = swDoc.Extension.SelectByID2(skName0, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-    If Not ok Then gMsg = "could not select the profile sketch (object and name selection both failed): name=<" & skName0 & ">, tree scan saw: " & TreeSummary(): GoTo ExFail
+    objState = "missing"
+    If Not skFeat0 Is Nothing Then
+    objState = "name=<" & skFeat0.Name & ">"
+    ok = skFeat0.Select(False)
+    objState = objState & " select-result=" & CStr(ok)
+    End If
+    If ok = False Then ok = swDoc.Extension.SelectByID2(skName0, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    If ok = False Then gMsg = "could not select the profile sketch: " & objState & " name=<" & skName0 & ">; tree scan saw: " & TreeSummary(): GoTo ExFail
     swSketchMgr.InsertSketch True
     ok = False
-    If Not skFeat0 Is Nothing Then ok = skFeat0.Select(False)
-    If Not ok Then ok = swDoc.Extension.SelectByID2(skName0, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-    If Not ok Then gMsg = "could not select the profile sketch (object and name selection both failed): name=<" & skName0 & ">, tree scan saw: " & TreeSummary(): GoTo ExFail
+    objState = "missing"
+    If Not skFeat0 Is Nothing Then
+    objState = "name=<" & skFeat0.Name & ">"
+    ok = skFeat0.Select(False)
+    objState = objState & " select-result=" & CStr(ok)
+    End If
+    If ok = False Then ok = swDoc.Extension.SelectByID2(skName0, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    If ok = False Then gMsg = "could not select the profile sketch: " & objState & " name=<" & skName0 & ">; tree scan saw: " & TreeSummary(): GoTo ExFail
     If Not sl0(0).Select(True) Then gMsg = "could not select the revolve axis": GoTo ExFail
     Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, revFlag, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 4.71238898038469, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)
     If feat Is Nothing Then gMsg = "the revolve was not created": GoTo ExFail
@@ -642,13 +653,19 @@ Function BuildRevolve2() As String
     Dim feat As SldWorks.Feature
     Dim dm As SldWorks.Dimension
     Dim ax As Object
+    Dim objState As String
     Dim vA As Variant
     Dim vB As Variant
     If Not gMapValid(0) Then gMsg = "frame adaptation: the profile sketch carries no valid adaptation map; refusing to report created": GoTo ExFail
     ok = False
-    If Not skFeat0 Is Nothing Then ok = skFeat0.Select(False)
-    If Not ok Then ok = swDoc.Extension.SelectByID2(skName0, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-    If Not ok Then gMsg = "could not select the profile sketch (object and name selection both failed): name=<" & skName0 & ">, tree scan saw: " & TreeSummary(): GoTo ExFail
+    objState = "missing"
+    If Not skFeat0 Is Nothing Then
+    objState = "name=<" & skFeat0.Name & ">"
+    ok = skFeat0.Select(False)
+    objState = objState & " select-result=" & CStr(ok)
+    End If
+    If ok = False Then ok = swDoc.Extension.SelectByID2(skName0, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    If ok = False Then gMsg = "could not select the profile sketch: " & objState & " name=<" & skName0 & ">; tree scan saw: " & TreeSummary(): GoTo ExFail
     swSketchMgr.InsertSketch True
     Set ax = swSketchMgr.CreateLine(MapU(0, -0.05, 0.0), MapV(0, -0.05, 0.0), 0#, MapU(0, 0.05, 0.0), MapV(0, 0.05, 0.0), 0#)
     If ax Is Nothing Then gMsg = "the revolve helper axis did not appear": GoTo ExFail
@@ -667,9 +684,14 @@ Function BuildRevolve2() As String
     If Abs(vB(2)) > 0.000001 Then gMsg = "the revolve helper axis end is off the sketch plane": GoTo ExFail
     swSketchMgr.InsertSketch True
     ok = False
-    If Not skFeat0 Is Nothing Then ok = skFeat0.Select(False)
-    If Not ok Then ok = swDoc.Extension.SelectByID2(skName0, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-    If Not ok Then gMsg = "could not select the profile sketch (object and name selection both failed): name=<" & skName0 & ">, tree scan saw: " & TreeSummary(): GoTo ExFail
+    objState = "missing"
+    If Not skFeat0 Is Nothing Then
+    objState = "name=<" & skFeat0.Name & ">"
+    ok = skFeat0.Select(False)
+    objState = objState & " select-result=" & CStr(ok)
+    End If
+    If ok = False Then ok = swDoc.Extension.SelectByID2(skName0, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    If ok = False Then gMsg = "could not select the profile sketch: " & objState & " name=<" & skName0 & ">; tree scan saw: " & TreeSummary(): GoTo ExFail
     If Not ax.Select(True) Then gMsg = "could not select the helper axis": GoTo ExFail
     Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 6.283185307179586, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)
     If feat Is Nothing Then gMsg = "the revolve was not created": GoTo ExFail

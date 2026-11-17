@@ -103,7 +103,9 @@ fn sign_chain_equations_flow_through_slotrefs() {
     // dimension values is a seat question; the generated coverage pins both
     // branches and the seat check (expect.txt) reads the stored equation.
     assert!(
-        text.contains("If Not AddDimEquation(dm, \"40mm\", signVal * 0.04 * dimScale, 0, signVal, skName"),
+        text.contains(
+            "If Not AddDimEquation(dm, \"40mm\", signVal * 0.04 * dimScale, 0, signVal, skName"
+        ),
         "the upstream dimension does not register its slot with the runtime sign"
     );
     for needle in ["signVal = 1#", "signVal = -1#", "but the source value is"] {

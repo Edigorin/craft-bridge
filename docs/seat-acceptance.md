@@ -107,6 +107,12 @@ snapshots. Anything the seat reports as a correction becomes a new fixture.
 - **Circle radius is `GetRadius`** (a method); `ci.Radius` raises 438.
   `GetCenterPoint2` returns the centre handle (X/Y/Z readable, Select
   works); `GetStartPoint` on a circle returns a perimeter point (array).
+- **`AddDimension2` on a circle is diameter-valued** (2026-11-17,
+  frame-sign-chain: the created dimension measures .02 for a drawn radius
+  .01). Radius dimensions carry the `dimScale` 2 convention at the API
+  boundary: value target `2 * r`, equation text `2*(...)`, scaled expect,
+  and `regScale`/`regSign` normalize `SlotRef` references back to source
+  semantics (a76b0e7/39dad15).
 - **`Dim sgn`-style names are compile errors**: VBA intrinsic names cannot
   be identifiers. A compile error presents as RunMacro returning failure
   with no report at all - bisect with committed compile probes.
@@ -121,6 +127,31 @@ snapshots. Anything the seat reports as a correction becomes a new fixture.
   (feature calls, SolveSketch re-entry, DeleteCreated) and keeps the
   by-name form only as fallback, refusing with `TreeSummary()` when both
   fail (b2e9878).
+
+## Primitive orientation probe (`probe-primorient`, v1)
+
+- [x] The macro ran on the seat: task `craft-b2-probe-primorient`,
+      2026-11-17 10:15 local, `tools/seat-smoke.ps1` exit 0 (the schtasks
+      `Last Result: 0` corroborates the owner-stated green run). Macro
+      `corpus/compat-probe/probe-primorient.swb` sha256
+      `e4e4771da3749cd15565b8acfd64ff12782d9c51cd6a796f132aa2251276257f`
+      (v1, byte-review fold-in included).
+- [ ] **The runtime report was lost before retrieval.** When the report was
+      fetched (2026-11-17, hours after the run), neither
+      `C:\Users\Jerome\craft-bridge-report\probe-primorient\runtime-report.jsonl`
+      nor its smoke log existed; the directory itself was gone. An
+      exhaustive search found nothing: `probe-primorient-b2` exists but is
+      empty, a content search over every `*.jsonl` under
+      `craft-bridge-report` finds no `probe-primorient` header, and the
+      recycle bin and user directories were checked. The b3/b4/b5 harness
+      waves ran between the probe and the fetch; whatever removed the
+      directory is unknown (no tool of ours deletes - the no-delete rule).
+      **The measured numbers were never recovered.**
+- [ ] `TT_PRIM_DIR_TRUE_SIDE` therefore stays **UNMEASURED (0)**: the
+      fill-in needs a re-run of the same sha-pinned task (still
+      registered) and the report read before anything else runs. Until
+      then every primitive step fails closed naming `probe-primorient` -
+      an expected failure on the acceptance list, never a silent guess.
 
 ## Extrude and mass APIs (measured on the seat, 2026-11-16)
 
