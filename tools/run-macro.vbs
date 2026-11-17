@@ -37,7 +37,9 @@ End If
 WScript.Echo "solidworks revision: " & rev
 
 ' ---- run the macro: RunMacro2 first (documented), legacy RunMacro after ----
-ok = swApp.RunMacro2(macroPath, "", "main", 1, errCode)
+' CLng coercion: RunMacro2 takes ByRef Error As Long; a bare VBScript
+' Variant makes the late binder raise Type mismatch before the macro runs.
+ok = swApp.RunMacro2(macroPath, "", "main", 1, CLng(errCode))
 If Err.Number <> 0 Then
   WScript.Echo "RunMacro2 failed: " & Err.Description
   Err.Clear

@@ -620,7 +620,49 @@ fn documents_outside_the_single_part_boundary_refuse() {
         "\"units\": \"mm\", \"components\": [{ \"id\": 1 }],",
     );
     let err = plan_err(&design);
-    assert!(err.contains("not a single-part document"), "{err}");
+    assert!(err.contains("outside the v1 replay boundary"), "{err}");
+    // Configurations and point clouds are evaluated state too (research
+    // 06): a config row can override parameters and suppression, so a
+    // replay that ignored it would build the wrong model.
+    for (field, value) in [
+        ("\"configs\": {\"columns\": [], \"rows\": [], \"row_identities\": {}, \"active\": \"\", \"rules\": []}", "configs"),
+        ("\"point_clouds\": [{ \"id\": 1 }]", "point_clouds"),
+    ] {
+        let design = DESIGN.replace("\"units\": \"mm\",", &format!("\"units\": \"mm\", {field},"));
+        let err = plan_err(&design);
+        assert!(err.contains(value), "{value}: {err}");
+    }
+}
+
+#[test]
+fn text_generated_outlines_degrade_named() {
+    // sketch.links text sources regenerate their outlines on edit; a
+    // replay can only freeze the geometry it sees - and must say so.
+    let design = sketch_design(
+        7,
+        r#"{ "type": "origin", "name": "XY" }"#,
+        r#"{ "id": "origin", "pos": [0.0, 0.0], "fixed": true },
+        { "id": "p1", "pos": [10.0, 0.0], "fixed": true },
+        { "id": "p2", "pos": [3.0, 7.0], "fixed": true }"#,
+    )
+        .replace(
+            "\"constraints\": []",
+            "\"constraints\": [], \"links\": [{ \"id\": \"t1\", \"source\": { \"type\": \"text\", \"text\": \"HI\" } }]",
+        );
+    let steps = plan_of(&design);
+    assert_eq!(steps[1].status, PlanStatus::DegradePlanned);
+    let sketch = match &steps[1].work {
+        Work::Sketch(s) => s,
+        _ => panic!(),
+    };
+    assert!(
+        sketch
+            .dropped_constraints
+            .iter()
+            .any(|d| d.contains("text/generated link")),
+        "{:?}",
+        sketch.dropped_constraints
+    );
 }
 
 #[test]

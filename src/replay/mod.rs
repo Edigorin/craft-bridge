@@ -1376,6 +1376,17 @@ fn parse_sketch(
     let mut dimensions = Vec::new();
     let mut dropped_constraints: Vec<String> = Vec::new();
     let mut fix_constrained: Vec<bool> = vec![false; points.len()];
+    // Text links generate outline geometry (nested-schema research T4):
+    // the outlines replay as frozen curves, but the text parametrics that
+    // would regenerate them are not replayed - named, never silent.
+    if let Some(Value::Array(links)) = sketch.get("links") {
+        if !links.is_empty() {
+            dropped_constraints.push(format!(
+                "sketch carries {} text/generated link(s): outline geometry replays frozen, its parametric regeneration does not",
+                links.len()
+            ));
+        }
+    }
     for (i, k) in constraints_v.iter().enumerate() {
         let ctype = k
             .get("type")

@@ -241,3 +241,21 @@ multibody semantics. Also documented there: source join/cut/intersect do
 NOT all map to this boss call - subtractive extrusions use the cut
 feature API and intersections use InsertCombineFeature (marks: target 1,
 tools 2; operation constants 15903/15902/15901).
+
+## Task XML and runner lessons (research 05 confirmed)
+
+- The harness task template once used `*>1 | Out-File ...` for log capture:
+  PowerShell's `*>1` redirects all streams to a FILE NAMED `1` (that is
+  the stray `1` in the repo root), it does not merge into stdout. Use
+  `2>&1 | Out-File` deliberately. The corrected template runs a -File
+  wrapper script with Start-Transcript (see the probe runner pattern in
+  docs/source-probe-evidence.md).
+- `RunMacro2(path, module, procedure, options, error)` takes
+  `ByRef Error As Long`; a bare VBScript Variant makes the late binder
+  raise "Type mismatch" BEFORE the macro runs - the recurring
+  "RunMacro2 failed: Type mismatch" in every runner log. tools/run-macro.vbs
+  now coerces with `CLng`; the legacy `RunMacro` fallback stays.
+- VBScript has no `Val`, `Str` or `Format` (those are VBA): a call raises
+  a swallowed error under `On Error Resume Next`. tools/check-part.vbs
+  used `Val` in the `dim:` expect path - now the logic module's
+  `ParsePeriod`. The tooling tests pin the ban list.

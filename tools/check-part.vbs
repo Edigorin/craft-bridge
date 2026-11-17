@@ -331,12 +331,17 @@ Do Until f.AtEndOfStream
           outFile.WriteLine "detail:feature:" & featName & "=missing from the tree"
         End If
       ElseIf Left(parts(0), 4) = "dim:" Then
-        Dim dimName, dp
+        Dim dimName, dp, expVal
         dimName = Mid(parts(0), 5)
         Err.Clear
         Set dp = swDoc.Parameter(dimName)
         If Err.Number = 0 And Not dp Is Nothing Then
-          If Abs(dp.SystemValue - Val(parts(1))) < 0.000001 Then
+          ' VBScript has no Val (that is VBA): parse through the logic
+          ' module's locale-free parser and fail closed on bad text.
+          If Not ParsePeriod(parts(1), expVal) Then
+            outFile.WriteLine "check:dim:" & dimName & "=fail"
+            outFile.WriteLine "detail:dim:" & dimName & "=expected value " & parts(1) & " is not a period-decimal number"
+          ElseIf Abs(dp.SystemValue - expVal) < 0.000001 Then
             outFile.WriteLine "check:dim:" & dimName & "=pass"
           Else
             outFile.WriteLine "check:dim:" & dimName & "=fail"

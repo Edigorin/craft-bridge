@@ -82,6 +82,11 @@ fn validate_57(value: &Value, limits: &Limits) -> Result<()> {
         "links",
         "body_components",
         "body_offsets",
+        // Evaluated state, not metadata (nested-schema research T4):
+        // configuration rows override parameters and suppression, rules
+        // evaluate at runtime, and point clouds may be feature inputs.
+        "configs",
+        "point_clouds",
     ] {
         let occupied = match root.get(field) {
             None | Some(Value::Null) => false,
@@ -92,7 +97,7 @@ fn validate_57(value: &Value, limits: &Limits) -> Result<()> {
         };
         if occupied {
             return Err(Error::InvalidRecipe(format!(
-                "the design is not a single-part document ({field} is present); components, occurrences, parts, links and body placement are outside the v1 replay boundary"
+                "the design carries evaluated state outside the v1 replay boundary ({field} is present); components, occurrences, parts, links, body placement, configurations and point clouds change what the evaluated model is"
             )));
         }
     }

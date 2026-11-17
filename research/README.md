@@ -30,6 +30,6 @@ Current state (2026-11-17):
 | 01 | `inputs/01-real-design-test-brief.md` (test designs + format research) | `outputs/01-solidcraft-57-format-research.md` |
 | 02 | `inputs/02-nested-schema-and-micro-designs.md` | `outputs/02-solidcraft-57-nested-schema-research.md` |
 | 03 | `inputs/03-solidworks-api-research-brief.md` | `outputs/03-solidworks-api-research.md` |
-| 04 | `inputs/04-solidworks-method-pages-probe-queue.md` | pending |
-| 05 | `inputs/05-vba-dialects-and-seat-automation.md` | pending |
-| 06 | `inputs/06-solidcraft-command-shapes-and-plugins.md` | pending |
+| 04 | `inputs/04-solidworks-method-pages-probe-queue.md` | `outputs/04-solidworks-method-pages-research.md` |
+| 05 | `inputs/05-vba-dialects-and-seat-automation.md` | `outputs/05-vba-dialects-and-seat-automation-research.md` |
+| 06 | `inputs/06-solidcraft-command-shapes-and-plugins.md` | `outputs/06-solidcraft-command-research-report.md` |

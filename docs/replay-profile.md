@@ -83,6 +83,12 @@ different things:
   order. They bound macro arrays and report ordering.
 - *Snapshot boundaries* address runtime indices, never source ids.
 
+**Units.** Sketch point coordinates and bare geometry literals are
+millimetres; feature length expressions with bare numbers use the design
+length unit (research 06 T1); equation text uses unit-suffixed literals -
+a bare number in a SolidWorks equation is in DOCUMENT units (probe
+evidence).
+
 **Parameters** (`{name, expr, unit, comment?, model?}`) become global-
 variable equations. `model` is provenance only (a dimension/feature-created
 parameter like `d1`); the evaluator treats both kinds the same, and so does
@@ -126,6 +132,15 @@ new-body creation only. `join`, `cut` and `intersect` carry target-body
 semantics that wait for the body registry and the merge/scope probe
 (Phase B) - they stop named rather than operating on whichever bodies
 SolidWorks happens to select.
+
+**Evaluated state refuses.** A document carrying `configs` (configuration
+rows override parameters and suppression; rules evaluate at runtime),
+`point_clouds`, or assembly/placement records (components, occurrences,
+parts, links, body offsets) is refused at validation: replaying the saved
+values would build a model the design does not evaluate to. `plugin_data`
+is inert for built-in geometry and is not a refusal. A sketch whose
+`links` carry text sources degrades named: the generated outlines replay
+as frozen geometry, their text parametrics do not regenerate.
 
 **Named stops and prefix semantics.** Every unmapped feature stops with
 its source id, name, type and the specific reason (the rollout phase named
