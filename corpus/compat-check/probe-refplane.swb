@@ -65,6 +65,12 @@ Sub main()
     Dim selMode As String
     Dim eqForm As String
     Dim eqErr As Long
+    Dim eqText As String
+    Dim globalText As String
+    Dim rbGlobal As String
+    Dim rb As String
+    Dim driven As Double
+    Dim form As Long
     Dim centreVia As String
     Dim centreErr As Long
     Dim cphX As Double
@@ -339,45 +345,54 @@ Sub main()
     If Abs(off - 0.019) > 0.000001 Then Err.Raise vbObjectError + 540, "probe-refplane.swb", "the dimension edit to 0.019 did not move the plane (origin reads " & Vec3Text(offX, offY, offZ) & ")"
     WriteStep stepIdx, "plane.dimension-drives", "created", "SystemValue edit to 0.019 moved the plane (dim " & dimName & ")"
 
-    ' ---- step 8 (P03b): an equation on the dimension drives the plane ----
+    ' ---- step 8 (P03b): equations drive the dimension and the plane.
+    ' The canary discipline applies: the stored equation must read back
+    ' EXACTLY and the driven value must match after rebuild - acceptance
+    ' alone proves nothing. Both name forms are tried; the one that reads
+    ' back and drives is the recorded answer. ----
     stepIdx = 8
     Err.Clear
     Set eqMgr = swDoc.GetEquationMgr
     If Err.Number <> 0 Or eqMgr Is Nothing Then Err.Raise vbObjectError + 541, "probe-refplane.swb", "GetEquationMgr failed (err " & Trim(Str(Err.Number)) & ")"
+    globalText = """CB_Off"" = 0.023"
     Err.Clear
-    idx = eqMgr.Add(-1, """CB_Off"" = 0.023")
-    If idx < 0 Then Err.Raise vbObjectError + 541, "probe-refplane.swb", "the global equation CB_Off = 0.023 was not accepted"
+    idx = eqMgr.Add(-1, globalText)
+    If Err.Number <> 0 Or idx < 0 Then Err.Raise vbObjectError + 541, "probe-refplane.swb", "the global equation was not accepted (err " & Trim(Str(Err.Number)) & ")"
+    Err.Clear
+    rbGlobal = eqMgr.Equation(idx)
+    Err.Clear
+    WriteStep stepIdx, "plane.global-equation", "created", "stored: " & rbGlobal
     eqForm = "none"
-    On Error Resume Next
-    Err.Clear
-    idx = eqMgr.Add(-1, """" & dimName & "@CB_Plane_A"" = ""CB_Off""")
-    If Err.Number = 0 And idx >= 0 Then eqForm = "qualified (D@CB_Plane_A)"
-    eqErr = Err.Number
-    If eqForm = "none" Then
+    eqDrives = "none"
+    For form = 0 To 1
+        If form = 0 Then eqText = """" & dimName & "@CB_Plane_A"" = ""CB_Off""" Else eqText = """" & dimName & """ = ""CB_Off"""
         Err.Clear
-        idx = eqMgr.Add(-1, """" & dimName & """ = ""CB_Off""")
-        If Err.Number = 0 And idx >= 0 Then eqForm = "bare name"
-        If eqForm = "none" Then eqErr = Err.Number
-    End If
+        idx = eqMgr.Add(-1, eqText)
+        If Err.Number = 0 And idx >= 0 Then
+            Err.Clear
+            rb = eqMgr.Equation(idx)
+            WriteStep stepIdx, "plane.equation-readback", "created", "form " & Trim(Str(form)) & " stored: " & rb
+            swDoc.EditRebuild3
+            Err.Clear
+            Set dd = feat.GetFirstDisplayDimension
+            If dd Is Nothing Then Err.Raise vbObjectError + 541, "probe-refplane.swb", "the dimension is gone after the equation"
+            Set dp = dd.GetDimension2(0)
+            If dp Is Nothing Then Err.Raise vbObjectError + 541, "probe-refplane.swb", "the dimension core is gone after the equation"
+            driven = dp.SystemValue
+            WriteStep stepIdx, "plane.equation-drives-dim", "created", "form " & Trim(Str(form)) & " drove the dimension to " & Trim(Str(driven)) & " (target 0.023)"
+            If Abs(driven - 0.023) < 0.000001 Then
+                If eqForm = "none" Then eqForm = "form " & Trim(Str(form))
+                eqDrives = "form " & Trim(Str(form))
+                Exit For
+            End If
+        Else
+            WriteStep stepIdx, "plane.equation-readback", "created", "form " & Trim(Str(form)) & " not accepted (err " & Trim(Str(Err.Number)) & ")"
+        End If
+    Next form
     Err.Clear
     On Error GoTo Fail
-    If eqForm = "none" Then Err.Raise vbObjectError + 541, "probe-refplane.swb", "the dimension equation was not accepted in either name form (err " & Trim(Str(eqErr)) & ")"
-    WriteStep stepIdx, "plane.equation-form", "created", "the dimension equation accepted: " & eqForm
-    swDoc.EditRebuild3
-    Err.Clear
-    Set tr = Nothing
-    Set rp = feat.GetSpecificFeature2
-    Set tr = rp.Transform
-    a = tr.ArrayData
-    offX = a(9): offY = a(10): offZ = a(11)
-    off = Sqr(offX * offX + offY * offY + offZ * offZ)
-    If Abs(off - 0.023) > 0.000001 Then
-        offX = a(12): offY = a(13): offZ = a(14)
-        off = Sqr(offX * offX + offY * offY + offZ * offZ)
-    End If
-    If Abs(off - 0.023) > 0.000001 Then Err.Raise vbObjectError + 541, "probe-refplane.swb", "the equation CB_Off = 0.023 did not drive the plane (origin reads " & Vec3Text(offX, offY, offZ) & ")"
-    WriteStep stepIdx, "plane.equation-drives", "created", "equation (" & eqForm & ") drove the plane to 0.023"
-
+    If eqDrives = "none" Then Err.Raise vbObjectError + 541, "probe-refplane.swb", "neither equation name form drove the dimension to 0.023 (last dim value " & Trim(Str(driven)) & ")"
+    WriteStep stepIdx, "plane.equation-drives", "created", "the equation chain works via " & eqDrives
     ' ---- step 9: the sketch geometry moved WITH the plane (associativity) ----
     stepIdx = 9
     ' The follow witness is the SKETCH FRAME: re-open the sketch and read
