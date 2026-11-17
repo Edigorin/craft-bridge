@@ -73,15 +73,20 @@ pre-held predicate (the recorded limitation class); the parameter-edit
 behaviour is pinned by `probe-primorient`'s `box-edit-follow` case and
 remains an owner-seat acceptance check, like `sketch.edit-follow`.
 
-The **circle-size dimension kind** (radius- vs diameter-kind reading of
-`SystemValue`) must be unambiguous before the value is written and the
-dimension registered: the plan refuses a radius at or below 2e-6 m (there
-the two candidate readings coincide within the 1e-6 m verification
-tolerance and a halved driven radius would pass the geometry check), and
-the runtime check refuses the ambiguous scale and the diameter-kind reading
-outright - the sign contract carries a sign, never a factor of two.
-`probe-primorient`'s cylinder case pins what the seat creates (evidence for
-the sketch family's radius dimensions too).
+The **circle-size dimension kind** is settled seat evidence: `AddDimension2`
+on a circle is **diameter-valued** (frame-sign-chain measured .02 for radius
+.01; folded as the `dimScale` convention in a76b0e7/39dad15). Radius
+dimensions carry `dimScale` 2 at the API boundary - the value target is
+twice the radius, the equation text wraps `2*(...)`, the expect is scaled,
+and `SlotRef` normalizes downstream references back to source semantics
+through `regScale` composed with the sign (`regSign`) in the factor form.
+The plan still refuses a radius at or below 2e-6 m: below twice the 1e-6 m
+verification tolerance a wrong radius-valued reading is indistinguishable
+from the convention (and a halved driven radius would pass the geometry
+check). The runtime check refuses any reading that is not the diameter
+reading before the value is written and the dimension registered.
+`probe-primorient`'s cylinder case cross-checks the convention on the
+primitive path.
 
 `AddDimEquation` ends in `EditRebuild3`, which **exits sketch edit**
 (seat-measured): every primitive dimension equation is followed by a
@@ -96,8 +101,10 @@ with the axis pinned to +Z and sizes positive), so its end sits toward
 `+1 * gMapSide` in sketch-normal units and the call flag is
 `dirFlag = (wantSide = TT_PRIM_DIR_TRUE_SIDE)` - the extrude family's
 composition. `TT_PRIM_DIR_TRUE_SIDE` is **UNMEASURED (0)** until
-`probe-primorient` reports; while it reads 0 every primitive step fails
-with a named reason naming its probe and never reports `created`.
+`probe-primorient`'s reading is in hand - its 2026-11-17 run passed
+(exit 0) but the runtime report was lost before retrieval
+(docs/seat-acceptance.md) - and while it reads 0 every primitive step
+fails with a named reason naming its probe and never reports `created`.
 
 ## Modifications (fillet, chamfer, shell, draft, hole)
 
@@ -343,7 +350,7 @@ semantics cannot be established fails and never reports `created`.
 | `TT_REV_SENSE = +1` | with the blind revolve call shape (`ReverseDir=False`), the sweep is the right-hand rotation by +angle about the drawn axis direction (start to end) when +1 | probe-revolvedir blind-270 cases: ReverseDir=False's centroid at (u,n) = (-0.0046, -0.0046) = mid-angle -135 deg = toward MINUS the normal first = right-hand +angle about the drawn +t axis (t_hat x u_hat = -n_hat); ReverseDir=True mirrored. Centroids via MassProperty `centerofmass` (American spelling; `centreofmass` raises 438) |
 | `TT_REV_TWO_FIRST_SIDE = +1` | with the two-sided revolve call shape (`ReverseDir=False`), the first angle sweeps with right-hand sense TT about the drawn axis direction | probe-revolvedir twosided-100-150: D1 = 100 deg, D2 = 150 deg (radian identities), centroid at mid-angle +24.6 deg -> span [-100, +150]: the first angle on the MINUS-normal side = the same right-hand +angle sense as the blind form (two independent measurements agreeing) |
 | `TT_REV_PROBE_CHIRALITY = -1` | the evidence-scope gate: the configuration chirality sign((drawn axis direction x profile radial side) . sketch normal) the probe establishes | probe-revolvedir's pinned setup: drawn axis (0,-0.010)->(0,0.080) = +t, profile on the +u side, n_sk = +X -> (t_hat x u_hat).n_hat = -1 |
-| `TT_PRIM_DIR_TRUE_SIDE = 0` | the primitive blind call shape (byte-identical to the extrude blind form): the height extends toward TT * n_sk for `Dir=True` | UNMEASURED - `probe-primorient` must establish it. Its box cases run the emitter's exact call shape and mapped profile on the XY plane's non-identity map and cross-check `TT_EX_DIR_TRUE_SIDE` on a second frame. A fill-in is evidence for the measured positive-normal configuration only - never proof of the reflected case (see the primitive rows below) |
+| `TT_PRIM_DIR_TRUE_SIDE = 0` | the primitive blind call shape (byte-identical to the extrude blind form): the height extends toward TT * n_sk for `Dir=True` | UNMEASURED - `probe-primorient` must establish it. Its box cases run the emitter's exact call shape and mapped profile on the XY plane's non-identity map and cross-check `TT_EX_DIR_TRUE_SIDE` on a second frame. The 2026-11-17 run passed (exit 0) but its runtime report was lost before retrieval (docs/seat-acceptance.md), so the reading is still missing and a re-run is queued. A fill-in is evidence for the measured positive-normal configuration only - never proof of the reflected case (see the primitive rows below) |
 
 The revolve rows are read under two candidate structural laws (the flag
 selects an absolute side in units of the normal, or a right-hand sense
@@ -400,8 +407,10 @@ Source-side rules the adaptation applies on top of the constants
   `+1 * gMapSide` and the call flag is
   `dirFlag = (wantSide = TT_PRIM_DIR_TRUE_SIDE)` - the extrude blind
   composition, on a call shape byte-identical to the extrude family's.
-  The cell is UNMEASURED until probe-primorient reports and every
-  primitive refuses with a named reason naming its probe until then. The
+  The cell is UNMEASURED until probe-primorient's reading is in hand
+  (the 2026-11-17 run passed but its report was lost before retrieval -
+  docs/seat-acceptance.md) and every primitive refuses with a named reason
+  naming its probe until then. The
   probe measures the XY plane's positive-normal configuration on this seat:
   it cannot distinguish a transform-relative sketch normal from a
   host-canonicalized normal that agrees there, and `gMapSide = -1` is

@@ -154,7 +154,7 @@
         },
         "params": [
           {
-            "expression": "10 mm",
+            "expression": "5 mm",
             "name": "d1",
             "unit": "mm"
           }
