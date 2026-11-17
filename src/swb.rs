@@ -2279,23 +2279,20 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep, sk: Option<&SketchStep>) ->
         &rv.kind,
         RK::Blind { angle_rad, .. } if (*angle_rad - 2.0 * std::f64::consts::PI).abs() < 1e-9
     );
-    // The source-side factor is needed by directional forms only; the
-    // direction-free paths (full turn, mid-plane) never consult it.
-    let need_sigma = match &rv.kind {
-        RK::TwoSided { .. } => true,
-        RK::Blind { .. } => !full_turn,
-        RK::Symmetric { .. } => false,
+    // The profile classification runs for EVERY revolve form: the source
+    // kernel refuses a profile that crosses its revolve axis
+    // unconditionally ("the profile crosses the revolve axis" - any angle,
+    // any region), so the replay refuses it named before the call. The
+    // direction-free forms use only its validity - never the side sign, so
+    // no direction decision exists there - and the directional forms also
+    // use the side factor.
+    let sigma = match sk {
+        Some(sk) => axis_sigma(sk, &rv.axis),
+        None => Err("the profile sketch is not in the plan".to_string()),
     };
-    let sigma = if need_sigma {
-        match sk {
-            Some(sk) => axis_sigma(sk, &rv.axis),
-            None => Err("the profile sketch is not in the plan".to_string()),
-        }
-    } else {
-        Ok(0)
-    };
-    // Fail-closed preamble: signed two-sided intervals and unestablishable
-    // profile sides refuse here, before any selection or feature call.
+    // Fail-closed preamble: signed two-sided intervals, crossing profiles
+    // and unestablishable profile sides refuse here, before any selection
+    // or feature call.
     let mut refusal: Option<String> = None;
     match &rv.kind {
         RK::TwoSided {
@@ -2317,10 +2314,19 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep, sk: Option<&SketchStep>) ->
                 ));
             }
         }
-        _ => {}
+        // Direction-free forms (full turn, mid-plane): no direction
+        // decision exists, but the profile must still be a valid revolve
+        // profile - the kernel's own unconditional rule.
+        RK::Blind { .. } | RK::Symmetric { .. } => {
+            if let Err(reason) = &sigma {
+                refusal = Some(format!(
+                    "the revolve profile is not a valid revolve profile: {reason}"
+                ));
+            }
+        }
     }
     let mut locals = String::from(
-        "    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n    Dim ax As Object\n    Dim objState As String\n",
+        "    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim dm As SldWorks.Dimension\n    Dim ax As Object\n    Dim objState As String\n    Dim callText As String\n",
     );
     let mut body = String::new();
     body.push_str(&format!(
@@ -2398,7 +2404,8 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep, sk: Option<&SketchStep>) ->
         match &rv.kind {
             RK::Blind { angle_rad, .. } => {
                 body.push_str(&format!(
-                    "    Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, {flag}, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n    If feat Is Nothing Then gMsg = \"the revolve was not created (kind=single-dir)\": GoTo ExFail\n",
+                    "    callText = \"FeatureRevolve2(True, True, False, False, \" & CStr({flag}) & \", True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, \" & Trim(Str({})) & \", 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\"\n    Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, {flag}, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n    If feat Is Nothing Then gMsg = \"the revolve was not created (kind=single-dir): \" & callText: GoTo ExFail\n",
+                    vba_num(*angle_rad),
                     vba_num(*angle_rad)
                 ));
                 body.push_str(&dim_check(1, angle_rad.abs(), "revolve angle D1"));
@@ -2419,7 +2426,8 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep, sk: Option<&SketchStep>) ->
                 // the axis points"); the angle is the TOTAL (the documented
                 // mid-plane semantics, probe-confirmable).
                 body.push_str(&format!(
-                    "    Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondMidPlane, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n    If feat Is Nothing Then gMsg = \"the revolve was not created (kind=midplane)\": GoTo ExFail\n",
+                    "    callText = \"FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondMidPlane, swEndConditions_e.swEndCondBlind, \" & Trim(Str({})) & \", 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\"\n    Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondMidPlane, swEndConditions_e.swEndCondBlind, {}, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n    If feat Is Nothing Then gMsg = \"the revolve was not created (kind=midplane): \" & callText: GoTo ExFail\n",
+                    vba_num(*total_rad),
                     vba_num(*total_rad)
                 ));
                 body.push_str(&dim_check(1, total_rad.abs(), "revolve angle D1"));
@@ -2438,7 +2446,7 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep, sk: Option<&SketchStep>) ->
                 first_rad,
                 second_rad,
             } => {
-                body.push_str("    Set feat = gFeatMgr.FeatureRevolve2(False, True, False, False, False, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, aA, aB, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n    If feat Is Nothing Then gMsg = \"the revolve was not created (kind=two-sided)\": GoTo ExFail\n");
+                body.push_str("    callText = \"FeatureRevolve2(False, True, False, False, False, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, \" & Trim(Str(aA)) & \", \" & Trim(Str(aB)) & \", False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\"\n    Set feat = gFeatMgr.FeatureRevolve2(False, True, False, False, False, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, aA, aB, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)\n    If feat Is Nothing Then gMsg = \"the revolve was not created (kind=two-sided): \" & callText: GoTo ExFail\n");
                 body.push_str(&dim_check_dyn(
                     "wFirst",
                     first_rad.abs(),

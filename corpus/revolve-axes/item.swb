@@ -37,7 +37,7 @@ Const TT_EX_THROUGH_ALL_DIR As Long = -1    ' probe-throughall: the through-all 
 Const TT_REV_SENSE As Long = 1             ' probe-revolvedir: ReverseDir=False sweeps the right-hand +angle sense about the drawn axis when +1
 Const TT_REV_TWO_FIRST_SIDE As Long = 1    ' probe-revolvedir: the two-sided first angle sweeps right-hand sense TT about the drawn axis
 Const TT_REV_PROBE_CHIRALITY As Long = -1   ' the configuration chirality the revolve evidence establishes (probe-revolvedir: one directed axis and one profile side)
-Const TT_PRIM_DIR_TRUE_SIDE As Long = 0   ' probe-primorient: the primitive height extends toward TT * the sketch normal for Dir=True (0 = unmeasured)
+Const TT_PRIM_DIR_TRUE_SIDE As Long = -1   ' probe-primorient: the primitive height extends toward TT * the sketch normal for Dir=True (0 = unmeasured)
 Dim feat1 As SldWorks.Feature
 Dim feat2 As SldWorks.Feature
 Dim skName0 As String
@@ -226,16 +226,16 @@ Sub DrawGeometry0()
     sl0(0).ConstructionGeometry = True
     Set pt0(0) = sl0(0).GetStartPoint2
     Set pt0(1) = sl0(0).GetEndPoint2
-    Set sl0(1) = swSketchMgr.CreateLine(MapU(0, 0.005, -0.01), MapV(0, 0.005, -0.01), 0#, MapU(0, 0.01, -0.01), MapV(0, 0.01, -0.01), 0#)
+    Set sl0(1) = swSketchMgr.CreateLine(MapU(0, 0.005, 0.005), MapV(0, 0.005, 0.005), 0#, MapU(0, 0.01, 0.005), MapV(0, 0.01, 0.005), 0#)
     Set pt0(2) = sl0(1).GetStartPoint2
     Set pt0(3) = sl0(1).GetEndPoint2
-    Set sl0(2) = swSketchMgr.CreateLine(MapU(0, 0.01, -0.01), MapV(0, 0.01, -0.01), 0#, MapU(0, 0.01, 0.01), MapV(0, 0.01, 0.01), 0#)
+    Set sl0(2) = swSketchMgr.CreateLine(MapU(0, 0.01, 0.005), MapV(0, 0.01, 0.005), 0#, MapU(0, 0.01, 0.025), MapV(0, 0.01, 0.025), 0#)
     Set pt0(4) = sl0(2).GetStartPoint2
     Set pt0(5) = sl0(2).GetEndPoint2
-    Set sl0(3) = swSketchMgr.CreateLine(MapU(0, 0.01, 0.01), MapV(0, 0.01, 0.01), 0#, MapU(0, 0.005, 0.01), MapV(0, 0.005, 0.01), 0#)
+    Set sl0(3) = swSketchMgr.CreateLine(MapU(0, 0.01, 0.025), MapV(0, 0.01, 0.025), 0#, MapU(0, 0.005, 0.025), MapV(0, 0.005, 0.025), 0#)
     Set pt0(6) = sl0(3).GetStartPoint2
     Set pt0(7) = sl0(3).GetEndPoint2
-    Set sl0(4) = swSketchMgr.CreateLine(MapU(0, 0.005, 0.01), MapV(0, 0.005, 0.01), 0#, MapU(0, 0.005, -0.01), MapV(0, 0.005, -0.01), 0#)
+    Set sl0(4) = swSketchMgr.CreateLine(MapU(0, 0.005, 0.025), MapV(0, 0.005, 0.025), 0#, MapU(0, 0.005, 0.005), MapV(0, 0.005, 0.005), 0#)
     Set pt0(8) = sl0(4).GetStartPoint2
     Set pt0(9) = sl0(4).GetEndPoint2
     swDoc.ClearSelection2 True
@@ -454,36 +454,36 @@ Function VerifySketch0() As Boolean
     If Abs(v(1) - MapV(0, 0.0, 0.02)) > TOL Then GoTo VerifyFail
     If Abs(v(2)) > TOL Then GoTo VerifyFail
     v = sl0(1).GetStartPoint
-    If Abs(v(0) - MapU(0, 0.005, -0.01)) > TOL Then GoTo VerifyFail
-    If Abs(v(1) - MapV(0, 0.005, -0.01)) > TOL Then GoTo VerifyFail
+    If Abs(v(0) - MapU(0, 0.005, 0.005)) > TOL Then GoTo VerifyFail
+    If Abs(v(1) - MapV(0, 0.005, 0.005)) > TOL Then GoTo VerifyFail
     If Abs(v(2)) > TOL Then GoTo VerifyFail
     v = sl0(1).GetEndPoint
-    If Abs(v(0) - MapU(0, 0.01, -0.01)) > TOL Then GoTo VerifyFail
-    If Abs(v(1) - MapV(0, 0.01, -0.01)) > TOL Then GoTo VerifyFail
+    If Abs(v(0) - MapU(0, 0.01, 0.005)) > TOL Then GoTo VerifyFail
+    If Abs(v(1) - MapV(0, 0.01, 0.005)) > TOL Then GoTo VerifyFail
     If Abs(v(2)) > TOL Then GoTo VerifyFail
     v = sl0(2).GetStartPoint
-    If Abs(v(0) - MapU(0, 0.01, -0.01)) > TOL Then GoTo VerifyFail
-    If Abs(v(1) - MapV(0, 0.01, -0.01)) > TOL Then GoTo VerifyFail
+    If Abs(v(0) - MapU(0, 0.01, 0.005)) > TOL Then GoTo VerifyFail
+    If Abs(v(1) - MapV(0, 0.01, 0.005)) > TOL Then GoTo VerifyFail
     If Abs(v(2)) > TOL Then GoTo VerifyFail
     v = sl0(2).GetEndPoint
-    If Abs(v(0) - MapU(0, 0.01, 0.01)) > TOL Then GoTo VerifyFail
-    If Abs(v(1) - MapV(0, 0.01, 0.01)) > TOL Then GoTo VerifyFail
+    If Abs(v(0) - MapU(0, 0.01, 0.025)) > TOL Then GoTo VerifyFail
+    If Abs(v(1) - MapV(0, 0.01, 0.025)) > TOL Then GoTo VerifyFail
     If Abs(v(2)) > TOL Then GoTo VerifyFail
     v = sl0(3).GetStartPoint
-    If Abs(v(0) - MapU(0, 0.01, 0.01)) > TOL Then GoTo VerifyFail
-    If Abs(v(1) - MapV(0, 0.01, 0.01)) > TOL Then GoTo VerifyFail
+    If Abs(v(0) - MapU(0, 0.01, 0.025)) > TOL Then GoTo VerifyFail
+    If Abs(v(1) - MapV(0, 0.01, 0.025)) > TOL Then GoTo VerifyFail
     If Abs(v(2)) > TOL Then GoTo VerifyFail
     v = sl0(3).GetEndPoint
-    If Abs(v(0) - MapU(0, 0.005, 0.01)) > TOL Then GoTo VerifyFail
-    If Abs(v(1) - MapV(0, 0.005, 0.01)) > TOL Then GoTo VerifyFail
+    If Abs(v(0) - MapU(0, 0.005, 0.025)) > TOL Then GoTo VerifyFail
+    If Abs(v(1) - MapV(0, 0.005, 0.025)) > TOL Then GoTo VerifyFail
     If Abs(v(2)) > TOL Then GoTo VerifyFail
     v = sl0(4).GetStartPoint
-    If Abs(v(0) - MapU(0, 0.005, 0.01)) > TOL Then GoTo VerifyFail
-    If Abs(v(1) - MapV(0, 0.005, 0.01)) > TOL Then GoTo VerifyFail
+    If Abs(v(0) - MapU(0, 0.005, 0.025)) > TOL Then GoTo VerifyFail
+    If Abs(v(1) - MapV(0, 0.005, 0.025)) > TOL Then GoTo VerifyFail
     If Abs(v(2)) > TOL Then GoTo VerifyFail
     v = sl0(4).GetEndPoint
-    If Abs(v(0) - MapU(0, 0.005, -0.01)) > TOL Then GoTo VerifyFail
-    If Abs(v(1) - MapV(0, 0.005, -0.01)) > TOL Then GoTo VerifyFail
+    If Abs(v(0) - MapU(0, 0.005, 0.005)) > TOL Then GoTo VerifyFail
+    If Abs(v(1) - MapV(0, 0.005, 0.005)) > TOL Then GoTo VerifyFail
     If Abs(v(2)) > TOL Then GoTo VerifyFail
     VerifySketch0 = True
     Exit Function
@@ -593,6 +593,7 @@ Function BuildRevolve1() As String
     Dim dm As SldWorks.Dimension
     Dim ax As Object
     Dim objState As String
+    Dim callText As String
     Dim revFlag As Boolean
     If Not gMapValid(0) Then gMsg = "frame adaptation: the profile sketch carries no valid adaptation map; refusing to report created": GoTo ExFail
     If gMapSide(0) * -1 <> TT_REV_PROBE_CHIRALITY Then gMsg = "the revolve sweep-direction evidence is scoped to the probe's configuration chirality (probe-revolvedir: one directed axis and one profile side); this map orientation and profile side are outside it and the candidate sweep laws disagree there; refusing to report created": GoTo ExFail
@@ -618,8 +619,9 @@ Function BuildRevolve1() As String
     If ok = False Then ok = swDoc.Extension.SelectByID2(skName0, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If ok = False Then gMsg = "could not select the profile sketch: " & objState & " name=<" & skName0 & ">; tree scan saw: " & TreeSummary(): GoTo ExFail
     If Not sl0(0).Select(True) Then gMsg = "could not select the revolve axis": GoTo ExFail
+    callText = "FeatureRevolve2(True, True, False, False, " & CStr(revFlag) & ", True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, " & Trim(Str(4.71238898038469)) & ", 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)"
     Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, revFlag, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 4.71238898038469, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)
-    If feat Is Nothing Then gMsg = "the revolve was not created (kind=single-dir)": GoTo ExFail
+    If feat Is Nothing Then gMsg = "the revolve was not created (kind=single-dir): " & callText: GoTo ExFail
     If feat Is Nothing Then gMsg = "the feature was not created": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
     If dm Is Nothing Then gMsg = "the revolve angle D1 dimension is missing": GoTo ExFail
@@ -654,6 +656,7 @@ Function BuildRevolve2() As String
     Dim dm As SldWorks.Dimension
     Dim ax As Object
     Dim objState As String
+    Dim callText As String
     Dim vA As Variant
     Dim vB As Variant
     If Not gMapValid(0) Then gMsg = "frame adaptation: the profile sketch carries no valid adaptation map; refusing to report created": GoTo ExFail
@@ -693,8 +696,9 @@ Function BuildRevolve2() As String
     If ok = False Then ok = swDoc.Extension.SelectByID2(skName0, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If ok = False Then gMsg = "could not select the profile sketch: " & objState & " name=<" & skName0 & ">; tree scan saw: " & TreeSummary(): GoTo ExFail
     If Not ax.Select(True) Then gMsg = "could not select the helper axis": GoTo ExFail
+    callText = "FeatureRevolve2(True, True, False, False, " & CStr(False) & ", True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, " & Trim(Str(6.283185307179586)) & ", 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)"
     Set feat = gFeatMgr.FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 6.283185307179586, 0#, False, False, 0#, 0#, swThinWallType_e.swThinWallOneDirection, 0#, 0#, True, False, True)
-    If feat Is Nothing Then gMsg = "the revolve was not created (kind=single-dir)": GoTo ExFail
+    If feat Is Nothing Then gMsg = "the revolve was not created (kind=single-dir): " & callText: GoTo ExFail
     If feat Is Nothing Then gMsg = "the feature was not created": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
     If dm Is Nothing Then gMsg = "the revolve angle D1 dimension is missing": GoTo ExFail

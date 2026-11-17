@@ -100,11 +100,14 @@ the XY source normal (source-pinned kernel semantics: the box spans
 with the axis pinned to +Z and sizes positive), so its end sits toward
 `+1 * gMapSide` in sketch-normal units and the call flag is
 `dirFlag = (wantSide = TT_PRIM_DIR_TRUE_SIDE)` - the extrude family's
-composition. `TT_PRIM_DIR_TRUE_SIDE` is **UNMEASURED (0)** until
-`probe-primorient`'s reading is in hand - its 2026-11-17 run passed
-(exit 0) but the runtime report was lost before retrieval
-(docs/seat-acceptance.md) - and while it reads 0 every primitive step
-fails with a named reason naming its probe and never reports `created`.
+composition. `TT_PRIM_DIR_TRUE_SIDE` is **MEASURED (-1)** (probe-primorient
+`box-dir-false`/`box-dir-true`, 2026-11-17, on the Top frame's
+non-identity map: `Dir=True` put the blind 0.012 m box at z in
+[-0.012, 0], `Dir=False` at [0, 0.012]; the reading equals
+`TT_EX_DIR_TRUE_SIDE` on a second frame and the composition held end to
+end there - see the truth-table row). The guard stays in the macro for a
+zeroed cell: while it reads 0 every primitive step fails with a named
+reason naming its probe and never reports `created`.
 
 ## Modifications (fillet, chamfer, shell, draft, hole)
 
@@ -258,9 +261,10 @@ mapped like geometry and its sweep factor passes through the map unchanged
 - see "Direction truth table"). Primitive steps (batch 3) draw their
 profiles and sizes through the same map on signed-permutation frames and
 resolve the extrude side through the direction truth table's own cell
-(`TT_PRIM_DIR_TRUE_SIDE`, probe-primorient); while that cell is unmeasured
-every primitive step fails with a named reason naming its probe, and
-nothing ever reports `created` on an unestablished path.
+(`TT_PRIM_DIR_TRUE_SIDE`, probe-primorient); the zeroed-cell guard remains
+in the macro - while that cell is unmeasured every primitive step fails
+with a named reason naming its probe, and nothing ever reports `created`
+on an unestablished path.
 
 **Evidence rules (batch 1):** every selection is checked (`Select` returns
 Boolean and its result is captured). `SketchAddConstraints` has **no return
@@ -350,7 +354,7 @@ semantics cannot be established fails and never reports `created`.
 | `TT_REV_SENSE = +1` | with the blind revolve call shape (`ReverseDir=False`), the sweep is the right-hand rotation by +angle about the drawn axis direction (start to end) when +1 | probe-revolvedir blind-270 cases: ReverseDir=False's centroid at (u,n) = (-0.0046, -0.0046) = mid-angle -135 deg = toward MINUS the normal first = right-hand +angle about the drawn +t axis (t_hat x u_hat = -n_hat); ReverseDir=True mirrored. Centroids via MassProperty `centerofmass` (American spelling; `centreofmass` raises 438) |
 | `TT_REV_TWO_FIRST_SIDE = +1` | with the two-sided revolve call shape (`ReverseDir=False`), the first angle sweeps with right-hand sense TT about the drawn axis direction | probe-revolvedir twosided-100-150: D1 = 100 deg, D2 = 150 deg (radian identities), centroid at mid-angle +24.6 deg -> span [-100, +150]: the first angle on the MINUS-normal side = the same right-hand +angle sense as the blind form (two independent measurements agreeing) |
 | `TT_REV_PROBE_CHIRALITY = -1` | the evidence-scope gate: the configuration chirality sign((drawn axis direction x profile radial side) . sketch normal) the probe establishes | probe-revolvedir's pinned setup: drawn axis (0,-0.010)->(0,0.080) = +t, profile on the +u side, n_sk = +X -> (t_hat x u_hat).n_hat = -1 |
-| `TT_PRIM_DIR_TRUE_SIDE = 0` | the primitive blind call shape (byte-identical to the extrude blind form): the height extends toward TT * n_sk for `Dir=True` | UNMEASURED - `probe-primorient` must establish it. Its box cases run the emitter's exact call shape and mapped profile on the XY plane's non-identity map and cross-check `TT_EX_DIR_TRUE_SIDE` on a second frame. The 2026-11-17 run passed (exit 0) but its runtime report was lost before retrieval (docs/seat-acceptance.md), so the reading is still missing and a re-run is queued. A fill-in is evidence for the measured positive-normal configuration only - never proof of the reflected case (see the primitive rows below) |
+| `TT_PRIM_DIR_TRUE_SIDE = -1` | the primitive blind call shape (byte-identical to the extrude blind form): the height extends toward TT * n_sk for `Dir=True` | probe-primorient box-dir-false/box-dir-true (2026-11-17): on the verified Top frame (u=(0,1,0) v=(-1,0,0) n=(0,0,1), the non-identity map m00=0 m01=-1 m10=1 m11=0 side=+1) Dir=True put the blind 0.012 m box at z in [-0.012, 0] = MINUS the normal, Dir=False at [0, 0.012]; D1 identity and SystemValue in SI metres. The reading equals TT_EX_DIR_TRUE_SIDE on this second frame (the cross-check the evidence scope required) and the emitter's composition (wantSide = +1 * gMapSide) held end to end: side +1 resolved to Dir=False and landed the height at model +Z, the SC side. Evidence scope: the measured positive-normal source-XY configuration only - never proof of the reflected case (see the primitive rows below) |
 
 The revolve rows are read under two candidate structural laws (the flag
 selects an absolute side in units of the normal, or a right-hand sense
@@ -407,10 +411,11 @@ Source-side rules the adaptation applies on top of the constants
   `+1 * gMapSide` and the call flag is
   `dirFlag = (wantSide = TT_PRIM_DIR_TRUE_SIDE)` - the extrude blind
   composition, on a call shape byte-identical to the extrude family's.
-  The cell is UNMEASURED until probe-primorient's reading is in hand
-  (the 2026-11-17 run passed but its report was lost before retrieval -
-  docs/seat-acceptance.md) and every primitive refuses with a named reason
-  naming its probe until then. The
+  The cell is MEASURED (-1, probe-primorient 2026-11-17; the reading
+  equals the extrude cell on a second frame and the composition held end
+  to end there) and the zeroed-cell guard stays in the macro: while it
+  reads 0 every primitive refuses with a named reason naming its probe.
+  The
   probe measures the XY plane's positive-normal configuration on this seat:
   it cannot distinguish a transform-relative sketch normal from a
   host-canonicalized normal that agrees there, and `gMapSide = -1` is

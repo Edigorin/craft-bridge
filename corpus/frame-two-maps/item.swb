@@ -37,7 +37,7 @@ Const TT_EX_THROUGH_ALL_DIR As Long = -1    ' probe-throughall: the through-all 
 Const TT_REV_SENSE As Long = 1             ' probe-revolvedir: ReverseDir=False sweeps the right-hand +angle sense about the drawn axis when +1
 Const TT_REV_TWO_FIRST_SIDE As Long = 1    ' probe-revolvedir: the two-sided first angle sweeps right-hand sense TT about the drawn axis
 Const TT_REV_PROBE_CHIRALITY As Long = -1   ' the configuration chirality the revolve evidence establishes (probe-revolvedir: one directed axis and one profile side)
-Const TT_PRIM_DIR_TRUE_SIDE As Long = 0   ' probe-primorient: the primitive height extends toward TT * the sketch normal for Dir=True (0 = unmeasured)
+Const TT_PRIM_DIR_TRUE_SIDE As Long = -1   ' probe-primorient: the primitive height extends toward TT * the sketch normal for Dir=True (0 = unmeasured)
 Dim feat3 As SldWorks.Feature
 Dim skName1 As String
 Dim skFeat1 As SldWorks.Feature

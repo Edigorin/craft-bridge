@@ -97,11 +97,14 @@ pub const TT_REV_PROBE_CHIRALITY: i32 = -1;
 /// toward this many times the profile sketch normal `n_sk` (`+1` = toward
 /// `n_sk`).
 ///
-/// UNMEASURED (`0`) until `probe-primorient`'s reading is in hand. The
-/// 2026-11-17 run passed on the seat (exit 0) but its runtime report was
-/// lost before retrieval (docs/seat-acceptance.md, "Primitive orientation
-/// probe"), so the numbers it measured were never recovered and the cell
-/// stays 0 until a re-run provides them. The composition it pins: the SolidCraft primitive extends toward +Z (the XY
+/// MEASURED (probe-primorient `box-dir-false`/`box-dir-true`, 2026-11-17):
+/// on the verified Top frame (u=(0,1,0) v=(-1,0,0) n=(0,0,1) - the
+/// non-identity map m00=0 m01=-1 m10=1 m11=0 side=+1) Dir=True put the
+/// blind 0.012 m box at z in [-0.012, 0] = toward MINUS the normal;
+/// Dir=False at [0, 0.012]. D1@Boss-Extrude1 read back the depth in SI
+/// metres. The reading equals [`TT_EX_DIR_TRUE_SIDE`] on this second
+/// frame - the cross-check the evidence scope required - and the
+/// emitter's composition holds end to end there. The SolidCraft primitive extends toward +Z (the XY
 /// source normal) from the base plane - source-pinned from the SolidCraft
 /// kernel (`box_solid(corner, corner + (l, w, h))`,
 /// `cylinder(base, +Z, r, h)`, with `parse_prim` forcing a base-plane
@@ -110,7 +113,7 @@ pub const TT_REV_PROBE_CHIRALITY: i32 = -1;
 /// `dirFlag = (wantSide = TT_PRIM_DIR_TRUE_SIDE)` (the same composition as
 /// the extrude family, `truth::extrude_dir_flag`).
 ///
-/// Evidence scope (kept narrow on purpose): `probe-primorient` measures the
+/// Evidence scope (kept narrow on purpose): `probe-primorient` measured the
 /// flag on the XY plane's positive-normal configuration on this seat. That
 /// pins the observed configuration and cross-checks
 /// [`TT_EX_DIR_TRUE_SIDE`] on a second frame (the call shapes are
@@ -118,11 +121,11 @@ pub const TT_REV_PROBE_CHIRALITY: i32 = -1;
 /// from a host-canonicalized normal when both agree there, and it can never
 /// cover an opposing-normal map (`gMapSide = -1` is unreachable on the
 /// owner's seat: every origin plane publishes a permutation map with side
-/// +1). Filling this cell is evidence for the measured configuration only -
+/// +1). The measurement is evidence for the measured configuration only -
 /// never proof of the reflected case, which stays an accepted residual
 /// under the seat-acceptance outer guard, exactly like the extrude
 /// family's composition on unmeasured frames.
-pub const TT_PRIM_DIR_TRUE_SIDE: i32 = 0;
+pub const TT_PRIM_DIR_TRUE_SIDE: i32 = -1;
 
 /// The evidence-scope check for a directional revolve: `None` while the
 /// chirality cell is unmeasured, `true` inside the probe's scope.

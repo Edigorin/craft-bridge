@@ -2196,19 +2196,31 @@ fn truth_table_decisions_refuse_unmeasured_cells() {
         assert_eq!(truth::revolve_two_sided_swap(want, 0), None);
         assert_eq!(truth::revolve_in_evidence_scope(want, 1, 0), None);
     }
-    // The primitive orientation cell is UNMEASURED until probe-primorient
-    // reports; while it reads 0 every primitive height-side decision must
-    // refuse. The fold-in that measures it updates this test and the
-    // constant together.
+}
+
+#[test]
+fn primitive_orientation_cell_carries_the_measured_reading() {
+    // probe-primorient box-dir-false/box-dir-true (2026-11-17) on the Top
+    // frame: Dir=True put the blind 0.012 m box at z in [-0.012, 0] =
+    // toward MINUS the normal; Dir=False at [0, 0.012]. The reading equals
+    // the extrude family's cell on a second frame (the cross-check the
+    // evidence scope required) and the emitter's composition resolves
+    // through it: wantSide = +1 * gMapSide, dirFlag = (wantSide = TT).
     assert_eq!(
         truth::TT_PRIM_DIR_TRUE_SIDE,
-        0,
-        "the primitive orientation cell claims a measurement that no probe pinned"
+        -1,
+        "the primitive orientation cell must carry the probe-primorient reading"
     );
-    for want in [-1, 1] {
+    assert_eq!(
+        truth::TT_PRIM_DIR_TRUE_SIDE,
+        truth::TT_EX_DIR_TRUE_SIDE,
+        "the two byte-identical call shapes must not disagree across frames"
+    );
+    for (want, flag) in [(1, Some(false)), (-1, Some(true))] {
         assert_eq!(
             truth::extrude_dir_flag(want, truth::TT_PRIM_DIR_TRUE_SIDE),
-            None
+            flag,
+            "want {want}: the composed Dir flag is wrong"
         );
     }
 }
@@ -3195,6 +3207,74 @@ fn sketch_selection_uses_the_stored_feature_object() {
 }
 
 #[test]
+fn revolve_refusals_carry_the_call_and_refuse_crossing_profiles() {
+    // Seat evidence (b10 acceptance): the second revolve of revolve-axes
+    // returned Nothing ("the revolve was not created (kind=single-dir)")
+    // with no way to see the call. The refusal now carries the FULL CALL
+    // TEXT (the probes' "entering:" style) so the next evidence round has
+    // the arguments in hand.
+    let case = Case::new(TRACER_REVOLVE);
+    case.build_to("calltext.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("calltext.swb")).unwrap();
+    let partial = builder_region(&text, "BuildRevolve1");
+    assert!(
+        partial
+            .contains("callText = \"FeatureRevolve2(True, True, False, False, \" & CStr(revFlag)")
+            && partial.contains("(kind=single-dir): \" & callText"),
+        "the single-dir refusal does not carry the full call"
+    );
+    // The mid-plane and two-sided refusals carry theirs too.
+    let recipe = TRACER_REVOLVE.replace(
+        "\"angle\": \"270 deg\"",
+        "\"angle\": \"270 deg\", \"symmetric\": true",
+    );
+    let case = Case::new(&recipe);
+    case.build_to("calltext2.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("calltext2.swb")).unwrap();
+    let mid = builder_region(&text, "BuildRevolve1");
+    assert!(
+        mid.contains("callText = \"FeatureRevolve2(True, True, False, False, False, True, swEndConditions_e.swEndCondMidPlane")
+            && mid.contains("(kind=midplane): \" & callText"),
+        "the midplane refusal does not carry the full call"
+    );
+    let recipe = TRACER_REVOLVE.replace(
+        "\"angle\": \"270 deg\"",
+        "\"angle\": \"100 deg\", \"angle2\": \"50 deg\"",
+    );
+    let case = Case::new(&recipe);
+    case.build_to("calltext3.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("calltext3.swb")).unwrap();
+    let two = builder_region(&text, "BuildRevolve1");
+    assert!(
+        two.contains("callText = \"FeatureRevolve2(False, True, False, False, False, True, swEndConditions_e.swEndCondBlind")
+            && two.contains("Trim(Str(aA))")
+            && two.contains("(kind=two-sided): \" & callText"),
+        "the two-sided refusal does not carry the full call"
+    );
+    // A profile that CROSSES its revolve axis is refused named before the
+    // call on every form - the source kernel's own unconditional rule
+    // ("the profile crosses the revolve axis", any angle) - and the
+    // feature call is never emitted. This is what the b10 fixture did:
+    // its full turn's profile straddled the axis (v -10..10 about v=0)
+    // and FeatureRevolve2 returned Nothing for it.
+    let recipe = TRACER_REVOLVE.replace("25.0", "-5.0");
+    let case = Case::new(&recipe);
+    case.build_to("cross.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("cross.swb")).unwrap();
+    let full = builder_region(&text, "BuildRevolve2");
+    assert!(
+        full.contains("the profile crosses the revolve axis")
+            && full.contains("not a valid revolve profile"),
+        "a crossing profile is not refused named: {}",
+        full
+    );
+    assert!(
+        !full.contains("FeatureRevolve2"),
+        "a crossing profile still emits the feature call"
+    );
+}
+
+#[test]
 fn every_emitted_local_is_declared() {
     // Option Explicit turns an undeclared local into a whole-module compile
     // failure that the seat reports only as a bare invocation failure with
@@ -3321,14 +3401,19 @@ fn primitive_profiles_map_on_all_signed_permutations() {
             (col_u - 1.0).abs() < 1e-12 && (col_v - 1.0).abs() < 1e-12,
             "{m:?}: the map is not an isometry"
         );
-        // The side composition for both map orientations: while the
-        // orientation cell is unmeasured the decision refuses everywhere -
-        // never a guess, never a silent wrong side.
-        for side in [-1, 1] {
+        // The side composition for both map orientations through the
+        // measured cell (probe-primorient, 2026-11-17): wantSide = +1 *
+        // gMapSide and dirFlag = (wantSide = TT_PRIM_DIR_TRUE_SIDE). With
+        // the seat's reading (-1): side +1 extrudes with Dir=False
+        // (material toward +n_sk = the +Z SC height on the measured
+        // configuration), side -1 with Dir=True. The gate text for a
+        // zeroed cell remains in the macro and fires only if the cell is
+        // ever unmeasured again.
+        for (side, flag) in [(1, Some(false)), (-1, Some(true))] {
             assert_eq!(
                 truth::extrude_dir_flag(side, truth::TT_PRIM_DIR_TRUE_SIDE),
-                None,
-                "{m:?} side {side}: the unmeasured orientation cell must refuse"
+                flag,
+                "{m:?} side {side}: the composed Dir flag is wrong"
             );
         }
     }

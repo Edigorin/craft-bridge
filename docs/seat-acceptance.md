@@ -84,6 +84,13 @@ snapshots. Anything the seat reports as a correction becomes a new fixture.
   file is only created once `main` runs). Bisect with committed compile
   probes under `corpus/compat-probe/` (the `probe-ck*` series did exactly
   this for the `sgn` identifier defect).
+- **A scheduled-task wrapper ending `exit $LASTEXITCODE` reports 0 when
+  seat-smoke THROWS** (a thrown error does not set `$LASTEXITCODE`), and
+  seat-smoke resolves `-ReportDir` with `Resolve-Path`, which fails on a
+  missing directory before anything is written. A green task result with
+  no report is a FALSE PASS (probe-primorient's 10:15 "exit 0" run, whose
+  probe never started) - trust the report's summary line, never the task
+  result alone.
 - VBA intrinsic names (`Sgn`, `Val`, `Mid`, ...) cannot be identifiers:
   `Dim sgn As Double` is a compile error. Enforced offline by
   `no_identifier_shadows_a_vba_intrinsic` (tests/build_tests.rs).
@@ -130,28 +137,46 @@ snapshots. Anything the seat reports as a correction becomes a new fixture.
 
 ## Primitive orientation probe (`probe-primorient`, v1)
 
-- [x] The macro ran on the seat: task `craft-b2-probe-primorient`,
-      2026-11-17 10:15 local, `tools/seat-smoke.ps1` exit 0 (the schtasks
-      `Last Result: 0` corroborates the owner-stated green run). Macro
+- [x] **The 10:15 "exit 0" run was a FALSE PASS - the probe never ran.**
+      The task wrapper's `exit $LASTEXITCODE` reports 0 when seat-smoke
+      throws (a thrown error does not set it), and seat-smoke resolves
+      `-ReportDir` with `Resolve-Path`, which fails when the directory is
+      absent - the harness had created `probe-primorient-b2` while the
+      registered task pointed at `probe-primorient`. Nothing was written
+      anywhere; the empty `probe-primorient-b2` was all there was. Task
+      results alone never prove a run (the runner-quirks rule above).
+- [x] **The real run (2026-11-17 11:35 local, same sha-pinned task) is
+      green where it counts.** Macro
       `corpus/compat-probe/probe-primorient.swb` sha256
-      `e4e4771da3749cd15565b8acfd64ff12782d9c51cd6a796f132aa2251276257f`
-      (v1, byte-review fold-in included).
-- [ ] **The runtime report was lost before retrieval.** When the report was
-      fetched (2026-11-17, hours after the run), neither
-      `C:\Users\Jerome\craft-bridge-report\probe-primorient\runtime-report.jsonl`
-      nor its smoke log existed; the directory itself was gone. An
-      exhaustive search found nothing: `probe-primorient-b2` exists but is
-      empty, a content search over every `*.jsonl` under
-      `craft-bridge-report` finds no `probe-primorient` header, and the
-      recycle bin and user directories were checked. The b3/b4/b5 harness
-      waves ran between the probe and the fetch; whatever removed the
-      directory is unknown (no tool of ours deletes - the no-delete rule).
-      **The measured numbers were never recovered.**
-- [ ] `TT_PRIM_DIR_TRUE_SIDE` therefore stays **UNMEASURED (0)**: the
-      fill-in needs a re-run of the same sha-pinned task (still
-      registered) and the report read before anything else runs. Until
-      then every primitive step fails closed naming `probe-primorient` -
-      an expected failure on the acceptance list, never a silent guess.
+      `e4e4771da3749cd15565b8acfd64ff12782d9c51cd6a796f132aa2251276257f`.
+      `box-dir-false` and `box-dir-true` completed on the verified Top
+      frame (u=(0,1,0) v=(-1,0,0) n=(0,0,1), map m00=0 m01=-1 m10=1
+      m11=0 side=+1): the mapped profile and both size dimensions
+      replayed with sign-resolved values (D1 = "D1", SystemValue = .04
+      / .015, signVal=1), `D1@Boss-Extrude1` read back 0.012 SI metres,
+      and GetPartBox measured **Dir=False at z in [0, .012]** and
+      **Dir=True at z in [-.012, 0]**. Every owned document closed and
+      verified (the close rule held on every path).
+- [x] **`TT_PRIM_DIR_TRUE_SIDE = -1` is recorded** (src/truth.rs,
+      docs/mapping.md): Dir=True sends material toward MINUS the sketch
+      normal - the same reading as `TT_EX_DIR_TRUE_SIDE` on a second
+      frame (the cross-check the evidence scope required), and the
+      emitter's composition held end to end: side +1 resolved to
+      Dir=False and landed the height at model +Z, the SC side.
+      Evidence scope stays narrow: the measured positive-normal
+      source-XY configuration only; the reflected case is never proven.
+- [x] **The circle-size kind cross-check passed** on the primitive path:
+      `kind evidence: created=.012 getradius=.006 twice-getradius=.012`
+      - the diameter-valued reading, consistent with the settled
+      `dimScale` convention (a76b0e7/39dad15).
+- [ ] **`box-edit-follow` did not run (probe v2 follow-up).** The v1
+      `CircleDim` kind guard predates the diameter convention and
+      refused the diameter reading; its failure classified as a setup
+      failure and aborted the remaining case. Probe v2 (byte review per
+      version): update the kind guards to the `dimScale` convention,
+      classify kind-guard refusals as measurement failures, re-run for
+      the shape-contract edit-follow evidence (the corner anchor and
+      rectangle behaviour under a parameter change).
 
 ## Extrude and mass APIs (measured on the seat, 2026-11-16)
 
