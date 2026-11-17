@@ -71,19 +71,59 @@ fn validate_57(value: &Value, limits: &Limits) -> Result<()> {
     // Its index base is unpinned, so a marker that would change behavior
     // refuses named instead of guessing which features the STEP carries.
     let feature_count = features_of(value)?.len();
+    // Single-part boundary (docs/spec.md): document structure that can
+    // affect PLACED geometry is outside v1. Present-and-nonempty refuses
+    // named instead of being silently ignored.
+    for field in [
+        "components",
+        "occurrences",
+        "assembly",
+        "parts",
+        "links",
+        "body_components",
+        "body_offsets",
+    ] {
+        let occupied = match root.get(field) {
+            None | Some(Value::Null) => false,
+            Some(Value::Array(a)) => !a.is_empty(),
+            Some(Value::Object(o)) => !o.is_empty(),
+            Some(Value::Bool(b)) => *b,
+            Some(_) => true,
+        };
+        if occupied {
+            return Err(Error::InvalidRecipe(format!(
+                "the design is not a single-part document ({field} is present); components, occurrences, parts, links and body placement are outside the v1 replay boundary"
+            )));
+        }
+    }
     match root.get("marker") {
         None | Some(Value::Null) => {}
-        Some(Value::Number(n)) => {
-            let at = n.as_u64().unwrap_or(u64::MAX);
-            if at < feature_count as u64 {
-                return Err(Error::InvalidRecipe(format!(
-                    "the timeline rollback marker ({at}) leaves {feature_count} features past it; the marker's index semantics are unpinned, refusing to guess which features the evaluated model carries"
-                )));
+        Some(Value::Number(n)) => match n.as_u64() {
+            Some(at) => {
+                if at < feature_count as u64 {
+                    return Err(Error::InvalidRecipe(format!(
+                        "the timeline rollback marker ({at}) leaves {feature_count} features past it; the marker's index semantics are unpinned, refusing to guess which features the evaluated model carries"
+                    )));
+                }
             }
-        }
+            None => {
+                return Err(Error::InvalidRecipe(
+                    "the timeline rollback marker is not a non-negative whole number".to_string(),
+                ))
+            }
+        },
         Some(_) => {
             return Err(Error::InvalidRecipe(
                 "the timeline rollback marker is not a number".to_string(),
+            ))
+        }
+    }
+    // params: absent is fine (no parameters); present it must be an array.
+    match root.get("params") {
+        None | Some(Value::Null) | Some(Value::Array(_)) => {}
+        Some(_) => {
+            return Err(Error::InvalidRecipe(
+                "params is present but not an array".to_string(),
             ))
         }
     }
@@ -119,6 +159,14 @@ fn validate_57(value: &Value, limits: &Limits) -> Result<()> {
             _ => {
                 return Err(Error::InvalidRecipe(format!(
                     "feature {index} has no feature type"
+                )))
+            }
+        }
+        match object.get("suppressed") {
+            None | Some(Value::Null) | Some(Value::Bool(_)) => {}
+            Some(_) => {
+                return Err(Error::InvalidRecipe(format!(
+                    "feature {index} suppressed is present but not a boolean"
                 )))
             }
         }

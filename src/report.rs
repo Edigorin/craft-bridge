@@ -18,9 +18,18 @@ pub struct PlanReport {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PlanStepReport {
     pub index: usize,
+    /// Source-side identity (a solidcraft/57 feature id or parameter
+    /// name). Empty for legacy script steps; omitted there so legacy
+    /// report goldens stay byte-identical.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub source_id: String,
     pub command: String,
     pub status: PlanStatus,
     pub detail: String,
+    /// Driver notes that are not degrade triggers (zero coordinates,
+    /// expression/cache disagreements). Omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Default)]
@@ -51,9 +60,14 @@ pub fn build_report(steps: &[PlannedStep], artifact: &str, macro_name: &str) -> 
             .iter()
             .map(|s| PlanStepReport {
                 index: s.index,
+                source_id: s.source_id.clone(),
                 command: s.command.clone(),
                 status: s.status,
                 detail: s.detail.clone(),
+                notes: match &s.work {
+                    crate::replay::Work::Sketch(sk) => sk.driver_notes.clone(),
+                    _ => Vec::new(),
+                },
             })
             .collect(),
         counts,
@@ -75,6 +89,12 @@ pub fn render_text(report: &PlanReport) -> String {
         report.counts.not_executed
     ));
     for step in &report.steps {
+        if !step.source_id.is_empty() {
+            out.push_str(&format!("       source: {}\n", step.source_id));
+        }
+        for note in &step.notes {
+            out.push_str(&format!("       note: {note}\n"));
+        }
         out.push_str(&format!(
             "  {:>3}  {:<24} {:<16} {}\n",
             step.index,

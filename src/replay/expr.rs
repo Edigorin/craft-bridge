@@ -423,7 +423,7 @@ pub fn eval(
     ctx: &Context,
     names: &dyn Fn(&str) -> Option<Quantity>,
 ) -> Result<Quantity, ExprError> {
-    let (value, shape) = eval_inner(node, names, 0)?;
+    let (value, shape) = eval_inner(node, ctx, names, 0)?;
     let dim = match shape {
         Shape::Poly => ctx.bare_dim,
         Shape::Fixed(d) => d,
@@ -441,6 +441,7 @@ pub fn eval(
 
 fn eval_inner(
     node: &Node,
+    ctx: &Context,
     names: &dyn Fn(&str) -> Option<Quantity>,
     depth: usize,
 ) -> Result<(f64, Shape), ExprError> {
@@ -466,21 +467,36 @@ fn eval_inner(
             None => Err(ExprError::UnknownName(name.clone())),
         },
         Node::Unary(inner) => {
-            let (v, s) = eval_inner(inner, names, depth + 1)?;
+            let (v, s) = eval_inner(inner, ctx, names, depth + 1)?;
             Ok((-v, s))
         }
         Node::Add(a, b) | Node::Sub(a, b) => {
-            let (va, sa) = eval_inner(a, names, depth + 1)?;
-            let (vb, sb) = eval_inner(b, names, depth + 1)?;
-            let shape = match (sa, sb) {
-                (Shape::Poly, Shape::Poly) => Shape::Poly,
-                _ => Shape::Fixed(unify(sa, sb, "addition")?),
+            let sub = matches!(node, Node::Sub(_, _));
+            let op = if sub { "subtraction" } else { "addition" };
+            let (va, sa) = eval_inner(a, ctx, names, depth + 1)?;
+            let (vb, sb) = eval_inner(b, ctx, names, depth + 1)?;
+            let scale = |d: Dim| match d {
+                Dim::Length => ctx.bare_length,
+                Dim::Angle => ctx.bare_angle,
+                Dim::Count => 1.0,
             };
-            Ok((va + vb, shape))
+            // A bare operand beside a dimensioned one inherits that unit,
+            // scaled by the context: `2 + 10 mm` is 12 mm, not 2.010 m of
+            // raw numbers glued together.
+            let (va, vb, shape) = match (sa, sb) {
+                (Shape::Poly, Shape::Poly) => (va, vb, Shape::Poly),
+                (Shape::Poly, Shape::Fixed(d)) => (va * scale(d), vb, Shape::Fixed(d)),
+                (Shape::Fixed(d), Shape::Poly) => (va, vb * scale(d), Shape::Fixed(d)),
+                (Shape::Fixed(_), Shape::Fixed(_)) => {
+                    let d = unify(sa, sb, op)?;
+                    (va, vb, Shape::Fixed(d))
+                }
+            };
+            Ok((if sub { va - vb } else { va + vb }, shape))
         }
         Node::Mul(a, b) => {
-            let (va, sa) = eval_inner(a, names, depth + 1)?;
-            let (vb, sb) = eval_inner(b, names, depth + 1)?;
+            let (va, sa) = eval_inner(a, ctx, names, depth + 1)?;
+            let (vb, sb) = eval_inner(b, ctx, names, depth + 1)?;
             // A bare operand stays dimensionless: 2 * width doubles a length.
             match (sa, sb) {
                 (Shape::Poly, Shape::Poly) => Ok((va * vb, Shape::Poly)),
@@ -493,8 +509,8 @@ fn eval_inner(
             }
         }
         Node::Div(a, b) => {
-            let (va, sa) = eval_inner(a, names, depth + 1)?;
-            let (vb, sb) = eval_inner(b, names, depth + 1)?;
+            let (va, sa) = eval_inner(a, ctx, names, depth + 1)?;
+            let (vb, sb) = eval_inner(b, ctx, names, depth + 1)?;
             if vb == 0.0 {
                 return Err(ExprError::DivideByZero);
             }
@@ -513,8 +529,8 @@ fn eval_inner(
             }
         }
         Node::Pow(a, b) => {
-            let (va, sa) = eval_inner(a, names, depth + 1)?;
-            let (vb, sb) = eval_inner(b, names, depth + 1)?;
+            let (va, sa) = eval_inner(a, ctx, names, depth + 1)?;
+            let (vb, sb) = eval_inner(b, ctx, names, depth + 1)?;
             if sb != Shape::Poly {
                 return Err(ExprError::DimensionMismatch(
                     "exponent must be a bare number".to_string(),

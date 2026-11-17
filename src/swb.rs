@@ -1447,7 +1447,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     } else {
         "degraded"
     };
-    let initial_msg = if sk.dropped_constraints.is_empty() {
+    let mut initial_msg = if sk.dropped_constraints.is_empty() {
         format!(
             "{} relations and {} dimensions replayed",
             sk.relations.len(),
@@ -1459,6 +1459,12 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
             sk.dropped_constraints.join(", ")
         )
     };
+    // Driver notes are evidence, not degradation: they ride in the runtime
+    // message so the published report carries them (sketches without notes
+    // emit byte-identical text).
+    if !sk.driver_notes.is_empty() {
+        initial_msg.push_str(&format!("; driver notes: {}", sk.driver_notes.join("; ")));
+    }
     out.push_str(&format!("' Sketch step {index}: {}\n", vb_lit(&sk.name)));
     out.push_str(&format!(
         "Function BuildSketch{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim skFeat As SldWorks.Feature\n    Dim uncertain As Boolean\n    gMsg = \"\"\n    gOmit = \"\"\n"

@@ -111,25 +111,20 @@ rebuiltSolidsText = ""
 rebuiltAcquireErr = ""
 Err.Clear
 Set mp = swDoc.Extension.CreateMassProperty()
-If Err.Number = 0 Then
-  rebuiltText = NumStr(mp.Volume)
-  rebuiltCx = mp.centerofmass(0)
-  rebuiltCy = mp.centerofmass(1)
-  rebuiltCz = mp.centerofmass(2)
-Else
+If Err.Number <> 0 Then
   rebuiltAcquireErr = "cannot read the rebuilt part's mass properties: " & Err.Description
+Else
+  Err.Clear
+  If Not IsNumeric(mp.Volume) Then
+    rebuiltAcquireErr = "the rebuilt volume did not come back numeric (vartype " & NumStr(VarType(mp.Volume)) & ")"
+  Else
+    rebuiltText = NumStr(mp.Volume)
+    rebuiltAcquireErr = CentroidText(mp, rebuiltCx, rebuiltCy, rebuiltCz, "the rebuilt centroid")
+  End If
 End If
 Err.Clear
-bodiesArr = swDoc.GetBodies2(0)
-If Err.Number = 0 Then
-  If IsArray(bodiesArr) Then
-    rebuiltSolidsText = NumStr(UBound(bodiesArr) - LBound(bodiesArr) + 1)
-  Else
-    rebuiltSolidsText = "1"
-  End If
-Else
-  rebuiltSolidsText = "missing or unreadable"
-End If
+bodiesArr = swDoc.GetBodies2(0, False)
+rebuiltSolidsText = CountText(bodiesArr)
 
 ' ---- the expect parameters (raw text; validated by the logic module) ----
 skipVolume = False
@@ -200,47 +195,38 @@ Else
     Err.Clear
     dtRaw = refDoc.GetType
     If Err.Number = 0 Then
-      If dtRaw = 1 Then docTypeText = "part"
-      ElseIf dtRaw = 2 Then docTypeText = "assembly"
-      ElseIf dtRaw = 3 Then docTypeText = "drawing"
-      Else docTypeText = "other"
+      If dtRaw = 1 Then
+        docTypeText = "part"
+      ElseIf dtRaw = 2 Then
+        docTypeText = "assembly"
+      ElseIf dtRaw = 3 Then
+        docTypeText = "drawing"
+      Else
+        docTypeText = "other"
       End If
     Else
       docTypeText = "unreadable"
     End If
     Err.Clear
-    refBodiesArr = refDoc.GetBodies2(0)
-    If Err.Number = 0 Then
-      If IsArray(refBodiesArr) Then
-        solidsText = NumStr(UBound(refBodiesArr) - LBound(refBodiesArr) + 1)
-      Else
-        solidsText = "1"
-      End If
-    Else
-      solidsText = "missing or unreadable"
-    End If
+    refBodiesArr = refDoc.GetBodies2(0, False)
+    solidsText = CountText(refBodiesArr)
     Err.Clear
-    refSheetsArr = refDoc.GetBodies2(1)
-    If Err.Number = 0 Then
-      If IsArray(refSheetsArr) Then
-        sheetsText = NumStr(UBound(refSheetsArr) - LBound(refSheetsArr) + 1)
-      Else
-        sheetsText = "1"
-      End If
-    Else
-      sheetsText = "unreadable"
-    End If
+    refSheetsArr = refDoc.GetBodies2(1, False)
+    sheetsText = CountText(refSheetsArr)
     Err.Clear
     Set mp = refDoc.Extension.CreateMassProperty()
-    If Err.Number = 0 Then
-      refText = NumStr(mp.Volume)
-      refCx = mp.centerofmass(0)
-      refCy = mp.centerofmass(1)
-      refCz = mp.centerofmass(2)
-    Else
+    If Err.Number <> 0 Then
       refAcquireErr = "cannot read the STEP reference's mass properties: " & Err.Description
+    Else
+      Err.Clear
+      If Not IsNumeric(mp.Volume) Then
+        refAcquireErr = "the reference volume did not come back numeric (vartype " & NumStr(VarType(mp.Volume)) & ")"
+      Else
+        refText = NumStr(mp.Volume)
+        refAcquireErr = CentroidText(mp, refCx, refCy, refCz, "the reference centroid")
+      End If
     End If
-    If rebuiltText <> "" And refText <> "" Then
+    If rebuiltText <> "" And refText <> "" And rebuiltAcquireErr = "" And refAcquireErr = "" Then
       distText = NumStr(Sqr((rebuiltCx - refCx) ^ 2 + (rebuiltCy - refCy) ^ 2 + (rebuiltCz - refCz) ^ 2))
     Else
       distText = "missing or unreadable"

@@ -782,6 +782,14 @@ fn plan_feature57(
                 next_slot,
             )?;
             planned.source_id = source_id;
+            // Named-stop contract: the refusal keeps the feature's name as
+            // well as its id (source_id) and type (command).
+            if matches!(planned.work, Work::Unmappable | Work::AfterStop)
+                && !name.is_empty()
+                && !planned.detail.contains(name)
+            {
+                planned.detail = format!("{kind} {name:?}: {}", planned.detail);
+            }
             Ok(planned)
         }
         "fillet" | "chamfer" | "shell" | "draft" | "hole" | "thread" => Ok(unmappable(format!(
@@ -1552,25 +1560,28 @@ fn parse_sketch(
                 .push(format!("{param} (equation not expressible)")),
         }
     }
-    // Coordinate drivers (solidcraft/57): a point coordinate that carries an
-    // expression becomes a NATIVE driver - a DistanceX/DistanceY dimension to
-    // the anchored sketch origin, bound by an equation to the expression, so
-    // parameter edits carry the sketch geometry. Precedence: the expression
-    // drives even when the point is `fixed` (the driving dimension both pins
-    // and parametrizes it); `fixed` without an expression stays placement.
-    // The expression is the source of truth: pos must agree with its
-    // evaluation or the design data is inconsistent and refuses. A zero
-    // coordinate cannot carry a zero-length dimension: it is position-
-    // verified and recorded as a driver note - never silent, never a stop.
+    // Coordinate drivers (solidcraft/57): a point coordinate that carries
+    // an expression becomes a NATIVE driver - a DistanceX/DistanceY
+    // dimension to the anchored sketch origin, bound by an equation to the
+    // expression, so parameter edits carry the sketch geometry. Precedence:
+    // the expression drives even when the point is `fixed` (the driving
+    // dimension both pins and parametrizes it); `fixed` without an
+    // expression stays placement. The expression is the source of truth
+    // (the engine fixes expression points at their evaluated positions
+    // before solve); pos is a cache. Only lengths drive coordinates. The
+    // anchor is chosen AFTER evaluation and must be nonmoving: a curve
+    // endpoint at the sketch origin that no parameter edit can move, or
+    // the drivers degrade named. A zero coordinate cannot carry a zero-
+    // length dimension: position-verified and recorded as a driver note.
     if point_exprs
         .iter()
         .any(|pe| pe[0].is_some() || pe[1].is_some())
     {
         let ctx = expr::Context::for_unit("", design_factor, design_text);
-        // The base: the first curve endpoint pinned at the sketch origin.
-        let base_point = (0..sketch.points.len()).find(|&pi| {
-            sketch.points[pi][0] == 0.0 && sketch.points[pi][1] == 0.0 && rep[pi].is_some()
-        });
+        // Phase 1: evaluate every expressed coordinate. expr-wins: the
+        // evaluated value replaces the stored position.
+        let mut evals: Vec<[Option<(expr::Node, expr::Quantity)>; 2]> =
+            vec![[None, None]; sketch.points.len()];
         for (pi, pe) in point_exprs.iter().enumerate() {
             for axis in 0..2 {
                 let text = match &pe[axis] {
@@ -1596,10 +1607,16 @@ fn parse_sketch(
                         continue;
                     }
                 };
-                // The expression is the source of truth (the engine fixes
-                // expression points at their evaluated positions before
-                // solve); pos is a cache. A disagreement is recorded and the
-                // expression wins - never the other way round.
+                if q.dim != expr::Dim::Length {
+                    // An angle (or count) must never become a coordinate.
+                    sketch.dropped_constraints.push(format!(
+                        "point {pi} {axis_name} expression is not a length (its dimension is {:?}); the coordinate binding is refused",
+                        q.dim
+                    ));
+                    continue;
+                }
+                // The expression wins over the stored position; a
+                // disagreement is recorded, never silent.
                 let eval_mm = q.value * 1000.0;
                 let stored_mm = sketch.points[pi][axis];
                 if (eval_mm - stored_mm).abs() > 1e-3 {
@@ -1608,7 +1625,45 @@ fn parse_sketch(
                     ));
                 }
                 sketch.points[pi][axis] = eval_mm;
-                let pos_mm = eval_mm;
+                evals[pi][axis] = Some((node, q));
+            }
+        }
+        // Phase 2: the anchor. A curve endpoint sitting at the sketch
+        // origin AFTER evaluation, nonmoving under parameter edits: either
+        // it carries no expressions at all, or every expressed coordinate
+        // is constant zero (checked by re-evaluating with every parameter
+        // doubled - a parametric value would move).
+        let doubled = |name: &str| {
+            env.get(name).map(|q| expr::Quantity {
+                value: q.value * 2.0,
+                dim: q.dim,
+            })
+        };
+        let at_origin = |pi: usize| sketch.points[pi][0] == 0.0 && sketch.points[pi][1] == 0.0;
+        let nonmoving = |pi: usize| {
+            [0usize, 1].iter().all(|&axis| match &evals[pi][axis] {
+                None => true,
+                Some((node, _)) => match expr::eval(node, &ctx, &doubled) {
+                    Ok(q) => q.value.abs() < 1e-9,
+                    Err(_) => false,
+                },
+            })
+        };
+        let base_point = (0..sketch.points.len())
+            .filter(|&pi| rep[pi].is_some() && at_origin(pi) && nonmoving(pi))
+            .min_by_key(|&pi| evals[pi].iter().filter(|e| e.is_some()).count());
+        // Phase 3: the drivers.
+        for (pi, pe) in point_exprs.iter().enumerate() {
+            for axis in 0..2 {
+                if pe[axis].is_none() {
+                    continue;
+                }
+                let axis_name = if axis == 0 { "x" } else { "y" };
+                let (node, _) = match &evals[pi][axis] {
+                    Some(e) => e,
+                    None => continue, // phase 1 recorded the degrade already
+                };
+                let pos_mm = sketch.points[pi][axis];
                 if pos_mm.abs() < 1e-9 {
                     sketch.driver_notes.push(format!(
                         "point {pi} {axis_name}: zero coordinate carries no driver dimension (position verified)"
@@ -1628,23 +1683,29 @@ fn parse_sketch(
                     Some(slot) => slot,
                     None => {
                         sketch.dropped_constraints.push(format!(
-                            "point {pi} {axis_name}: no curve endpoint anchors the sketch origin, the coordinate binding cannot become a dimension"
+                            "point {pi} {axis_name}: no fixed curve endpoint anchors the sketch origin, the coordinate binding cannot become a dimension"
                         ));
                         continue;
                     }
                 };
-                let segs =
-                    match expr::translate_with(&node, &ctx, &|n| resolve_name(n, env, model_slots))
-                    {
-                        Ok(segs) => segs,
-                        Err(e) => {
-                            sketch.dropped_constraints.push(format!(
-                                "point {pi} {axis_name} (equation not expressible: {e})"
-                            ));
-                            continue;
-                        }
-                    };
-                let rhs = expr::translate(&node, &ctx);
+                if Some(pi) == base_point {
+                    sketch.driver_notes.push(format!(
+                        "point {pi} {axis_name}: the anchor point carries no self-dimension"
+                    ));
+                    continue;
+                }
+                let segs = match expr::translate_with(node, &ctx, &|n| {
+                    resolve_name(n, env, model_slots)
+                }) {
+                    Ok(segs) => segs,
+                    Err(e) => {
+                        sketch.dropped_constraints.push(format!(
+                            "point {pi} {axis_name} (equation not expressible: {e})"
+                        ));
+                        continue;
+                    }
+                };
+                let rhs = expr::translate(node, &ctx);
                 let di = sketch.dimensions.len();
                 sketch.dimensions.push(DimensionT {
                     kind: if axis == 0 {
@@ -1698,11 +1759,12 @@ fn parse_extrude(
     // carry target-body semantics that need the Phase B body registry and
     // the merge/scope probe - refusing beats operating on whichever bodies
     // SolidWorks happens to select.
-    match feature
-        .get("operation")
-        .and_then(Value::as_str)
-        .unwrap_or("new_body")
-    {
+    let operation = match feature.get("operation") {
+        None | Some(Value::Null) => "new_body",
+        Some(Value::String(s)) => s.as_str(),
+        Some(_) => return Err("extrude operation is present but not a string".to_string()),
+    };
+    match operation {
         "new_body" => {}
         other => {
             return Err(format!(
@@ -2313,16 +2375,44 @@ fn parse_prim(
     model_slots: &mut Vec<(String, usize)>,
     next_slot: &mut usize,
 ) -> std::result::Result<PrimStep, String> {
-    match feature
-        .get("operation")
-        .and_then(Value::as_str)
-        .unwrap_or("new_body")
-    {
+    let operation = match feature.get("operation") {
+        None | Some(Value::Null) => "new_body",
+        Some(Value::String(s)) => s.as_str(),
+        Some(_) => return Err("primitive operation is present but not a string".to_string()),
+    };
+    match operation {
         "new_body" => {}
         other => {
             return Err(format!(
                 "primitive operation {other:?} is outside the supported subset; targeted merge and feature scope await the Phase B body registry and the merge/scope probe (the emitted flags are proven for new_body only)"
             ))
+        }
+    }
+    // Geometry-affecting primitive semantics the shared parser does not
+    // replay must stop named, never be rebuilt from the wrong reference
+    // (a centred box is not a corner box).
+    match feature.get("centred") {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => {}
+        Some(Value::Bool(true)) => {
+            return Err(
+                "the centred box placement is outside the supported subset (corner placement only; Phase B)"
+                    .to_string(),
+            )
+        }
+        Some(_) => return Err("primitive centred is present but not a boolean".to_string()),
+    }
+    if let Some(references) = feature.get("references") {
+        let occupied = match references {
+            Value::Null => false,
+            Value::Array(a) => !a.is_empty(),
+            Value::Object(o) => !o.is_empty(),
+            _ => true,
+        };
+        if occupied {
+            return Err(
+                "the cylinder references field is outside the supported subset (placement references are not replayed; Phase B)"
+                    .to_string(),
+            );
         }
     }
     if let Some(axis) = feature.get("axis") {

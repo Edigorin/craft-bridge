@@ -361,3 +361,264 @@ fn a_57_artifact_packs_and_builds() {
         "extent equation missing"
     );
 }
+
+#[test]
+fn a_valid_id_just_below_the_source_limit_plans() {
+    // Near-2^52 ids are legal source identity (the source caps at 2^52).
+    let design = DESIGN.replace("\"id\": 100000", "\"id\": 4503599627370495");
+    let steps = plan_of(&design);
+    assert_eq!(steps[7].source_id, "feature 4503599627370495");
+    assert!(matches!(steps[7].work, Work::Extrude(_)));
+}
+
+#[test]
+fn snapshot_boundaries_address_dense_indices_with_parameter_offsets() {
+    // The join extrude sits at dense index 4: three parameter equations
+    // come first. The boundary addresses the RUNTIME index (never the
+    // source feature id 9000), parameter offset included.
+    let design = DESIGN.replace("\"operation\": \"new_body\"", "\"operation\": \"join\"");
+    let value = {
+        let limits = Limits::default();
+        recipe::validate(design.as_bytes(), &limits).unwrap()
+    };
+    let limits = Limits::default();
+    // Without a boundary: the stop rule holds everything after.
+    let steps = replay::plan(&value, &limits, &BTreeMap::new()).unwrap();
+    assert!(matches!(steps[4].work, Work::Unmappable));
+    assert!(matches!(steps[5].work, Work::AfterStop));
+    // With a boundary at the stop's dense index: replay continues.
+    let mut snaps = BTreeMap::new();
+    snaps.insert(4usize, craft_bridge::profile::SnapshotScope::Boundary);
+    let steps = replay::plan(&value, &limits, &snaps).unwrap();
+    assert!(matches!(steps[4].work, Work::Unmappable));
+    assert!(!matches!(steps[5].work, Work::AfterStop));
+    assert_eq!(steps[6].status, PlanStatus::Mapped);
+    // A boundary at a parameter's own index addresses that parameter step.
+    let mut snaps = BTreeMap::new();
+    snaps.insert(2usize, craft_bridge::profile::SnapshotScope::Boundary);
+    let steps = replay::plan(&value, &limits, &snaps).unwrap();
+    assert!(matches!(steps[2].work, Work::UserParam { .. }));
+    assert!(matches!(steps[5].work, Work::AfterStop));
+}
+
+#[test]
+fn pack_validates_snapshot_boundaries_against_the_step_count() {
+    let dir = tempfile::tempdir().unwrap();
+    let recipe_path = dir.path().join("design.json");
+    let step_path = dir.path().join("part.step");
+    fs::write(&recipe_path, DESIGN).unwrap();
+    fs::write(&step_path, STEP_FIXTURE).unwrap();
+    // Index 2 addresses the third parameter equation: accepted.
+    let out = dir.path().join("ok.craftx");
+    pack::pack(
+        &PackOptions {
+            recipe: &recipe_path,
+            step: &step_path,
+            out: &out,
+            warnings: None,
+            name: None,
+            overwrite: false,
+            snapshots: vec![(2usize, step_path.as_path())],
+            final_snapshot: None,
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    // Index 8 == step_count (3 parameters + 5 features): refused.
+    let out = dir.path().join("bad.craftx");
+    let err = pack::pack(
+        &PackOptions {
+            recipe: &recipe_path,
+            step: &step_path,
+            out: &out,
+            warnings: None,
+            name: None,
+            overwrite: false,
+            snapshots: vec![(8usize, step_path.as_path())],
+            final_snapshot: None,
+        },
+        &Limits::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("past the last recipe step"), "{err}");
+}
+
+#[test]
+fn malformed_control_fields_refuse_instead_of_defaulting() {
+    // marker: present it must be a non-negative whole number.
+    for (marker, want) in [
+        ("-1", "not a non-negative whole number"),
+        ("2.5", "not a non-negative whole number"),
+        ("\"x\"", "not a number"),
+    ] {
+        let design = DESIGN.replace(
+            "\"next_id\": 100001",
+            &format!("\"marker\": {marker}, \"next_id\": 100001"),
+        );
+        let err = plan_err(&design);
+        assert!(err.contains(want), "{marker}: {err}");
+    }
+    // params: present it must be an array.
+    let design = sketch_design(
+        7,
+        r#"{ "type": "origin", "name": "XY" }"#,
+        r#"{ "id": "origin", "pos": [0.0, 0.0], "fixed": true }"#,
+    )
+    .replace(
+        "\"params\": [{ \"name\": \"W\", \"expr\": \"50 mm\", \"unit\": \"mm\" }]",
+        "\"params\": {}",
+    );
+    let err = plan_err(&design);
+    assert!(err.contains("params is present but not an array"), "{err}");
+    // suppressed: present it must be a boolean.
+    let design = DESIGN.replace("\"suppressed\": false", "\"suppressed\": \"yes\"");
+    let err = plan_err(&design);
+    assert!(
+        err.contains("suppressed is present but not a boolean"),
+        "{err}"
+    );
+    // operation: present it must be a string (absence alone means new_body).
+    let design = DESIGN.replace("\"operation\": \"new_body\"", "\"operation\": 5");
+    let steps = plan_of(&design);
+    assert!(matches!(steps[4].work, Work::Unmappable));
+    assert!(
+        steps[4]
+            .detail
+            .contains("operation is present but not a string"),
+        "{}",
+        steps[4].detail
+    );
+}
+
+#[test]
+fn geometry_affecting_primitive_semantics_stop_named() {
+    // A centred box is not a corner box: rebuilding it from the corner
+    // would be silently wrong.
+    let design = DESIGN
+        .replace("\"suppressed\": true", "\"suppressed\": false")
+        .replace(
+            "\"height\": \"7 mm\",",
+            "\"height\": \"7 mm\", \"centred\": true,",
+        );
+    let steps = plan_of(&design);
+    assert!(matches!(steps[5].work, Work::Unmappable));
+    assert!(
+        steps[5].detail.contains("centred box placement"),
+        "{}",
+        steps[5].detail
+    );
+    // Cylinder placement references are not replayed either.
+    let design = r#"{"format": "solidcraft/57", "units": "mm", "params": [], "features": [
+            {"id": 1, "name": "peg", "suppressed": false, "type": "cylinder",
+              "base": ["0", "0", "0"], "axis": [0, 0, 1], "radius": "5 mm", "height": "9 mm",
+              "references": [{"face": 3}], "operation": "new_body"}]}"#;
+    let steps = plan_of(design);
+    assert!(matches!(steps[0].work, Work::Unmappable));
+    assert!(
+        steps[0].detail.contains("cylinder references"),
+        "{}",
+        steps[0].detail
+    );
+}
+
+#[test]
+fn documents_outside_the_single_part_boundary_refuse() {
+    let design = DESIGN.replace(
+        "\"units\": \"mm\",",
+        "\"units\": \"mm\", \"components\": [{ \"id\": 1 }],",
+    );
+    let err = plan_err(&design);
+    assert!(err.contains("not a single-part document"), "{err}");
+}
+
+#[test]
+fn non_length_coordinate_expressions_are_refused() {
+    let points = r#"{ "id": "origin", "pos": [0.0, 0.0], "fixed": true },
+        { "id": "p1", "pos": [50.0, 0.0], "exprs": { "x": "3 deg" } },
+        { "id": "p2", "pos": [12.0, 30.0] }"#;
+    let steps = plan_of(&sketch_design(
+        7,
+        r#"{ "type": "origin", "name": "XY" }"#,
+        points,
+    ));
+    assert_eq!(steps[1].status, PlanStatus::DegradePlanned);
+    let sketch = match &steps[1].work {
+        Work::Sketch(s) => s,
+        _ => panic!(),
+    };
+    assert!(
+        sketch
+            .dropped_constraints
+            .iter()
+            .any(|d| d.contains("is not a length")),
+        "{:?}",
+        sketch.dropped_constraints
+    );
+}
+
+#[test]
+fn the_driver_anchor_is_chosen_after_evaluation_and_must_hold() {
+    // A point CACHED at the origin but driven away by its expression is
+    // not an anchor: with no other anchor, the drivers degrade named
+    // instead of dimensioning against a moving point.
+    let points = r#"{ "id": "origin", "pos": [0.0, 0.0], "fixed": true, "exprs": { "x": "W" } },
+        { "id": "p1", "pos": [50.0, 0.0], "exprs": { "x": "W" } },
+        { "id": "p2", "pos": [12.0, 30.0] }"#;
+    let steps = plan_of(&sketch_design(
+        7,
+        r#"{ "type": "origin", "name": "XY" }"#,
+        points,
+    ));
+    let sketch = match &steps[1].work {
+        Work::Sketch(s) => s,
+        _ => panic!(),
+    };
+    assert!(
+        sketch
+            .dropped_constraints
+            .iter()
+            .any(|d| d.contains("no fixed curve endpoint anchors the sketch origin")),
+        "{:?}",
+        sketch.dropped_constraints
+    );
+    // With a genuine fixed anchor at the origin, the drivers land against
+    // it - and the moving point still follows its expression.
+    let points = r#"{ "id": "moving", "pos": [0.0, 0.0], "exprs": { "x": "W" } },
+        { "id": "anchor", "pos": [0.0, 0.0], "fixed": true },
+        { "id": "p1", "pos": [50.0, 0.0], "exprs": { "x": "W" } }"#;
+    let steps = plan_of(&sketch_design(
+        7,
+        r#"{ "type": "origin", "name": "XY" }"#,
+        points,
+    ));
+    let sketch = match &steps[1].work {
+        Work::Sketch(s) => s,
+        _ => panic!(),
+    };
+    assert!(
+        sketch.dropped_constraints.is_empty(),
+        "{:?}",
+        sketch.dropped_constraints
+    );
+    // moving.x, p1.x = two drivers. Both measure against the anchor's
+    // endpoint slot (1: l1's second endpoint), never a point against
+    // itself.
+    assert_eq!(sketch.dim_equations.len(), 2);
+    for (di, _) in &sketch.dim_equations {
+        let d = &sketch.dimensions[*di];
+        assert_eq!(d.a, 1, "the anchor slot is l1's second endpoint");
+        assert_ne!(d.a, d.b.unwrap_or(usize::MAX), "no self-dimension");
+    }
+}
+
+#[test]
+fn the_plan_report_publishes_source_identity_and_driver_notes() {
+    let steps = plan_of(DESIGN);
+    let report = craft_bridge::report::build_report(&steps, "design.craftx", "design.swb");
+    let sketch_step = &report.steps[3];
+    assert_eq!(sketch_step.source_id, "feature 5");
+    assert_eq!(sketch_step.notes.len(), 2, "{:?}", sketch_step.notes);
+    // The parameter steps carry their source names too.
+    assert_eq!(report.steps[0].source_id, "parameter VaneSpan");
+}

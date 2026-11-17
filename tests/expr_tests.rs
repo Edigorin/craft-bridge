@@ -160,3 +160,45 @@ fn round_trip_eval_matches_translation_semantics() {
         "(\"width\" / 2 + \"depth\")"
     );
 }
+
+#[test]
+fn subtraction_subtracts_and_bare_operands_inherit_the_neighbor_unit() {
+    // Byte-review catch: Sub evaluated as addition, and a bare operand
+    // beside a dimensioned one was glued on unscaled. The source-confirmed
+    // rule is that a bare number beside a dimensioned value inherits that
+    // unit.
+    let w = [("W", 0.05, Dim::Length)];
+    let q = eval("W - 10 mm", &w).unwrap();
+    assert!(
+        (q.value - 0.04).abs() < 1e-12,
+        "W - 10 mm is 40 mm, got {q:?}"
+    );
+    assert_eq!(q.dim, Dim::Length);
+
+    let q = eval("2 + 10 mm", &[]).unwrap();
+    assert!(
+        (q.value - 0.012).abs() < 1e-12,
+        "2 + 10 mm is 12 mm, got {q:?}"
+    );
+
+    let q = eval("10 mm - 2", &[]).unwrap();
+    assert!(
+        (q.value - 0.008).abs() < 1e-12,
+        "10 mm - 2 is 8 mm, got {q:?}"
+    );
+
+    // Mixed subtraction keeps the dimensioned side's dimension.
+    let q = eval("2 - W", &w).unwrap();
+    assert!(
+        (q.value - (-0.048)).abs() < 1e-12,
+        "2 - W is -48 mm, got {q:?}"
+    );
+    assert_eq!(q.dim, Dim::Length);
+
+    // Poly - poly stays bare.
+    let q = eval("5 - 3", &[]).unwrap();
+    assert!(
+        (q.value - 0.002).abs() < 1e-12,
+        "5 - 3 reads 2 mm bare, got {q:?}"
+    );
+}

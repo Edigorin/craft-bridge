@@ -33,24 +33,67 @@ Function NumStr(ByVal n)
   NumStr = s
 End Function
 
+' Strict period-decimal parsing: locale-INDEPENDENT. The text shape is
+' validated explicitly (optional sign, digits, at most one period, optional
+' exponent) and the value is converted with Val, which always reads a
+' period - unlike IsNumeric/CDbl, which read "0.01" through the host's
+' decimal separator and reject it on comma-decimal Windows. Every number
+' these modules parse arrives as period-decimal text (NumStr output or the
+' expect file), so exactly that shape is accepted.
+Function ParsePeriod(ByVal text, ByRef value)
+  Dim s, i, c, n, digits, dots, expSeen
+  ParsePeriod = False
+  value = 0
+  s = Trim(text)
+  n = Len(s)
+  If n = 0 Then Exit Function
+  i = 1
+  c = Mid(s, i, 1)
+  If c = "+" Or c = "-" Then i = i + 1
+  digits = 0
+  dots = 0
+  expSeen = False
+  Do While i <= n
+    c = Mid(s, i, 1)
+    If c >= "0" And c <= "9" Then
+      digits = digits + 1
+    ElseIf c = "." And Not expSeen Then
+      dots = dots + 1
+      If dots > 1 Then Exit Function
+    ElseIf (c = "e" Or c = "E") And Not expSeen And digits > 0 Then
+      expSeen = True
+      digits = 0
+      If i + 1 <= n Then
+        c = Mid(s, i + 1, 1)
+        If c = "+" Or c = "-" Then i = i + 1
+      End If
+    Else
+      Exit Function
+    End If
+    i = i + 1
+  Loop
+  If digits = 0 Then Exit Function
+  Err.Clear
+  On Error Resume Next
+  value = Val(s)
+  If Err.Number <> 0 Then
+    value = 0
+    On Error GoTo 0
+    Exit Function
+  End If
+  On Error GoTo 0
+  ParsePeriod = True
+End Function
+
 ' A positive, finite number as text: "" when valid, else the named reason.
 Function PositiveError(ByVal text)
   Dim v
   PositiveError = "missing or unreadable"
   If Trim(text) = "" Then Exit Function
-  If Not IsNumeric(Trim(text)) Then
+  If Not ParsePeriod(text, v) Then
     PositiveError = "not numeric"
     Exit Function
   End If
-  Err.Clear
-  On Error Resume Next
-  v = CDbl(Trim(text))
-  If Err.Number <> 0 Then
-    PositiveError = "not numeric"
-    On Error GoTo 0
-    Exit Function
-  End If
-  On Error GoTo 0
   If v <> v Or Abs(v) > 1E+100 Then
     PositiveError = "not finite"
     Exit Function
@@ -67,19 +110,10 @@ Function NonnegError(ByVal text)
   Dim v
   NonnegError = "missing or invalid"
   If Trim(text) = "" Then Exit Function
-  If Not IsNumeric(Trim(text)) Then
+  If Not ParsePeriod(text, v) Then
     NonnegError = "not numeric"
     Exit Function
   End If
-  Err.Clear
-  On Error Resume Next
-  v = CDbl(Trim(text))
-  If Err.Number <> 0 Then
-    NonnegError = "not numeric"
-    On Error GoTo 0
-    Exit Function
-  End If
-  On Error GoTo 0
   If v <> v Or Abs(v) > 1E+100 Then
     NonnegError = "not finite"
     Exit Function
@@ -96,19 +130,10 @@ Function CountError(ByVal text)
   Dim v
   CountError = "missing or invalid"
   If Trim(text) = "" Then Exit Function
-  If Not IsNumeric(Trim(text)) Then
+  If Not ParsePeriod(text, v) Then
     CountError = "not numeric"
     Exit Function
   End If
-  Err.Clear
-  On Error Resume Next
-  v = CDbl(Trim(text))
-  If Err.Number <> 0 Then
-    CountError = "not numeric"
-    On Error GoTo 0
-    Exit Function
-  End If
-  On Error GoTo 0
   If v <> v Or Abs(v) > 1E+100 Then
     CountError = "not finite"
     Exit Function
@@ -122,6 +147,48 @@ Function CountError(ByVal text)
     Exit Function
   End If
   CountError = ""
+End Function
+
+' A FOUND body count as text: "" when an integer >= 0 (zero is meaningful -
+' an empty import is named, not refused as invalid), else the reason.
+Function FoundCountError(ByVal text)
+  Dim v
+  FoundCountError = "missing or invalid"
+  If Trim(text) = "" Then Exit Function
+  If Not ParsePeriod(text, v) Then
+    FoundCountError = "not numeric"
+    Exit Function
+  End If
+  If v <> v Or Abs(v) > 1E+100 Then
+    FoundCountError = "not finite"
+    Exit Function
+  End If
+  If v <> Fix(v) Then
+    FoundCountError = "not an integer"
+    Exit Function
+  End If
+  If v < 0 Then
+    FoundCountError = "negative"
+    Exit Function
+  End If
+  FoundCountError = ""
+End Function
+
+' Whether a title was already open before this invocation imported
+' anything (the reference-ownership rule: a pre-existing document is the
+' user's and is never closed). The snapshot is the vbCrLf-joined titles
+' captured before the import.
+Function IsPreExistingTitle(ByVal snapshotText, ByVal title)
+  Dim parts, i
+  IsPreExistingTitle = False
+  If Trim(title) = "" Then Exit Function
+  parts = Split(snapshotText, vbCrLf)
+  For i = 0 To UBound(parts)
+    If parts(i) = title Then
+      IsPreExistingTitle = True
+      Exit Function
+    End If
+  Next
 End Function
 
 ' The REQUIRED mass block. The two volumes are SI cubic metres; relText is
@@ -139,10 +206,10 @@ Function MassLines(ByVal rebuiltText, ByVal refText, ByVal relText, ByVal absTex
   errT = NonnegError(relText)
   errA = NonnegError(absText2)
   If errR = "" Then
-    out = out & "volume:rebuilt=" & NumStr(CDbl(Trim(rebuiltText))) & vbCrLf
+    out = out & "volume:rebuilt=" & rebuiltText & vbCrLf
   End If
   If errF = "" Then
-    out = out & "volume:step_reference=" & NumStr(CDbl(Trim(refText))) & vbCrLf
+    out = out & "volume:step_reference=" & refText & vbCrLf
   End If
   If errR <> "" Or errF <> "" Or errT <> "" Or errA <> "" Then
     ' Fail closed and name each cause; the verdicts are still emitted.
@@ -156,10 +223,34 @@ Function MassLines(ByVal rebuiltText, ByVal refText, ByVal relText, ByVal absTex
     MassLines = out
     Exit Function
   End If
-  rebuilt = CDbl(Trim(rebuiltText))
-  refVol = CDbl(Trim(refText))
-  rel = CDbl(Trim(relText))
-  absTol = CDbl(Trim(absText2))
+  If Not ParsePeriod(rebuiltText, rebuilt) Then
+    out = out & "detail:mass=rebuilt volume not numeric: " & rebuiltText & vbCrLf
+    out = out & "check:mass=fail" & vbCrLf
+    out = out & "check:mass_vs_reference=fail" & vbCrLf
+    MassLines = out
+    Exit Function
+  End If
+  If Not ParsePeriod(refText, refVol) Then
+    out = out & "detail:mass=reference volume not numeric: " & refText & vbCrLf
+    out = out & "check:mass=fail" & vbCrLf
+    out = out & "check:mass_vs_reference=fail" & vbCrLf
+    MassLines = out
+    Exit Function
+  End If
+  If Not ParsePeriod(relText, rel) Then
+    out = out & "detail:mass=volume_tol not numeric: " & relText & vbCrLf
+    out = out & "check:mass=fail" & vbCrLf
+    out = out & "check:mass_vs_reference=fail" & vbCrLf
+    MassLines = out
+    Exit Function
+  End If
+  If Not ParsePeriod(absText2, absTol) Then
+    out = out & "detail:mass=volume_tol_abs not numeric: " & absText2 & vbCrLf
+    out = out & "check:mass=fail" & vbCrLf
+    out = out & "check:mass_vs_reference=fail" & vbCrLf
+    MassLines = out
+    Exit Function
+  End If
   diff = Abs(rebuilt - refVol)
   limit = rel * refVol
   If absTol > limit Then limit = absTol
@@ -180,7 +271,7 @@ Function MassSkipLines(ByVal rebuiltText)
   out = ""
   errR = PositiveError(rebuiltText)
   If errR = "" Then
-    out = out & "volume:rebuilt=" & NumStr(CDbl(Trim(rebuiltText))) & vbCrLf
+    out = out & "volume:rebuilt=" & rebuiltText & vbCrLf
     out = out & "detail:mass=volume comparison skipped by expect (volume_compare=skip)" & vbCrLf
     out = out & "check:mass=skipped" & vbCrLf
     out = out & "check:mass_vs_reference=skipped" & vbCrLf
@@ -201,7 +292,7 @@ Function RefImportLines(ByVal expectedText, ByVal docTypeText, ByVal solidsText,
   Dim out, errE, errS, expected, solids, sheets
   out = ""
   errE = CountError(expectedText)
-  errS = CountError(solidsText)
+  errS = FoundCountError(solidsText)
   If errS = "" Then
     out = out & "detail:step_reference=expected " & Trim(expectedText) & " solid bodies, found " & Trim(solidsText) & " solids and " & Trim(sheetsText) & " sheets, document type " & docTypeText & vbCrLf
   Else
@@ -231,28 +322,36 @@ Function RefImportLines(ByVal expectedText, ByVal docTypeText, ByVal solidsText,
     RefImportLines = out
     Exit Function
   End If
-  expected = CDbl(Trim(expectedText))
-  solids = CDbl(Trim(solidsText))
+  expected = 0
+  solids = 0
   sheets = 0
-  If IsNumeric(Trim(sheetsText)) Then sheets = CDbl(Trim(sheetsText))
+  If Not ParsePeriod(expectedText, expected) Then expected = -1
+  If Not ParsePeriod(solidsText, solids) Then solids = -1
+  If ParsePeriod(sheetsText, sheets) Then
+    ' parsed
+  Else
+    sheets = 0
+  End If
+  ' A zero solid-body count is named, not refused as an invalid count: the
+  ' surface/empty-import branches below must be reachable.
   If solids = 0 Then
     If sheets > 0 Then
-      out = out & "detail:step_reference=a surface import: no solid body where " & NumStr(expected) & " were expected" & vbCrLf
+      out = out & "detail:step_reference=a surface import: no solid body where " & Trim(expectedText) & " were expected" & vbCrLf
     Else
-      out = out & "detail:step_reference=no solid body in the import (empty body set) where " & NumStr(expected) & " were expected" & vbCrLf
+      out = out & "detail:step_reference=no solid body in the import (empty body set) where " & Trim(expectedText) & " were expected" & vbCrLf
     End If
     out = out & "check:step_reference=fail" & vbCrLf
     RefImportLines = out
     Exit Function
   End If
   If solids < expected Then
-    out = out & "detail:step_reference=incomplete import: found " & NumStr(solids) & " of " & NumStr(expected) & " expected solid bodies" & vbCrLf
+    out = out & "detail:step_reference=incomplete import: found " & Trim(solidsText) & " of " & Trim(expectedText) & " expected solid bodies" & vbCrLf
     out = out & "check:step_reference=fail" & vbCrLf
     RefImportLines = out
     Exit Function
   End If
   If solids > expected Then
-    out = out & "detail:step_reference=the import carries " & NumStr(solids) & " solid bodies where " & NumStr(expected) & " were expected (an assembly or multi-body import)" & vbCrLf
+    out = out & "detail:step_reference=the import carries " & Trim(solidsText) & " solid bodies where " & Trim(expectedText) & " were expected (an assembly or multi-body import)" & vbCrLf
     out = out & "check:step_reference=fail" & vbCrLf
     RefImportLines = out
     Exit Function
@@ -290,8 +389,10 @@ Function BodiesLines(ByVal expectedText, ByVal rebuiltText)
     BodiesLines = out
     Exit Function
   End If
-  expected = CDbl(Trim(expectedText))
-  rebuilt = CDbl(Trim(rebuiltText))
+  expected = 0
+  rebuilt = 0
+  If Not ParsePeriod(expectedText, expected) Then expected = -1
+  If Not ParsePeriod(rebuiltText, rebuilt) Then rebuilt = -1
   If rebuilt <> expected Then
     out = out & "detail:bodies=the rebuilt part carries " & NumStr(rebuilt) & " solid bodies where " & NumStr(expected) & " were expected" & vbCrLf
     out = out & "check:bodies=fail" & vbCrLf
@@ -315,7 +416,7 @@ Function PlacementLines(ByVal distText, ByVal tolText)
   errD = NonnegError(distText)
   errT = NonnegError(tolText)
   If errD = "" Then
-    out = out & "detail:placement=centroid distance " & NumStr(CDbl(Trim(distText))) & " m, tolerance " & Trim(tolText) & " m" & vbCrLf
+    out = out & "detail:placement=centroid distance " & Trim(distText) & " m, tolerance " & Trim(tolText) & " m" & vbCrLf
   Else
     out = out & "detail:placement=centroid distance (" & errD & ": " & distText & "), tolerance " & Trim(tolText) & " m" & vbCrLf
   End If
@@ -331,8 +432,10 @@ Function PlacementLines(ByVal distText, ByVal tolText)
     PlacementLines = out
     Exit Function
   End If
-  dist = CDbl(Trim(distText))
-  tol = CDbl(Trim(tolText))
+  dist = 0
+  tol = 0
+  If Not ParsePeriod(distText, dist) Then dist = -1
+  If Not ParsePeriod(tolText, tol) Then tol = -1
   If dist > tol Then
     out = out & "detail:placement=the rebuilt body sits " & NumStr(dist) & " m from the reference centroid, past the " & NumStr(tol) & " m tolerance" & vbCrLf
     out = out & "check:placement=fail" & vbCrLf
