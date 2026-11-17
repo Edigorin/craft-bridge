@@ -1635,12 +1635,18 @@ fn dims_verify_kind_and_resolve_signs_in_the_equation() {
     // The sign lives in the equation RHS and the expected value - never only
     // in the initial SystemValue - so parameter edits keep tracking.
     assert!(
-        region.contains("AddDimEquation(dm, \"40mm\", signVal * 0.04, 0, signVal)"),
+        region.contains("AddDimEquation(dm, \"40mm\", signVal * 0.04, 0, signVal, skName{index})"),
         "the equation does not carry the runtime sign"
     );
     assert!(
         text.contains("\"=\"") && text.contains("-1 * ("),
         "AddDimEquation does not fold the sign into the stored equation text"
+    );
+    // Qualified names: the short D1 is ambiguous across sketches (the
+    // evidence round: eqMgr.Add rejects it in two-sketch items).
+    assert!(
+        text.contains("qName = qName &") || text.contains("qName & \"@\""),
+        "dimension equations do not qualify the dimension name"
     );
 }
 
