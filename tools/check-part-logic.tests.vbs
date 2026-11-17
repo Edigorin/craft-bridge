@@ -142,12 +142,12 @@ Check "a valid count validates", (CountError("2") = ""), CountError("2")
 ' period-decimal; comma-decimal text is refused - exactly one of the two
 ' parses whatever the host locale says ----
 Dim pv
-Check "period-decimal text parses with its value" (ParsePeriod("0.01", pv) And Abs(pv - 0.01) < 0.0000000001), "pv=" & NumStr(pv)
-Check "comma-decimal text is refused" (Not ParsePeriod("0,01", pv)), "pv=" & NumStr(pv)
-Check "sign and exponent forms parse" (ParsePeriod("-1E-06", pv) And Abs(pv + 0.000001) < 0.000000000001), "pv=" & NumStr(pv)
-Check "a bare decimal parses" (ParsePeriod(".5", pv) And Abs(pv - 0.5) < 0.0000000001), "pv=" & NumStr(pv)
-Check "malformed shapes are refused" ((Not ParsePeriod("1.2.3", pv)) And (Not ParsePeriod("1e", pv)) And (Not ParsePeriod("abc", pv)) And (Not ParsePeriod("", pv)) And (Not ParsePeriod("+", pv))), "junk parsed"
-Check "the validators inherit the locale-safe parse" ((PositiveError("0.01") = "") And (PositiveError("0,01") = "not numeric")), "comma text validated"
+Check "period-decimal text parses with its value", (ParsePeriod("0.01", pv) And Abs(pv - 0.01) < 0.0000000001), "pv=" & NumStr(pv)
+Check "comma-decimal text is refused", (Not ParsePeriod("0,01", pv)), "pv=" & NumStr(pv)
+Check "sign and exponent forms parse", (ParsePeriod("-1E-06", pv) And Abs(pv + 0.000001) < 0.000000000001), "pv=" & NumStr(pv)
+Check "a bare decimal parses", (ParsePeriod(".5", pv) And Abs(pv - 0.5) < 0.0000000001), "pv=" & NumStr(pv)
+Check "malformed shapes are refused", ((Not ParsePeriod("1.2.3", pv)) And (Not ParsePeriod("1e", pv)) And (Not ParsePeriod("abc", pv)) And (Not ParsePeriod("", pv)) And (Not ParsePeriod("+", pv))), "junk parsed"
+Check "the validators inherit the locale-safe parse", ((PositiveError("0.01") = "") And (PositiveError("0,01") = "not numeric")), "comma text validated"
 
 ' ---- a zero found count is named downstream, never refused as invalid
 ' (finding 2: the surface/empty-import branches must be reachable) ----

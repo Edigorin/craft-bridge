@@ -73,16 +73,63 @@ Function ParsePeriod(ByVal text, ByRef value)
     i = i + 1
   Loop
   If digits = 0 Then Exit Function
-  Err.Clear
-  On Error Resume Next
-  value = Val(s)
-  If Err.Number <> 0 Then
-    value = 0
-    On Error GoTo 0
-    Exit Function
-  End If
-  On Error GoTo 0
+  ' Convert exactly from the proven shape. VBScript has no Val (that is a
+  ' VBA function - calling it here raised a swallowed Type mismatch and
+  ' made every parse fail) and CDbl is locale-sensitive, so accumulate the
+  ' mantissa by arithmetic and apply the decimal and exponent scales: no
+  ' locale surface at all.
+  value = PeriodValue(s)
   ParsePeriod = True
+End Function
+
+' The numeric value of period-decimal text whose shape ParsePeriod has
+' proven: optional sign, mantissa digits, at most one period, optional
+' exponent. Digit accumulation only - see ParsePeriod.
+Function PeriodValue(ByVal s)
+  Dim i, c, n, sign, mant, frac, expo, esign, inExp, inFrac, k, scale
+  sign = 1#
+  mant = 0#
+  frac = 0
+  expo = 0
+  esign = 1
+  inExp = False
+  inFrac = False
+  n = Len(s)
+  i = 1
+  c = Mid(s, i, 1)
+  If c = "-" Then
+    sign = -1#
+    i = i + 1
+  ElseIf c = "+" Then
+    i = i + 1
+  End If
+  Do While i <= n
+    c = Mid(s, i, 1)
+    If inExp Then
+      If c = "-" Then
+        esign = -1
+      ElseIf c <> "+" Then
+        expo = expo * 10 + (Asc(c) - 48)
+      End If
+    ElseIf c = "." Then
+      inFrac = True
+    Else
+      mant = mant * 10# + (Asc(c) - 48)
+      If inFrac Then frac = frac + 1
+    End If
+    i = i + 1
+  Loop
+  scale = esign * expo - frac
+  If scale > 0 Then
+    For k = 1 To scale
+      mant = mant * 10#
+    Next
+  Else
+    For k = 1 To -scale
+      mant = mant / 10#
+    Next
+  End If
+  PeriodValue = sign * mant
 End Function
 
 ' A positive, finite number as text: "" when valid, else the named reason.
