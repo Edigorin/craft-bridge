@@ -110,6 +110,17 @@ snapshots. Anything the seat reports as a correction becomes a new fixture.
 - **`Dim sgn`-style names are compile errors**: VBA intrinsic names cannot
   be identifiers. A compile error presents as RunMacro returning failure
   with no report at all - bisect with committed compile probes.
+- **Select a sketch by its live FEATURE OBJECT, never by name.**
+  `SelectByID2(name, "SKETCH", ...)` returns False even with the right
+  name once a probe sketch has been created and deleted before the target
+  sketch (the tracer flow): probe-extrudedir's by-name select worked only
+  while the sketch was the first-ever one. `Feature.Select False` on a
+  live object is the pinned-reliable selection (probe-endpoints,
+  DiscardProbeSketch); the generator stores `skFeatN` per sketch step via
+  the proven `FindFeatureByName` walk, selects through it everywhere
+  (feature calls, SolveSketch re-entry, DeleteCreated) and keeps the
+  by-name form only as fallback, refusing with `TreeSummary()` when both
+  fail (b2e9878).
 
 ## Extrude and mass APIs (measured on the seat, 2026-11-16)
 
