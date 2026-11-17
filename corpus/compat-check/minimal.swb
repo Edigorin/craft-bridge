@@ -426,9 +426,13 @@ gFrame(5) = vz
 gFrame(6) = nx
 gFrame(7) = ny
 gFrame(8) = nz
-gFrame(9) = a(9)
-gFrame(10) = a(10)
-gFrame(11) = a(11)
+' The inverse origin: the model->sketch map is x_s = A.x_m + trans;
+' the sketch origin in model space is O = -(trans0*u' + trans1*v' +
+' trans2*n'). For origin planes trans = 0 and O = 0; for offset planes
+' the two quantities differ and SketchToModel needs O, never trans.
+gFrame(9) = -(a(9) * ux + a(10) * vx + a(11) * nx)
+gFrame(10) = -(a(9) * uy + a(10) * vy + a(11) * ny)
+gFrame(11) = -(a(9) * uz + a(10) * vz + a(11) * nz)
 gMapValid = True
 PublishMap = True
 Exit Function

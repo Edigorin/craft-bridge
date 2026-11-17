@@ -660,6 +660,89 @@ fn array_data_from_frame(u: [f64; 3], v: [f64; 3], n: [f64; 3], o: [f64; 3]) -> 
 }
 
 #[test]
+fn sketch_to_model_inverts_a_translated_rotated_frame() {
+    // The reviewer's RC2 catch: PublishMap stores the model->sketch
+    // translation while SketchToModel needs the sketch origin in model
+    // space - a different quantity on any plane that misses the origin.
+    // This mirrors the emitted formula exactly and round-trips a
+    // translated AND rotated frame (offset-plane shapes).
+    fn frame(basis: [[f64; 3]; 3], trans: [f64; 3]) -> [f64; 16] {
+        // array layout: columns are the sketch axes (u = a0,a3,a6 etc),
+        // a9..11 = the model->sketch translation; 16 entries, scale 1.
+        let mut a = [0.0f64; 16];
+        for (j, ax) in basis.iter().enumerate() {
+            a[j] = ax[0];
+            a[3 + j] = ax[1];
+            a[6 + j] = ax[2];
+        }
+        a[9] = trans[0];
+        a[10] = trans[1];
+        a[11] = trans[2];
+        a[12] = 1.0;
+        a
+    }
+    fn sketch_origin(a: &[f64; 16]) -> [f64; 3] {
+        // mirrors the emitted gFrame(9..11): O = -(b0*u' + b1*v' + b2*n')
+        let (ux, uy, uz) = (a[0], a[3], a[6]);
+        let (vx, vy, vz) = (a[1], a[4], a[7]);
+        let (nx, ny, nz) = (a[2], a[5], a[8]);
+        [
+            -(a[9] * ux + a[10] * vx + a[11] * nx),
+            -(a[9] * uy + a[10] * vy + a[11] * ny),
+            -(a[9] * uz + a[10] * vz + a[11] * nz),
+        ]
+    }
+    fn model_to_sketch(a: &[f64; 16], p: [f64; 3]) -> [f64; 3] {
+        let (ux, uy, uz) = (a[0], a[3], a[6]);
+        let (vx, vy, vz) = (a[1], a[4], a[7]);
+        let (nx, ny, nz) = (a[2], a[5], a[8]);
+        [
+            p[0] * ux + p[1] * uy + p[2] * uz + a[9],
+            p[0] * vx + p[1] * vy + p[2] * vz + a[10],
+            p[0] * nx + p[1] * ny + p[2] * nz + a[11],
+        ]
+    }
+    fn sketch_to_model(a: &[f64; 16], s: f64, t: f64) -> [f64; 3] {
+        // mirrors the emitted SketchToModelX/Y/Z exactly
+        let o = sketch_origin(a);
+        [
+            o[0] + s * a[0] + t * a[1],
+            o[1] + s * a[3] + t * a[4],
+            o[2] + s * a[6] + t * a[7],
+        ]
+    }
+    // A translated, rotated (non-axis-aligned) right-handed frame: axes are
+    // rows of a rotation about z by 30 degrees, then a second tilt - built
+    // orthonormal by hand: u' = (c, s, 0), v' = (-s, c, 0), n' = (0,0,1)
+    // rotated again about u by 20deg (approximated values keep the test
+    // honest about the algebra, not the trig).
+    let (c30, s30) = ((3f64).sqrt() / 2.0, 0.5);
+    let u = [c30, s30, 0.0];
+    let v = [-s30, c30, 0.0];
+    let n = [0.0, 0.0, 1.0];
+    let trans = [0.031, -0.017, 0.042]; // a plane missing the origin
+    let a = frame([u, v, n], trans);
+    let o = sketch_origin(&a);
+    // The sketch origin must map to (0,0,0) in sketch space.
+    let o_s = model_to_sketch(&a, o);
+    for (got, want) in o_s.iter().zip([0.0, 0.0, 0.0]) {
+        assert!((got - want).abs() < 1e-12, "origin does not map to zero: {o_s:?}");
+    }
+    // Round-trip: any sketch point (s,t) -> model -> sketch gives (s,t,0).
+    for (s, t) in [(0.0, 0.0), (0.03, -0.02), (-0.11, 0.07)] {
+        let p = sketch_to_model(&a, s, t);
+        let q = model_to_sketch(&a, p);
+        assert!((q[0] - s).abs() < 1e-12, "s does not round-trip: {q:?}");
+        assert!((q[1] - t).abs() < 1e-12, "t does not round-trip: {q:?}");
+        assert!(q[2].abs() < 1e-12, "z must vanish in sketch space: {q:?}");
+    }
+    // The raw translation must NOT be the origin (the bug this fixes).
+    let raw = [a[9], a[10], a[11]];
+    let d2 = (0..3).map(|i| (raw[i] - o[i]).powi(2)).sum::<f64>();
+    assert!(d2 > 1e-9, "test frame must separate translation from origin");
+}
+
+#[test]
 fn sketch_frame_extraction_follows_the_inverse_transform() {
     use swb::{sketch_frame_from_array_data, sketch_origin_from_array_data};
 
