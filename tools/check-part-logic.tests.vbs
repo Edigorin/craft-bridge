@@ -138,6 +138,32 @@ Check "a fractional count is refused", (CountError("1.5") = "not an integer"), C
 Check "a zero count is refused", (CountError("0") = "nonpositive"), CountError("0")
 Check "a valid count validates", (CountError("2") = ""), CountError("2")
 
+' ---- locale-independent parsing (finding 3): the text shape is strict
+' period-decimal; comma-decimal text is refused - exactly one of the two
+' parses whatever the host locale says ----
+Dim pv
+Check "period-decimal text parses with its value" (ParsePeriod("0.01", pv) And Abs(pv - 0.01) < 0.0000000001), "pv=" & NumStr(pv)
+Check "comma-decimal text is refused" (Not ParsePeriod("0,01", pv)), "pv=" & NumStr(pv)
+Check "sign and exponent forms parse" (ParsePeriod("-1E-06", pv) And Abs(pv + 0.000001) < 0.000000000001), "pv=" & NumStr(pv)
+Check "a bare decimal parses" (ParsePeriod(".5", pv) And Abs(pv - 0.5) < 0.0000000001), "pv=" & NumStr(pv)
+Check "malformed shapes are refused" ((Not ParsePeriod("1.2.3", pv)) And (Not ParsePeriod("1e", pv)) And (Not ParsePeriod("abc", pv)) And (Not ParsePeriod("", pv)) And (Not ParsePeriod("+", pv))), "junk parsed"
+Check "the validators inherit the locale-safe parse" ((PositiveError("0.01") = "") And (PositiveError("0,01") = "not numeric")), "comma text validated"
+
+' ---- a zero found count is named downstream, never refused as invalid
+' (finding 2: the surface/empty-import branches must be reachable) ----
+Check "a zero found count is valid" (FoundCountError("0") = ""), FoundCountError("0")
+Check "a negative found count is refused" (FoundCountError("-1") = "negative"), FoundCountError("-1")
+Check "a fractional found count is refused" (FoundCountError("1.5") = "not an integer"), FoundCountError("1.5")
+b = RefImportLines("1", "part", "0", "3")
+Check "the surface naming is reached for zero solids" Has(b, "a surface import"), b
+
+' ---- reference ownership (finding 4): a pre-existing title is the
+' user's document and is never closed ----
+Check "a pre-existing title is detected" IsPreExistingTitle("Doc1" & vbCrLf & "Doc2" & vbCrLf, "Doc2"), "not detected"
+Check "a new title is not pre-existing" (Not IsPreExistingTitle("Doc1" & vbCrLf, "Doc2")), "false positive"
+Check "an empty title is never pre-existing" (Not IsPreExistingTitle("Doc1" & vbCrLf, "")), "false positive"
+Check "an empty snapshot owns nothing" (Not IsPreExistingTitle("", "Doc1")), "false positive"
+
 If failures > 0 Then
   WScript.Echo failures & " test(s) failed"
   WScript.Quit 1

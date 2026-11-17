@@ -148,15 +148,33 @@ function Test-RealApproval {
     }
 }
 
-# Real-design acceptance: mass_vs_reference=pass is REQUIRED - a real
-# design always compares against its reference STEP (no placeholder) - and
-# no check may fail. Returns "" when accepted, else the named reason.
+# The runtime report itself: complete, successful, and free of failed
+# steps (a failed preference restoration or close fails the run, exactly
+# as the corpus harness requires). Returns "" when accepted.
+function Test-RealReport {
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Lines)
+    if (@($Lines).Count -eq 0) { return "the runtime report is empty" }
+    if ($Lines[-1] -notmatch '"type":"summary"') { return "truncated runtime report (no summary line)" }
+    if ($Lines[-1] -notmatch '"status":"ok"') { return "the runtime summary is not ok: $($Lines[-1])" }
+    $bad = @($Lines | Where-Object { $_ -match '"status":"failed"' })
+    if ($bad.Count -gt 0) { return "the runtime report carries failed steps: $($bad[0])" }
+    return ""
+}
+
+# Real-design acceptance: the FULL verdict set - the mass comparison and
+# every companion check (import, bodies, placement, reference close) -
+# each present EXACTLY ONCE and passing; a real design always compares
+# against its reference STEP (no placeholder). Returns "" when accepted,
+# else the named reason.
 function Test-RealAcceptance {
     param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Checks)
-    $mass = @($Checks | Where-Object { $_ -match '^check:mass_vs_reference=' })
-    if ($mass.Count -eq 0) { return "the required check:mass_vs_reference entry is absent" }
-    if ($mass.Count -gt 1) { return "the check:mass_vs_reference entry is not unique" }
-    if ($mass[0] -ne "check:mass_vs_reference=pass") { return "mass_vs_reference is not pass ($($mass[0]))" }
+    $required = @("check:mass", "check:mass_vs_reference", "check:step_reference", "check:bodies", "check:placement", "check:ref_close")
+    foreach ($name in $required) {
+        $hits = @($Checks | Where-Object { $_ -like "$name=*" })
+        if ($hits.Count -eq 0) { return "the required $name entry is absent" }
+        if ($hits.Count -gt 1) { return "the $name entry is not unique" }
+        if ($hits[0] -ne "$name=pass") { return "$name is not pass ($($hits[0]))" }
+    }
     $bad = @($Checks | Where-Object { $_ -match '=fail' })
     if ($bad.Count -gt 0) { return "failed checks: $($bad -join '; ')" }
     return ""
@@ -188,25 +206,6 @@ function Read-RealManifest {
     return $m
 }
 
-# Every manifest input: confined to uploads/<design>/, untracked, and
-# byte-identical to its pin. Returns the resolved full paths.
-function Test-RealInputPins {
-    param(
-        [Parameter(Mandatory = $true)]$Manifest,
-        [Parameter(Mandatory = $true)][string]$DesignName,
-        [Parameter(Mandatory = $true)][string]$Root
-    )
-    $inputs = @{}
-    foreach ($what in @("source", "macro", "reference", "expect")) {
-        $entry = $Manifest.files.$what
-        $full = Test-RealInputPath -DesignName $DesignName -RelPath "$($entry.path)" -Root $Root
-        $rel = "$($entry.path)" -replace "\\", "/"
-        Test-RealUntracked -Root $Root -RelPath $rel
-        $null = Test-RealPin -ExpectedSha "$($entry.sha256)" -Path $full -What $what
-        $inputs[$what] = $full
-    }
-    return $inputs
-}
 
 # The tooling this runner executes must all be pinned; anything not pinned
 # is refused. The pins are verified against the EXECUTED bytes - the files
@@ -264,6 +263,46 @@ function Test-RealInputPins {
     return $inputs
 }
 
+# The per-run pin record the exception requires: a UNIQUE file per run
+# under runs/<design>/runs/, written BEFORE the run with the planned pins
+# and patched with its outcome afterwards. Earlier records are never
+# touched - every run's evidence survives the next one.
+function New-RunRecord {
+    param(
+        [Parameter(Mandatory = $true)][string]$RunsDir,
+        [Parameter(Mandatory = $true)][string]$DesignName,
+        [Parameter(Mandatory = $true)]$Manifest,
+        [Parameter(Mandatory = $true)][string]$MacroSha,
+        [Parameter(Mandatory = $true)]$Verified
+    )
+    $runId = "run-" + (Get-Date -Format "yyyyMMdd-HHmmss") + "-" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
+    $runsSub = Join-Path $RunsDir "runs"
+    New-Item -ItemType Directory -Force -Path $runsSub | Out-Null
+    $path = Join-Path $runsSub "$runId.json"
+    $record = [ordered]@{
+        run_id = $runId
+        started = (Get-Date).ToString("o")
+        design = $DesignName
+        approved_macro_sha256 = "$($Manifest.approved_macro_sha256)"
+        macro_sha256 = $MacroSha
+        verified = $Verified
+        outcome = "started"
+    }
+    $record | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $path
+    return $path
+}
+
+function Complete-RunRecord {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Outcome
+    )
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $raw = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    $raw.outcome = $Outcome
+    $raw | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Path
+}
+
 function Invoke-RealDesignRun {
     param(
         [Parameter(Mandatory = $true)][string]$DesignName,
@@ -276,6 +315,8 @@ function Invoke-RealDesignRun {
     }
     $runsDir = Join-Path (Join-Path $Root "runs") $DesignName
     $manifestPath = Join-Path $runsDir "manifest.json"
+    Test-RealZoneUntracked -Root $Root -RelDir "runs/$DesignName"
+    Test-RealUntracked -Root $Root -RelPath "runs/$DesignName/manifest.json"
     $manifest = Read-RealManifest -Path $manifestPath
     if ("$($manifest.design)" -ne $DesignName) {
         throw "refusing: the manifest design ($($manifest.design)) is not $DesignName"
@@ -284,8 +325,9 @@ function Invoke-RealDesignRun {
     # Inputs: confined to uploads/<design>/, untracked, byte-pinned.
     $inputs = Test-RealInputPins -Manifest $manifest -DesignName $DesignName -Root $Root
 
-    # Tooling: every script this runner executes must be pinned and match.
-    $toolPins = Test-RealToolingPins -Manifest $manifest -Root $Root
+    # Tooling: every script this runner executes must be pinned and match
+    # the EXECUTED bytes (at $PSScriptRoot), this runner included.
+    $toolPins = Test-RealToolingPins -Manifest $manifest -ScriptDir $PSScriptRoot
 
     # The approval gate: the exact macro bytes the owner approved.
     $macroSha = Get-RealFileSha256 -Path $inputs["macro"]
@@ -298,20 +340,19 @@ function Invoke-RealDesignRun {
     Move-SeatEvidenceAside -Path $reportPath | Out-Null
     Move-SeatEvidenceAside -Path $checkOut | Out-Null
 
-    # The per-run pin record the exception requires (untracked).
-    $runManifest = [ordered]@{
-        design = $DesignName
-        verified = [ordered]@{
-            source = [ordered]@{ path = $manifest.files.source.path; sha256 = (Get-RealFileSha256 -Path $inputs["source"]) }
-            macro = [ordered]@{ path = $manifest.files.macro.path; sha256 = $macroSha }
-            reference = [ordered]@{ path = $manifest.files.reference.path; sha256 = (Get-RealFileSha256 -Path $inputs["reference"]) }
-            expect = [ordered]@{ path = $manifest.files.expect.path; sha256 = (Get-RealFileSha256 -Path $inputs["expect"]) }
-            tooling = $toolPins
-        }
-        approved_macro_sha256 = "$($manifest.approved_macro_sha256)"
-        outcome = "started"
+    # The per-run pin record the exception requires (untracked): written
+    # BEFORE the invocation with the planned pins, so an exception can
+    # never leave a run without evidence.
+    $verified = [ordered]@{
+        source = [ordered]@{ path = $manifest.files.source.path; sha256 = (Get-RealFileSha256 -Path $inputs["source"]) }
+        macro = [ordered]@{ path = $manifest.files.macro.path; sha256 = $macroSha }
+        reference = [ordered]@{ path = $manifest.files.reference.path; sha256 = (Get-RealFileSha256 -Path $inputs["reference"]) }
+        expect = [ordered]@{ path = $manifest.files.expect.path; sha256 = (Get-RealFileSha256 -Path $inputs["expect"]) }
+        tooling = $toolPins
     }
-
+    $runRecord = New-RunRecord -RunsDir $runsDir -DesignName $DesignName -Manifest $manifest -MacroSha $macroSha -Verified $verified
+    $accepted = ""
+    try {
     # Run the macro exactly like the corpus harness does: the TEMP path
     # file protocol, the true exit code, a complete runtime report.
     $pathFile = Join-Path $env:TEMP "craft-bridge-report-path.txt"
@@ -321,7 +362,6 @@ function Invoke-RealDesignRun {
     $r = Invoke-SeatCommand -FilePath "cscript" -ArgumentList @("//nologo", (Join-Path $PSScriptRoot "run-macro.vbs"), $inputs["macro"]) -TimeoutSeconds 600
     $r.StdOut | Set-Content (Join-Path $runsDir "runner.log")
     $r.StdErr | Set-Content (Join-Path $runsDir "runner.err.log")
-    $accepted = ""
     if ($r.TimedOut) {
         $accepted = "the macro runner timed out; resolve it in SolidWorks, then rerun"
     } elseif ($null -eq $r.ExitCode) {
@@ -332,9 +372,8 @@ function Invoke-RealDesignRun {
         $accepted = "no runtime report"
     } else {
         $lines = @(Get-Content -LiteralPath $reportPath)
-        if ($lines.Count -eq 0 -or -not ($lines[-1] -match '"type":"summary"')) {
-            $accepted = "truncated runtime report"
-        } else {
+        $accepted = Test-RealReport -Lines $lines
+        if ($accepted -eq "") {
             $ownedTitle = ""
             foreach ($ln in $lines) {
                 if ($ln -match '"command":"owned-document"' -and $ln -match '"message":"([^"]*)"') { $ownedTitle = $Matches[1] }
@@ -359,11 +398,13 @@ function Invoke-RealDesignRun {
             }
         }
     }
+    } catch {
+        $accepted = "the run raised: $($_.Exception.Message)"
+    }
 
-    $runManifest.outcome = if ($accepted -eq "") { "accepted" } else { "refused: $accepted" }
-    $runManifest | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $runsDir "run-manifest.json")
+    Complete-RunRecord -Path $runRecord -Outcome $(if ($accepted -eq "") { "accepted" } else { "refused: $accepted" })
     if ($accepted -eq "") {
-        Write-Host "PASS: $DesignName accepted (mass_vs_reference=pass; pins recorded in runs/$DesignName/run-manifest.json)"
+        Write-Host "PASS: $DesignName accepted (the full verdict set passes; pins recorded in $runRecord)"
         return 0
     }
     Write-Host "FAILED: $accepted"

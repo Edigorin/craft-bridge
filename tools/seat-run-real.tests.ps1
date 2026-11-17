@@ -57,13 +57,30 @@ Set-Content -Path $src -Value "{""synthetic"": true}"
 Set-Content -Path $ref -Value "synthetic step bytes"
 Set-Content -Path $exp -Value "volume_tol=0.001"
 Set-Content -Path $tracked -Value "synthetic tracked bytes"
-foreach ($t in @("seat-run.ps1", "run-macro.vbs", "check-part.vbs", "check-part-logic.vbs")) {
+foreach ($t in @("seat-run-real.ps1", "seat-run.ps1", "run-macro.vbs", "check-part.vbs", "check-part-logic.vbs")) {
     Set-Content -Path (Join-Path $scratch "tools\$t") -Value "synthetic tooling bytes"
 }
 git -C $scratch add -- "uploads/d1/tracked.bin" 2>$null | Out-Null
 
 function Sha($p) { (Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash.ToLower() }
-$allTools = @("tools/seat-run.ps1", "tools/run-macro.vbs", "tools/check-part.vbs", "tools/check-part-logic.vbs")
+$allTools = @("tools/seat-run-real.ps1", "tools/seat-run.ps1", "tools/run-macro.vbs", "tools/check-part.vbs", "tools/check-part-logic.vbs")
+
+# A manifest with one EXTRA pinned file (a consumed fallback sidecar).
+function WriteManifestExtra($approved, $toolsToPin, $extraPath, $extraSha) {
+    $tooling = [ordered]@{}
+    foreach ($t in $toolsToPin) { $tooling[$t] = Sha (Join-Path $scratch "tools\$($t -replace 'tools/', '')") }
+    $files = [ordered]@{
+        source = [ordered]@{ path = "uploads/d1/source.json"; sha256 = (Sha $src) }
+        macro = [ordered]@{ path = "uploads/d1/macro.swb"; sha256 = (Sha $macro) }
+        reference = [ordered]@{ path = "uploads/d1/ref.step"; sha256 = (Sha $ref) }
+        expect = [ordered]@{ path = "uploads/d1/expect.txt"; sha256 = (Sha $exp) }
+        "sidecar:$extraPath" = [ordered]@{ path = $extraPath; sha256 = $extraSha }
+    }
+    $m = [ordered]@{ design = "d1"; files = $files; tooling = $tooling }
+    if ($approved) { $m["approved_macro_sha256"] = $approved }
+    $m | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $scratch "runs\d1\manifest.json")
+    return Read-RealManifest -Path (Join-Path $scratch "runs\d1\manifest.json")
+}
 
 # Every manifest is written and READ BACK: the runner consumes parsed JSON
 # (PSObject semantics), so the fixtures must too.
@@ -132,21 +149,68 @@ Check "an approved unchanged macro proceeds" $ok "threw"
 $threw = Throws { Test-RealApproval -Manifest $m -MacroSha (Sha $src) }
 Check "a changed macro needs re-approval" $threw "no throw"
 
-# ---- acceptance: real designs REQUIRE mass_vs_reference=pass ----
-$ok = (Test-RealAcceptance -Checks @("check:mass_vs_reference=pass", "check:bodies=pass")) -eq ""
-Check "mass_vs_reference=pass is accepted" $ok "reason given"
-Check "mass_vs_reference=skipped is refused (real designs always compare)" ((Test-RealAcceptance -Checks @("check:mass_vs_reference=skipped")) -ne "") "accepted"
-Check "mass_vs_reference=fail is refused" ((Test-RealAcceptance -Checks @("check:mass_vs_reference=fail")) -ne "") "accepted"
-Check "an absent mass entry is refused" ((Test-RealAcceptance -Checks @("check:tree_count=pass")) -ne "") "accepted"
-Check "a failed companion check is refused" ((Test-RealAcceptance -Checks @("check:mass_vs_reference=pass", "check:placement=fail")) -ne "") "accepted"
+# ---- acceptance: real designs REQUIRE the full verdict set, passing ----
+$fullPass = @("check:mass=pass", "check:mass_vs_reference=pass", "check:step_reference=pass", "check:bodies=pass", "check:placement=pass", "check:ref_close=pass")
+Check "the full passing verdict set is accepted" ((Test-RealAcceptance -Checks $fullPass) -eq "") "reason given"
+Check "mass_vs_reference=skipped is refused (real designs always compare)" ((Test-RealAcceptance -Checks @($fullPass | Where-Object { $_ -ne "check:mass_vs_reference=pass" }) + @("check:mass_vs_reference=skipped")) -ne "") "accepted"
+Check "mass_vs_reference=fail is refused" ((Test-RealAcceptance -Checks @($fullPass | Where-Object { $_ -ne "check:mass_vs_reference=pass" }) + @("check:mass_vs_reference=fail")) -ne "") "accepted"
+Check "a missing companion verdict is refused" ((Test-RealAcceptance -Checks @("check:mass=pass", "check:mass_vs_reference=pass")) -ne "") "accepted"
+Check "a duplicate verdict is refused" ((Test-RealAcceptance -Checks ($fullPass + @("check:mass=pass"))) -ne "") "accepted"
+Check "a non-passing companion verdict is refused" ((Test-RealAcceptance -Checks @($fullPass | Where-Object { $_ -ne "check:placement=pass" }) + @("check:placement=fail")) -ne "") "accepted"
+Check "a failed check elsewhere still refuses" ((Test-RealAcceptance -Checks ($fullPass + @("check:tree_count=fail"))) -ne "") "accepted"
 
-# ---- tooling pins: anything not pinned is refused ----
-$m = WriteManifest (Sha $macro) @("tools/seat-run.ps1", "tools/run-macro.vbs", "tools/check-part.vbs") $false $false
-$threw = Throws { Test-RealToolingPins -Manifest $m -Root $scratch }
-Check "unpinned tooling is refused" $threw "no throw"
+# ---- the runtime report gate (finding 7) ----
+Check "a complete ok report passes" ((Test-RealReport -Lines @('"command":"x"', '{"type":"summary","status":"ok"}')) -eq "") "reason given"
+Check "a failed step refuses the run" ((Test-RealReport -Lines @('{"type":"step","status":"failed"}', '{"type":"summary","status":"ok"}')) -ne "") "accepted"
+Check "a failed summary refuses the run" ((Test-RealReport -Lines @('"command":"x"', '{"type":"summary","status":"failed"}')) -ne "") "accepted"
+Check "a truncated report refuses the run" ((Test-RealReport -Lines @('"command":"x"')) -ne "") "accepted"
+Check "an empty report refuses the run" ((Test-RealReport -Lines @()) -ne "") "accepted"
+
+# ---- tooling pins: the executed bytes, this runner included (finding 5) ----
+$scriptDir = Join-Path $scratch "tools"
+$m = WriteManifest (Sha $macro) @("tools/seat-run.ps1", "tools/run-macro.vbs", "tools/check-part.vbs", "tools/check-part-logic.vbs") $false $false
+$threw = Throws { Test-RealToolingPins -Manifest $m -ScriptDir $scriptDir }
+Check "unpinned tooling is refused (this runner included)" $threw "no throw"
 $m = WriteManifest (Sha $macro) $allTools $false $false
-$pins = Test-RealToolingPins -Manifest $m -Root $scratch
-Check "pinned tooling verifies" ($pins.Count -eq 4) "count=$($pins.Count)"
+$pins = Test-RealToolingPins -Manifest $m -ScriptDir $scriptDir
+Check "pinned tooling verifies against the executed bytes" ($pins.Count -eq 5) "count=$($pins.Count)"
+# A pin that matches the repo copy but not the executed bytes refuses.
+Set-Content -Path (Join-Path $scratch "tools\run-macro.vbs") -Value "synthetic tooling bytes, changed after pinning"
+$threw = Throws { Test-RealToolingPins -Manifest $m -ScriptDir $scriptDir }
+Check "changed executed bytes are refused" $threw "no throw"
+Set-Content -Path (Join-Path $scratch "tools\run-macro.vbs") -Value "synthetic tooling bytes"
+
+# ---- zone and sidecar provenance (finding 5) ----
+Set-Content -Path (Join-Path $scratch "runs\d1\leaked.txt") -Value "tracked output"
+git -C $scratch add -- "runs/d1/leaked.txt" 2>$null | Out-Null
+$threw = Throws { Test-RealZoneUntracked -Root $scratch -RelDir "runs/d1" }
+Check "a tracked file in the output zone is refused" $threw "no throw"
+git -C $scratch rm --cached --quiet -- "runs/d1/leaked.txt" 2>$null | Out-Null
+$ok = (Throws { Test-RealZoneUntracked -Root $scratch -RelDir "runs/d1" }) -eq $false
+Check "an untracked output zone passes" $ok "threw"
+$nogit = Join-Path $env:TEMP ("seat real nogit " + [Guid]::NewGuid().ToString("N").Substring(0, 8))
+New-Item -ItemType Directory -Path $nogit -Force | Out-Null
+$threw = Throws { Test-RealUntracked -Root $nogit -RelPath "anything.bin" }
+Check "an unestablishable untracked check fails closed" $threw "no throw"
+Set-Content -Path (Join-Path $scratch "uploads\d1\fallback-step-0001.step") -Value "synthetic sidecar bytes"
+$m = WriteManifest (Sha $macro) $allTools $false $false
+$threw = Throws { Test-RealInputPins -Manifest $m -DesignName "d1" -Root $scratch }
+Check "an unpinned consumed sidecar is refused" $threw "no throw"
+$m = WriteManifestExtra (Sha $macro) $allTools "uploads/d1/fallback-step-0001.step" (Sha (Join-Path $scratch "uploads\d1\fallback-step-0001.step"))
+$inputs = Test-RealInputPins -Manifest $m -DesignName "d1" -Root $scratch
+Check "a pinned consumed sidecar verifies" ($inputs.Count -eq 5) "count=$($inputs.Count)"
+
+# ---- durable per-run records (finding 6) ----
+$rec1 = New-RunRecord -RunsDir (Join-Path $scratch "runs\d1") -DesignName "d1" -Manifest $m -MacroSha (Sha $macro) -Verified @{}
+Start-Sleep -Seconds 1
+$rec2 = New-RunRecord -RunsDir (Join-Path $scratch "runs\d1") -DesignName "d1" -Manifest $m -MacroSha (Sha $macro) -Verified @{}
+Check "two runs get distinct record files" ($rec1 -ne $rec2) "rec1=$rec1 rec2=$rec2"
+Complete-RunRecord -Path $rec1 -Outcome "accepted"
+$r1 = Get-Content -LiteralPath $rec1 -Raw | ConvertFrom-Json
+$r2 = Get-Content -LiteralPath $rec2 -Raw | ConvertFrom-Json
+Check "the completed record carries its outcome" ($r1.outcome -eq "accepted") "outcome=$($r1.outcome)"
+Check "the later run never overwrites earlier evidence" ($r2.outcome -eq "started") "outcome=$($r2.outcome)"
+Check "the record pins the verified bytes" ($r1.PSObject.Properties["verified"] -ne $null) "no verified block"
 
 if ($failures -gt 0) {
     Write-Host "$failures test(s) failed"

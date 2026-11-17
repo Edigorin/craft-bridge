@@ -72,6 +72,69 @@ fn ref_import_verdict(expected: Option<f64>, doc_type: &str, solids: Option<f64>
     }
 }
 
+/// Mirrors `ParsePeriod` exactly: a strict period-decimal shape, then the
+/// locale-independent Val conversion. Comma-decimal text (or any other
+/// shape) is refused whatever the host locale says.
+fn parse_period(text: &str) -> Option<f64> {
+    let s = text.trim();
+    let b: Vec<char> = s.chars().collect();
+    let mut i = 0usize;
+    if i < b.len() && (b[i] == '+' || b[i] == '-') {
+        i += 1;
+    }
+    let mut digits = 0i32;
+    let mut dots = 0i32;
+    let mut exp_seen = false;
+    while i < b.len() {
+        let c = b[i];
+        if c.is_ascii_digit() {
+            digits += 1;
+        } else if c == '.' && !exp_seen {
+            dots += 1;
+            if dots > 1 {
+                return None;
+            }
+        } else if (c == 'e' || c == 'E') && !exp_seen && digits > 0 {
+            exp_seen = true;
+            digits = 0;
+            if i + 1 < b.len() && (b[i + 1] == '+' || b[i + 1] == '-') {
+                i += 1;
+            }
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if digits == 0 {
+        return None;
+    }
+    // Val reads a leading sign, a leading period and exponents; normalize
+    // the two forms Rust's parser lacks before converting.
+    let mut t = s.trim_start_matches('+').to_string();
+    if t.starts_with('.') {
+        t.insert(0, '0');
+    }
+    if t.starts_with("-.") {
+        t = t.replacen("-.", "-0.", 1);
+    }
+    t.parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
+#[test]
+fn locale_parsing_is_period_decimal_only() {
+    assert_eq!(parse_period("0.01"), Some(0.01));
+    assert_eq!(parse_period("  0.01  "), Some(0.01));
+    assert_eq!(parse_period("-1E-06"), Some(-1e-6));
+    assert_eq!(parse_period(".5"), Some(0.5));
+    assert_eq!(parse_period("+.5"), Some(0.5));
+    // The comma-decimal negative case: valid-looking text on a
+    // non-English Windows must NOT parse here.
+    assert_eq!(parse_period("0,01"), None);
+    for junk in ["1.2.3", "1e", "abc", "", "+", "-", "1e+400"] {
+        assert_eq!(parse_period(junk), None, "{junk} must be refused");
+    }
+}
+
 /// `BodiesLines`: the rebuilt count matches the expected count exactly.
 fn bodies_verdict(expected: Option<f64>, rebuilt: Option<f64>) -> &'static str {
     match (expected, rebuilt) {
@@ -255,6 +318,35 @@ fn the_decision_mirror_is_pinned_to_the_vbs_logic() {
             "the validators lost a named reason: {pin}"
         );
     }
+    // Locale-independent parsing (finding 3): the strict period-decimal
+    // parser with Val; the locale-sensitive members never parse again.
+    assert!(
+        LOGIC.contains("Function ParsePeriod") && LOGIC.contains("value = Val(s)"),
+        "the decision logic lost its locale-independent parser"
+    );
+    assert!(
+        !LOGIC.contains("IsNumeric(") && !LOGIC.contains("CDbl("),
+        "locale-sensitive numeric parsing survived in the decision logic"
+    );
+    // The zero-body/surface branches are REACHED (finding 2): the found
+    // count allows zero and names surface/empty imports.
+    assert!(
+        LOGIC.contains("Function FoundCountError") && LOGIC.contains("a surface import"),
+        "the zero-body naming is unreachable"
+    );
+    let rf = &LOGIC[LOGIC
+        .find("Function RefImportLines")
+        .expect("no RefImportLines")..];
+    assert!(
+        rf.contains("FoundCountError(solidsText)"),
+        "the found count is refused as invalid before the zero-body naming"
+    );
+    // Reference ownership (finding 4): a pre-existing title is named and
+    // never closed.
+    assert!(
+        LOGIC.contains("Function IsPreExistingTitle"),
+        "the ownership helper is missing"
+    );
 }
 
 // ---- the checker's fail-closed contract ----
@@ -296,6 +388,60 @@ fn the_mass_entry_is_never_absent() {
     assert!(
         CHECKER.contains("ref_bodies=") && CHECKER.contains("placement_tol="),
         "the documented expect parameters are not read by the checker"
+    );
+}
+
+#[test]
+fn checker_syntax_is_paired_and_acquisition_is_typed() {
+    // Finding 1: a single-line If...Then cannot pair with ElseIf - the
+    // branches are block form now (the Windows syntax test parses the
+    // whole file; this pins the offending shape out).
+    assert!(
+        !CHECKER.contains("Then docTypeText"),
+        "a single-line If assignment is paired with ElseIf again"
+    );
+    assert!(
+        CHECKER.contains("ElseIf dtRaw = 2 Then"),
+        "the document-type block lost its paired branches"
+    );
+    // Finding 2: GetBodies2(BodyType, BVisibleOnly) with both required
+    // arguments (public API docs: swSolidBody=0, swSheetBody=1) and typed
+    // acquisition - an unexpected return shape is a named refusal, never
+    // an invented count.
+    assert!(
+        CHECKER.contains("GetBodies2(0, False)") && CHECKER.contains("GetBodies2(1, False)"),
+        "GetBodies2 is not called with its required arguments"
+    );
+    assert!(
+        CHECKER.contains("Function CountText") && CHECKER.contains("unexpected return shape"),
+        "the body counts are not proven typed"
+    );
+    assert!(
+        CHECKER.contains("Function CentroidText") && CHECKER.contains("centerofmass"),
+        "the centroid components are not proven typed"
+    );
+    assert!(
+        CHECKER.contains("vartype ") && CHECKER.contains("IsArray"),
+        "the acquisition lost its shape checks"
+    );
+    // Finding 4: the ownership snapshot precedes the import and a
+    // pre-existing title refuses the close, named.
+    let snap = CHECKER
+        .find("preTitles = preTitles & t2")
+        .expect("no pre-import snapshot");
+    let load = CHECKER.find("LoadFile4").expect("no import");
+    assert!(
+        snap < load,
+        "the document snapshot is taken after the import"
+    );
+    assert!(
+        CHECKER.contains("IsPreExistingTitle(preTitles, refTitle)")
+            && CHECKER.contains("refusing to close a pre-existing document"),
+        "a pre-existing document is not refused named"
+    );
+    assert!(
+        CHECKER.contains("the pre-import document enumeration failed"),
+        "an unestablishable ownership check does not fail closed"
     );
 }
 
@@ -434,14 +580,70 @@ fn the_real_runner_implements_the_owner_approved_exception() {
         .find("function Test-RealAcceptance")
         .expect("no acceptance rule")..];
     assert!(
-        acc.contains("check:mass_vs_reference=pass") && acc.contains("is absent"),
-        "the runner's acceptance does not require mass_vs_reference=pass"
+        acc.contains("$name=pass") && acc.contains("is absent"),
+        "the runner's acceptance does not require every verdict to pass"
     );
     // Every run pins what it verified in the untracked run manifest.
+    // Finding 5: the EXECUTED bytes are pinned - the files at
+    // $PSScriptRoot, this runner included - and consumed fallback sidecars
+    // are inputs like any other.
+    for pin in [
+        "\"tools/seat-run-real.ps1\"",
+        "ScriptDir",
+        "executed bytes",
+        "could not be established",
+        "fallback-step-",
+        "a consumed fallback sidecar is not pinned",
+        "Test-RealZoneUntracked",
+    ] {
+        assert!(
+            RUNNER.contains(pin),
+            "the runner lost an execution-path gate: {pin}"
+        );
+    }
+    // Finding 6: a UNIQUE record per run, written before the invocation
+    // and patched with its outcome - earlier records are never touched.
+    for pin in [
+        "New-RunRecord",
+        "Complete-RunRecord",
+        "run_id",
+        "outcome = \"started\"",
+    ] {
+        assert!(
+            RUNNER.contains(pin),
+            "the runner lost its durable record: {pin}"
+        );
+    }
     assert!(
-        RUNNER.contains("run-manifest.json") && RUNNER.contains("verified"),
-        "the runner records no per-run pin manifest"
+        RUNNER.contains("Join-Path $RunsDir \"runs\""),
+        "the run records are not per-run files under runs/<design>/runs/"
     );
+    // Finding 7: the runtime report must be complete AND successful with
+    // zero failed steps, and acceptance requires the full verdict set.
+    for pin in [
+        "the runtime summary is not ok",
+        "the runtime report carries failed steps",
+        "truncated runtime report",
+        "entry is not unique",
+    ] {
+        assert!(
+            RUNNER.contains(pin),
+            "the runner lost a report/acceptance gate: {pin}"
+        );
+    }
+    let acc = &RUNNER[RUNNER
+        .find("function Test-RealAcceptance")
+        .expect("no acceptance rule")..];
+    for verdict in [
+        "check:mass",
+        "check:mass_vs_reference",
+        "check:step_reference",
+        "check:bodies",
+        "check:placement",
+        "check:ref_close",
+    ] {
+        assert!(acc.contains(verdict), "the acceptance set lost {verdict}");
+    }
     // The provenance tests cover the gates they claim to.
     for pin in [
         "a first run without owner approval is refused",
@@ -450,6 +652,15 @@ fn the_real_runner_implements_the_owner_approved_exception() {
         "a tracked artifact is refused",
         "mass_vs_reference=skipped is refused",
         "unpinned tooling is refused",
+        "a missing companion verdict is refused",
+        "a duplicate verdict is refused",
+        "a failed step refuses the run",
+        "an unestablishable untracked check fails closed",
+        "a tracked file in the output zone is refused",
+        "an unpinned consumed sidecar is refused",
+        "changed executed bytes are refused",
+        "two runs get distinct record files",
+        "the later run never overwrites earlier evidence",
     ] {
         assert!(
             RUNNER_TESTS.contains(pin),
