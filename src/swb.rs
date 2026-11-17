@@ -1741,7 +1741,7 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
                 &level_pts(a, b, true, &label),
                 &level_pts(a, b, false, &label),
                 "sgHORIZONTALPOINTS2D",
-                "sgVERTPOINTS2D",
+                "sgVERTICALPOINTS2D",
             )
         }
         RelationT::PointsVertical(a, b) => {
@@ -1755,7 +1755,7 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
                 &level_pts(a, b, true, &label),
                 &level_pts(a, b, false, &label),
                 "sgHORIZONTALPOINTS2D",
-                "sgVERTPOINTS2D",
+                "sgVERTICALPOINTS2D",
             )
         }
         RelationT::LineHorizontal(l) => {

@@ -303,7 +303,7 @@ Function Relations1() As Boolean
     Case 1
     If Not pt1(8).Select(False) Then gMsg = "the point slot 8 would not select": GoTo RelFail
     If Not pt1(9).Select(True) Then gMsg = "the point slot 9 would not select": GoTo RelFail
-    swDoc.SketchAddConstraints "sgVERTPOINTS2D"
+    swDoc.SketchAddConstraints "sgVERTICALPOINTS2D"
     swDoc.ClearSelection2 True
     SolveSketch skName1, skFeat1
     If Abs(pt1(8).X - pt1(9).X) > TOL Then gMsg = "the points-horizontal 8-9 relation did not level the classified axis": GoTo RelFail
@@ -321,7 +321,7 @@ Function Relations1() As Boolean
     Case 1
     If Not pt1(0).Select(False) Then gMsg = "the point slot 0 would not select": GoTo RelFail
     If Not pt1(5).Select(True) Then gMsg = "the point slot 5 would not select": GoTo RelFail
-    swDoc.SketchAddConstraints "sgVERTPOINTS2D"
+    swDoc.SketchAddConstraints "sgVERTICALPOINTS2D"
     swDoc.ClearSelection2 True
     SolveSketch skName1, skFeat1
     If Abs(pt1(0).X - pt1(5).X) > TOL Then gMsg = "the points-vertical 0-5 relation did not level the classified axis": GoTo RelFail

@@ -194,3 +194,25 @@ snapshots. Anything the seat reports as a correction becomes a new fixture.
   `centreofmass` raises 438). Volume + centroid captured per body.
 - Construction geometry is `ISketchSegment.ConstructionGeometry` (get/set);
   `.Construction` raises 438.
+
+## Sketch constraint names (behaviourally verified, 2026-11-17)
+
+The full table is pinned by probe-relnames with per-name predicates measured
+after the solve (level deltas, shared coordinates, length differences,
+cross/dot products, tangency gap):
+
+| Constraint | Name | Verified |
+|---|---|---|
+| line horizontal | `sgHORIZONTAL2D` | level-delta = 0 |
+| line vertical | `sgVERTICAL2D` | level-delta = 0 |
+| points horizontal | `sgHORIZONTALPOINTS2D` | shared coordinate = 0 |
+| points vertical | `sgVERTICALPOINTS2D` | shared coordinate = 0 |
+| equal length | `sgSAMELENGTH` | length difference = 0 |
+| parallel | `sgPARALLEL` | cross product = 0 |
+| perpendicular | `sgPERPENDICULAR` | dot product = 0 |
+| tangent (line-circle) | `sgTANGENT` | tangency gap = 0 |
+| coincident (points) | `sgCOINCIDENT` | merges the points (items green) |
+
+Trap: `sgVERTPOINTS2D` is a SILENT NO-OP (no error, no effect) - the working
+spelling is `sgVERTICALPOINTS2D`. And a merge invalidates pre-solve point
+handles: re-acquire before measuring (automation error otherwise).
