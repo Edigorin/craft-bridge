@@ -14,7 +14,7 @@ no directories, no duplicates, no alternate spellings.
 | Member | Content |
 |---|---|
 | `manifest.json` | The manifest (below). |
-| `recipe.json` | The SolidCraft script JSON, verbatim: an object with a `commands` array of `{command, params}` entries. |
+| `recipe.json` | The recipe JSON, verbatim. Two shapes are accepted (below): a command script (`commands` array) or a native `solidcraft/57` design (`features` + `params`). |
 | `geometry/final.step` | One STEP body (ISO-10303-21 text) from the end of the recipe: the coarse fallback snapshot. |
 
 `manifest.json` is excluded from the manifest's own inventory to avoid
@@ -48,14 +48,86 @@ those strings into a JSON file — an array of strings — and hand it to
   are **unknown**. Pack and inspect both say so prominently; nothing claims
   that all warnings were preserved.
 
+## Recipe shapes
+
+Two shapes validate, plan and inspect through the same typed replay
+planning. The 57 feature payloads (`sketch`, `extrude`, `box`, `cylinder`)
+are shape-identical to the script's `feature` object, so both shapes feed
+the same parsers - this is a reader seam, not a format translation.
+
+### Command script (legacy, no `format` field)
+
+An object with a `commands` array of `{command, params}` entries. Feature
+payloads ride inside `timeline.add` steps under `params.feature`; design
+parameters come from `parameters.add`. Recipes without a `format` field are
+read as this shape, unchanged.
+
+### Native design (`format: "solidcraft/57"`)
+
+`params` and `features` at the root. Every feature has a unique integer
+`id` (source identity, below) and a `type`. `units` is the design length
+unit (mm, cm, m, in, ft). A `marker` (timeline rollback cursor) that would
+decide which features are evaluated refuses named: its index semantics are
+unpinned and replay never guesses what the reference geometry carries.
+
+**Source identity, dense runtime indices, snapshot addressing** are three
+different things:
+
+- *Source identity* is the feature's `id` (plus name/type in the reports).
+  It travels in `PlannedStep.source_id` and in sketch references. Sparse,
+  huge (below 2^52) and out-of-order ids resolve by map lookup.
+- *Runtime indices* are dense `0..n` over the planning order: parameter
+  equations first (the features reference them), then the features in file
+  order. They bound macro arrays and report ordering.
+- *Snapshot boundaries* address runtime indices, never source ids.
+
+**Parameters** (`{name, expr, unit, comment?, model?}`) become global-
+variable equations. `model` is provenance only (a dimension/feature-created
+parameter like `d1`); the evaluator treats both kinds the same, and so does
+replay.
+
+**Suppression.** `suppressed: true` keeps the record and skips the
+geometry, exactly as the source timeline does. The step plans as
+`not-executed` (named) and never triggers the stop rule.
+
+**Coordinate drivers.** A sketch point may carry `exprs: {x?, y?}`. The
+expression is the source of truth (the source engine fixes expression
+points at their evaluated positions before solve; `pos` is a cache): each
+expressed coordinate becomes a native driver - a DistanceX/DistanceY
+dimension to the anchored sketch origin bound by an equation to the
+expression - so parameter edits carry the sketch geometry. Precedence: the
+expression drives even when the point is `fixed` (the dimension both pins
+and parametrizes it). A zero coordinate cannot carry a zero-length
+dimension: it is position-verified and recorded as a driver note. An
+expression outside the supported subset degrades named. A `fix` constraint
+is a point pin and a faithful no-op (points are placed at their evaluated
+positions already).
+
+**Operations.** Only `operation: "new_body"` replays today: the emitted
+`FeatureExtrusion2` merge/scope flags are hardcoded and proven for
+new-body creation only. `join`, `cut` and `intersect` carry target-body
+semantics that wait for the body registry and the merge/scope probe
+(Phase B) - they stop named rather than operating on whichever bodies
+SolidWorks happens to select.
+
+**Named stops and prefix semantics.** Every unmapped feature stops with
+its source id, name, type and the specific reason (the rollout phase named
+where one carries it). Everything after the first stop is `not-executed`
+unless a boundary snapshot covers the stop: the replayed result is a
+supported PREFIX, and the reports say so - never "every later supported
+feature ran".
+
 ## Inspect
 
-`craft-bridge inspect <artifact> [--json]` reads the artifact and reports it;
-it executes nothing. Steps are the recipe's commands in order (unknown command
-ids are listed as they are — preserved, never interpreted). Parameters keep
-their raw JSON so expressions and units survive: user parameters come from
-`parameters.add`, model parameters from inside `timeline.add`. The `--json`
-shape is part of the contract and is pinned by golden tests.
+`craft-bridge inspect <artifact> [--json]` reads the artifact and reports
+it; it executes nothing. Steps are the recipe's runtime steps in planning
+order (unknown command ids and unmapped feature types are listed as they
+are - preserved, never interpreted). Parameters keep their raw JSON so
+expressions and units survive: for a script, user parameters come from
+`parameters.add` and model parameters from inside `timeline.add`; for a
+57 design, `model: false` parameters are user parameters and `model: true`
+are model parameters. The `--json` shape is part of the contract and is
+pinned by golden tests.
 
 ## Limits (hostile input)
 

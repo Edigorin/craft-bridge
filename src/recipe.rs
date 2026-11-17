@@ -18,7 +18,16 @@ use crate::limits::Limits;
 /// generator's job.
 pub fn validate(bytes: &[u8], limits: &Limits) -> Result<Value> {
     let value: Value = serde_json::from_slice(bytes).map_err(|e| Error::json("recipe.json", e))?;
-    let commands = commands_of(&value)?;
+    match shape_of(&value)? {
+        Shape::Script => validate_script(&value, limits)?,
+        Shape::Design57 => validate_57(&value, limits)?,
+    }
+    Ok(value)
+}
+
+/// The legacy script contract: a `commands` array of id-bearing steps.
+fn validate_script(value: &Value, limits: &Limits) -> Result<()> {
+    let commands = commands_of(value)?;
     if commands.len() > limits.max_commands {
         return Err(Error::limit(
             "recipe command count",
@@ -46,10 +55,142 @@ pub fn validate(bytes: &[u8], limits: &Limits) -> Result<Value> {
             }
         }
     }
-    Ok(value)
+    Ok(())
 }
 
-/// The `commands` array of a validated recipe.
+/// The solidcraft/57 contract: `features` and `params` at the root.
+///
+/// Feature ids are source identity only (unique here; sparse or huge values
+/// are fine because the runtime index is dense and separate). Parameter
+/// names must be unique: they become global-variable equations. Bounds are
+/// checked here so malformed or oversized designs refuse before planning.
+fn validate_57(value: &Value, limits: &Limits) -> Result<()> {
+    let root = value.as_object().unwrap();
+    // The source caps feature ids at 2^52; a rollback marker is a timeline
+    // cursor meaning features past it are not part of the evaluated model.
+    // Its index base is unpinned, so a marker that would change behavior
+    // refuses named instead of guessing which features the STEP carries.
+    let feature_count = features_of(value)?.len();
+    match root.get("marker") {
+        None | Some(Value::Null) => {}
+        Some(Value::Number(n)) => {
+            let at = n.as_u64().unwrap_or(u64::MAX);
+            if at < feature_count as u64 {
+                return Err(Error::InvalidRecipe(format!(
+                    "the timeline rollback marker ({at}) leaves {feature_count} features past it; the marker's index semantics are unpinned, refusing to guess which features the evaluated model carries"
+                )));
+            }
+        }
+        Some(_) => {
+            return Err(Error::InvalidRecipe(
+                "the timeline rollback marker is not a number".to_string(),
+            ))
+        }
+    }
+    match root.get("units") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(u)) if matches!(u.as_str(), "mm" | "cm" | "m" | "in" | "ft") => {}
+        Some(Value::String(u)) => {
+            return Err(Error::InvalidRecipe(format!(
+                "design units {u:?} are outside the supported set (mm, cm, m, in, ft)"
+            )))
+        }
+        Some(_) => {
+            return Err(Error::InvalidRecipe(
+                "design units are not a string".to_string(),
+            ))
+        }
+    }
+    let features = features_of(value)?;
+    if features.len() > limits.max_commands {
+        return Err(Error::limit(
+            "recipe feature count",
+            limits.max_commands as u64,
+            features.len() as u64,
+        ));
+    }
+    let mut seen_ids: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+    for (index, entry) in features.iter().enumerate() {
+        let object = entry
+            .as_object()
+            .ok_or_else(|| Error::InvalidRecipe(format!("feature {index} is not an object")))?;
+        match object.get("type") {
+            Some(Value::String(t)) if !t.is_empty() => {}
+            _ => {
+                return Err(Error::InvalidRecipe(format!(
+                    "feature {index} has no feature type"
+                )))
+            }
+        }
+        match object.get("id") {
+            Some(Value::Number(n)) => {
+                let id = n.as_u64().ok_or_else(|| {
+                    Error::InvalidRecipe(format!("feature {index} id is not a whole number"))
+                })?;
+                if id >= (1u64 << 52) {
+                    return Err(Error::InvalidRecipe(format!(
+                        "feature id {id} is at or above the source limit of 2^52"
+                    )));
+                }
+                if !seen_ids.insert(id) {
+                    return Err(Error::InvalidRecipe(format!(
+                        "feature id {id} is not unique; source ids must resolve unambiguously"
+                    )));
+                }
+            }
+            _ => {
+                return Err(Error::InvalidRecipe(format!(
+                    "feature {index} has no numeric id"
+                )))
+            }
+        }
+    }
+    let params = params57_of(value)?;
+    if params.len() > limits.max_commands {
+        return Err(Error::limit(
+            "recipe parameter count",
+            limits.max_commands as u64,
+            params.len() as u64,
+        ));
+    }
+    let mut seen_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for (index, entry) in params.iter().enumerate() {
+        let object = entry
+            .as_object()
+            .ok_or_else(|| Error::InvalidRecipe(format!("parameter {index} is not an object")))?;
+        let name = match object.get("name") {
+            Some(Value::String(n)) if !n.is_empty() => n.clone(),
+            _ => {
+                return Err(Error::InvalidRecipe(format!(
+                    "parameter {index} has no name"
+                )))
+            }
+        };
+        match object.get("expr") {
+            Some(Value::String(e)) if !e.is_empty() => {}
+            _ => {
+                return Err(Error::InvalidRecipe(format!(
+                    "parameter {name} has no expression"
+                )))
+            }
+        }
+        if let Some(u) = object.get("unit") {
+            if !u.is_string() {
+                return Err(Error::InvalidRecipe(format!(
+                    "parameter {name} unit is not a string"
+                )));
+            }
+        }
+        if !seen_names.insert(name.clone()) {
+            return Err(Error::InvalidRecipe(format!(
+                "parameter name {name} is not unique"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The `commands` array of a validated script recipe.
 pub fn commands_of(value: &Value) -> Result<&Vec<Value>> {
     let root = value
         .as_object()
@@ -59,6 +200,92 @@ pub fn commands_of(value: &Value) -> Result<&Vec<Value>> {
         .and_then(Value::as_array)
         .ok_or_else(|| Error::InvalidRecipe("no commands array".to_string()))?;
     Ok(commands)
+}
+
+/// Which recipe shape a validated recipe uses.
+///
+/// Source identity, dense runtime indices and snapshot addressing are three
+/// different things (docs/replay-profile.md): the shape decides only where
+/// the step entries live. Runtime indices are always dense 0..n over
+/// `entries_of` order (parameters first for a 57 design), and snapshot
+/// boundaries address those runtime indices - never source feature ids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shape {
+    /// Legacy SolidCraft script: a `commands` array; feature payloads ride
+    /// inside `timeline.add` steps. A missing `format` field means this.
+    Script,
+    /// `solidcraft/57`: `features` and `params` at the root. The 57 feature
+    /// payload is shape-identical to the script's `feature` object, so both
+    /// feed the same typed replay planning.
+    Design57,
+}
+
+/// The recipe shape of a validated recipe.
+pub fn shape_of(value: &Value) -> Result<Shape> {
+    let root = value
+        .as_object()
+        .ok_or_else(|| Error::InvalidRecipe("root is not an object".to_string()))?;
+    match root.get("format") {
+        None => Ok(Shape::Script),
+        Some(Value::String(f)) if f == "solidcraft/57" => Ok(Shape::Design57),
+        Some(Value::String(f)) => Err(Error::InvalidRecipe(format!(
+            "unknown recipe format {f:?} (expected \"solidcraft/57\" or no format field)"
+        ))),
+        Some(_) => Err(Error::InvalidRecipe(
+            "format field is not a string".to_string(),
+        )),
+    }
+}
+
+/// The `features` array of a validated solidcraft/57 recipe.
+pub fn features_of(value: &Value) -> Result<&Vec<Value>> {
+    let root = value
+        .as_object()
+        .ok_or_else(|| Error::InvalidRecipe("root is not an object".to_string()))?;
+    root.get("features")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::InvalidRecipe("no features array".to_string()))
+}
+
+/// The `params` array of a validated solidcraft/57 recipe (may be absent).
+pub fn params57_of(value: &Value) -> Result<&[Value]> {
+    let root = value
+        .as_object()
+        .ok_or_else(|| Error::InvalidRecipe("root is not an object".to_string()))?;
+    Ok(root
+        .get("params")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]))
+}
+
+/// The ordered step entries of a validated recipe, in runtime order. For a
+/// script these are the `commands`; for a 57 design the parameter equations
+/// come first (they must exist before any feature references them), then
+/// the features in file order.
+pub fn entries_of(value: &Value) -> Result<Vec<Value>> {
+    match shape_of(value)? {
+        Shape::Script => Ok(commands_of(value)?.clone()),
+        Shape::Design57 => {
+            let mut out = Vec::new();
+            for p in params57_of(value)? {
+                out.push(p.clone());
+            }
+            for f in features_of(value)? {
+                out.push(f.clone());
+            }
+            Ok(out)
+        }
+    }
+}
+
+/// How many runtime steps a validated recipe plans to (the addressable
+/// count for snapshot boundaries).
+pub fn step_count(value: &Value) -> Result<usize> {
+    match shape_of(value)? {
+        Shape::Script => Ok(commands_of(value)?.len()),
+        Shape::Design57 => Ok(params57_of(value)?.len() + features_of(value)?.len()),
+    }
 }
 
 /// One recipe step, for display.
@@ -89,6 +316,51 @@ pub struct Parameters {
 pub fn summarize(value: &Value) -> (Vec<StepSummary>, Parameters) {
     let mut steps = Vec::new();
     let mut parameters = Parameters::default();
+    if matches!(shape_of(value), Ok(Shape::Design57)) {
+        // 57: parameters are runtime steps first (they are equations the
+        // features reference), then features in file order - the same order
+        // the planner gives them their dense runtime indices in.
+        for p in params57_of(value).unwrap_or(&[]) {
+            let name = p
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("(unnamed)")
+                .to_string();
+            let is_model = p.get("model").and_then(Value::as_bool).unwrap_or(false);
+            let summary = ParamSummary {
+                name: name.clone(),
+                raw: p.clone(),
+            };
+            if is_model {
+                parameters.model.push(summary);
+            } else {
+                parameters.user.push(summary);
+            }
+            steps.push(StepSummary {
+                index: steps.len(),
+                command: "parameter".to_string(),
+                detail: Some(name),
+            });
+        }
+        for f in features_of(value).unwrap_or(&Vec::new()) {
+            let kind = f
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("(unnamed)")
+                .to_string();
+            let detail = f
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| kind.clone());
+            steps.push(StepSummary {
+                index: steps.len(),
+                command: kind,
+                detail: Some(detail),
+            });
+        }
+        return (steps, parameters);
+    }
     let no_commands: &[Value] = &[];
     let commands = match commands_of(value) {
         Ok(commands) => commands.as_slice(),

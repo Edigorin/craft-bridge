@@ -162,6 +162,10 @@ pub struct SketchStep {
     /// Constraint kinds the tracer cannot replay: degrade triggers, reported
     /// in both reports and never silently dropped.
     pub dropped_constraints: Vec<String>,
+    /// Coordinate-driver notes that are not degrade triggers (a zero
+    /// coordinate cannot carry a zero-length dimension): reported, never
+    /// silent, never a stop.
+    pub driver_notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -416,12 +420,72 @@ pub struct RevolveStep {
     pub equations: Vec<DimEquation>,
 }
 
+/// One design parameter as a global-variable equation. Used by both recipe
+/// shapes: the script's `parameters.add` step and a solidcraft/57 `params`
+/// entry. A text parameter or an expression outside the supported subset is
+/// a recorded note, never a stop.
+fn plan_user_param(
+    index: usize,
+    source_id: String,
+    command: String,
+    name: &str,
+    expression: &str,
+    unit: &str,
+    env: &mut ParamEnv,
+    design_factor: f64,
+    design_text: &'static str,
+) -> PlannedStep {
+    let name = name.to_string();
+    let expression = expression.to_string();
+    let unit = unit.to_string();
+    let ctx = expr::Context::for_unit(&unit, design_factor, design_text);
+    let evaluated = expr::parse(&expression).ok().and_then(|node| {
+        expr::eval(&node, &ctx, &env.lookup())
+            .ok()
+            .map(|q| (expr::translate(&node, &ctx), q))
+    });
+    match evaluated {
+        Some((equation_rhs, q)) if unit != "text" => {
+            env.insert_global(&name, q);
+            PlannedStep {
+                index,
+                source_id,
+                command,
+                status: PlanStatus::Mapped,
+                detail: format!("equation \"{name}\" = {equation_rhs}"),
+                work: Work::UserParam {
+                    name,
+                    expression,
+                    equation_rhs,
+                    expect_si: q.value,
+                    dim: q.dim,
+                },
+            }
+        }
+        _ => PlannedStep {
+            index,
+            source_id,
+            command,
+            status: PlanStatus::NotExecuted,
+            detail: "not an equation: text parameter or an expression outside the supported subset"
+                .to_string(),
+            work: Work::Note,
+        },
+    }
+}
+
 /// Build the plan from a validated recipe (the artifact's `recipe.json`).
 pub fn plan(
     recipe: &Value,
     limits: &Limits,
     snapshots: &std::collections::BTreeMap<usize, crate::profile::SnapshotScope>,
 ) -> Result<Vec<PlannedStep>> {
+    if matches!(
+        crate::recipe::shape_of(recipe)?,
+        crate::recipe::Shape::Design57
+    ) {
+        return plan57(recipe, limits, snapshots);
+    }
     let commands = crate::recipe::commands_of(recipe)?;
     let mut steps = Vec::with_capacity(commands.len());
     let mut stopped = false;
@@ -476,59 +540,26 @@ pub fn plan(
                     },
                 }
             }
-            "parameters.add" => {
-                let name = params
+            "parameters.add" => plan_user_param(
+                index,
+                String::new(),
+                id,
+                params
                     .and_then(|p| p.get("name"))
                     .and_then(Value::as_str)
-                    .unwrap_or("(unnamed)")
-                    .to_string();
-                let expression = params
+                    .unwrap_or("(unnamed)"),
+                params
                     .and_then(|p| p.get("expression"))
                     .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let unit = params
+                    .unwrap_or(""),
+                params
                     .and_then(|p| p.get("unit"))
                     .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let ctx = expr::Context::for_unit(&unit, design_factor, design_text);
-                let evaluated = expr::parse(&expression).ok().and_then(|node| {
-                    expr::eval(&node, &ctx, &env.lookup())
-                        .ok()
-                        .map(|q| (expr::translate(&node, &ctx), q))
-                });
-                let planned = match evaluated {
-                    Some((equation_rhs, q)) if unit != "text" => {
-                        env.insert_global(&name, q);
-                        PlannedStep {
-                            index,
-                            source_id: String::new(),
-                            command: id,
-                            status: PlanStatus::Mapped,
-                            detail: format!("equation \"{name}\" = {equation_rhs}"),
-                            work: Work::UserParam {
-                                name,
-                                expression,
-                                equation_rhs,
-                                expect_si: q.value,
-                                dim: q.dim,
-                            },
-                        }
-                    }
-                    _ => PlannedStep {
-                        index,
-                        source_id: String::new(),
-                        command: id,
-                        status: PlanStatus::NotExecuted,
-                        detail:
-                            "not an equation: text parameter or an expression outside the supported subset"
-                                .to_string(),
-                        work: Work::Note,
-                    },
-                };
-                planned
-            }
+                    .unwrap_or(""),
+                &mut env,
+                design_factor,
+                design_text,
+            ),
             "timeline.add" => plan_feature(
                 index,
                 &id,
@@ -579,6 +610,202 @@ pub fn plan(
         }
     }
     Ok(steps)
+}
+
+/// Plan a `solidcraft/57` design: parameter equations first (the features
+/// reference them), then the features in file order. Dense runtime indices
+/// run over that sequence; the source feature id travels in `source_id` and
+/// never becomes an index (docs/replay-profile.md).
+fn plan57(
+    recipe: &Value,
+    limits: &Limits,
+    snapshots: &std::collections::BTreeMap<usize, crate::profile::SnapshotScope>,
+) -> Result<Vec<PlannedStep>> {
+    let mut steps = Vec::new();
+    let root = recipe.as_object().expect("validated root");
+    let unit = root.get("units").and_then(Value::as_str).unwrap_or("mm");
+    let design_factor = design_length_factor(Some(unit));
+    let design_text: &'static str = match unit {
+        "cm" => "cm",
+        "m" => "m",
+        "in" => "in",
+        "ft" => "ft",
+        _ => "mm",
+    };
+    let mut env = ParamEnv::default();
+    // Recipe feature id -> plan index of its sketch step (source ids, map
+    // lookup: sparse and huge ids are safe).
+    let mut sketch_steps: Vec<(u64, usize)> = Vec::new();
+    let mut model_slots: Vec<(String, usize)> = Vec::new();
+    let mut next_slot: usize = 0;
+    let mut stopped = false;
+    let mut index = 0usize;
+    for p in crate::recipe::params57_of(recipe)? {
+        let name = p
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let expression = p
+            .get("expr")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let unit = p
+            .get("unit")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        steps.push(plan_user_param(
+            index,
+            format!("parameter {name}"),
+            "parameter".to_string(),
+            &name,
+            &expression,
+            &unit,
+            &mut env,
+            design_factor,
+            design_text,
+        ));
+        index += 1;
+    }
+    for f in crate::recipe::features_of(recipe)? {
+        let kind = f.get("type").and_then(Value::as_str).unwrap_or("");
+        let fid = f.get("id").and_then(Value::as_u64).unwrap_or(0);
+        let planned = if stopped {
+            PlannedStep {
+                index,
+                source_id: format!("feature {fid}"),
+                command: kind.to_string(),
+                status: PlanStatus::NotExecuted,
+                detail: "after the first unmapped step".to_string(),
+                work: Work::AfterStop,
+            }
+        } else {
+            plan_feature57(
+                index,
+                f,
+                limits,
+                &mut env,
+                design_factor,
+                design_text,
+                &steps,
+                &sketch_steps,
+                &mut model_slots,
+                &mut next_slot,
+            )?
+        };
+        if matches!(
+            planned.work,
+            Work::Sketch(_)
+                | Work::Extrude(_)
+                | Work::Revolve(_)
+                | Work::Primitive(_)
+                | Work::Modifier(_)
+        ) {
+            sketch_steps.push((fid, index));
+        }
+        let stop_here = matches!(planned.work, Work::Unmappable)
+            && snapshots.get(&index) != Some(&crate::profile::SnapshotScope::Boundary);
+        steps.push(planned);
+        if stop_here {
+            stopped = true;
+        }
+        index += 1;
+    }
+    Ok(steps)
+}
+
+/// One solidcraft/57 feature. The sketch/extrude/box/cylinder payloads are
+/// shape-identical to the script's `feature` object, so those feed the
+/// shared typed planning unchanged. Everything else stops NAMED with its
+/// type and the rollout phase that will carry it - never a guess.
+#[allow(clippy::too_many_arguments)]
+fn plan_feature57(
+    index: usize,
+    feature: &Value,
+    limits: &Limits,
+    env: &mut ParamEnv,
+    design_factor: f64,
+    design_text: &'static str,
+    steps: &[PlannedStep],
+    sketch_steps: &[(u64, usize)],
+    model_slots: &mut Vec<(String, usize)>,
+    next_slot: &mut usize,
+) -> Result<PlannedStep> {
+    let kind = feature.get("type").and_then(Value::as_str).unwrap_or("");
+    let fid = feature.get("id").and_then(Value::as_u64).unwrap_or(0);
+    let name = feature.get("name").and_then(Value::as_str).unwrap_or("");
+    let source_id = format!("feature {fid}");
+    let unmappable = |detail: String| PlannedStep {
+        index,
+        source_id: source_id.clone(),
+        command: kind.to_string(),
+        status: PlanStatus::FallbackPlanned,
+        detail,
+        work: Work::Unmappable,
+    };
+    // Suppression is source-level: the timeline keeps the record and skips
+    // the geometry. Replay skips it the same way and continues - a
+    // suppressed feature never triggers the stop rule.
+    if feature
+        .get("suppressed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Ok(PlannedStep {
+            index,
+            source_id,
+            command: kind.to_string(),
+            status: PlanStatus::NotExecuted,
+            detail: format!(
+                "{kind} {name:?} is suppressed in the source design; the source timeline keeps the record and skips the geometry"
+            ),
+            work: Work::Note,
+        });
+    }
+    match kind {
+        "sketch" | "extrude" | "box" | "cylinder" => {
+            let mut wrapped = serde_json::Map::new();
+            wrapped.insert("feature".to_string(), feature.clone());
+            let mut planned = plan_feature(
+                index,
+                kind,
+                Some(&Value::Object(wrapped)),
+                limits,
+                env,
+                design_factor,
+                design_text,
+                steps,
+                sketch_steps,
+                model_slots,
+                next_slot,
+            )?;
+            planned.source_id = source_id;
+            Ok(planned)
+        }
+        "fillet" | "chamfer" | "shell" | "draft" | "hole" | "thread" => Ok(unmappable(format!(
+            "{kind} {name:?} carries edge/face references; reference resolution is unpinned until the edge-resolver probe lands (Phase B)"
+        ))),
+        "move" | "remove" | "body_transfer" | "align" | "scale" => Ok(unmappable(format!(
+            "{kind} {name:?} needs the source-body-to-runtime-body registry and verified transforms (Phase B)"
+        ))),
+        "combine" => Ok(unmappable(format!(
+            "combine {name:?} needs the source-body-to-runtime-body registry and the merge/scope probe (Phase B)"
+        ))),
+        "construction_plane" | "construction_axis" | "construction_point" | "sweep" | "loft"
+        | "torus" | "sphere" | "cone" | "coil" | "pipe" | "pattern" | "mirror" => {
+            Ok(unmappable(format!(
+                "{kind} {name:?} is a feature class without a replay mapping yet (Phase C)"
+            )))
+        }
+        "revolve" => Ok(unmappable(format!(
+            "revolve {name:?}: the solidcraft/57 axis reference shape is unpinned (Phase C)"
+        ))),
+        other => Ok(unmappable(format!(
+            "solidcraft/57 feature type {other:?} ({name:?}) has no replay mapping"
+        ))),
+    }
 }
 
 #[allow(clippy::too_many_arguments)] // the plan context is five call-scoped borrows
@@ -900,9 +1127,45 @@ fn parse_sketch(
         (Some("origin"), Some("XY")) => OriginPlane::Xy,
         (Some("origin"), Some("XZ")) => OriginPlane::Xz,
         (Some("origin"), Some("YZ")) => OriginPlane::Yz,
-        _ => {
+        (Some("offset"), _) => {
+            // The 57 offset plane is fully understood (base plane, driven
+            // distance); what is missing is plane CREATION in the emitted
+            // macro - that API shape is unpinned until the offset-plane
+            // probe lands. Named, never guessed.
+            let base = plane_v
+                .get("base")
+                .and_then(|b| b.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            let distance = plane_v
+                .get("distance")
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            return Err(Error::Unsupported(format!(
+                "sketch plane is an offset plane (offset from {base} by {distance});                  plane creation is unpinned until the offset-plane probe lands"
+            )));
+        }
+        (Some("construction"), _) => {
+            // A sketch on a construction_plane feature (the solidcraft/57
+            // associative form): needs plane creation AND the reference
+            // chain to the feature.
+            let feature = plane_v
+                .get("feature")
+                .and_then(Value::as_u64)
+                .map(|f| f.to_string())
+                .unwrap_or_else(|| "?".to_string());
+            return Err(Error::Unsupported(format!(
+                "sketch plane references construction_plane feature {feature}; plane creation is unpinned until the offset-plane probe lands"
+            )));
+        }
+        (Some(other), _) => {
+            return Err(Error::Unsupported(format!(
+                "sketch plane type {other:?} is outside the replayed subset (origin planes)"
+            )))
+        }
+        (None, _) => {
             return Err(Error::Unsupported(
-                "sketch plane is not an origin plane".to_string(),
+                "sketch plane has no plane type".to_string(),
             ))
         }
     };
@@ -921,7 +1184,32 @@ fn parse_sketch(
         ));
     }
     let mut points = Vec::with_capacity(points_v.len());
+    // solidcraft/57 coordinates may carry per-axis driver expressions.
+    let mut point_exprs: Vec<[Option<String>; 2]> = Vec::with_capacity(points_v.len());
     for (i, p) in points_v.iter().enumerate() {
+        let mut exprs: [Option<String>; 2] = [None, None];
+        match p.get("exprs") {
+            None | Some(Value::Null) => {}
+            Some(Value::Object(map)) => {
+                for (axis, key) in ["x", "y"].iter().enumerate() {
+                    match map.get(*key) {
+                        None | Some(Value::Null) => {}
+                        Some(Value::String(t)) => exprs[axis] = Some(t.clone()),
+                        Some(_) => {
+                            return Err(Error::InvalidRecipe(format!(
+                                "point {i} {key} expression is not a string"
+                            )))
+                        }
+                    }
+                }
+            }
+            Some(_) => {
+                return Err(Error::InvalidRecipe(format!(
+                    "point {i} exprs are not an object"
+                )))
+            }
+        }
+        point_exprs.push(exprs);
         let pos = p
             .get("pos")
             .and_then(Value::as_array)
@@ -1124,6 +1412,17 @@ fn parse_sketch(
                 return Ok(Some(()));
             }
             match ctype.as_str() {
+                "fix" => {
+                    // Pin of one point: replay places every point at its
+                    // evaluated position already, so the pin changes no
+                    // geometry. Validate the reference, do nothing.
+                    let p = number("p")?;
+                    if p >= points.len() {
+                        return Err(Error::InvalidRecipe(format!(
+                            "constraint {i} references point {p} which does not exist"
+                        )));
+                    }
+                }
                 "coincident" => relations.push(RelationT::PointsCoincident(
                     point_slot("p")?,
                     point_slot("q")?,
@@ -1214,6 +1513,7 @@ fn parse_sketch(
         dimensions,
         dim_equations: Vec::new(),
         dropped_constraints,
+        driver_notes: Vec::new(),
     };
     // Bind dimensions to their model parameter's expression, as equations
     // that reference globals only; anything else loses the equation (reported
@@ -1252,6 +1552,126 @@ fn parse_sketch(
                 .push(format!("{param} (equation not expressible)")),
         }
     }
+    // Coordinate drivers (solidcraft/57): a point coordinate that carries an
+    // expression becomes a NATIVE driver - a DistanceX/DistanceY dimension to
+    // the anchored sketch origin, bound by an equation to the expression, so
+    // parameter edits carry the sketch geometry. Precedence: the expression
+    // drives even when the point is `fixed` (the driving dimension both pins
+    // and parametrizes it); `fixed` without an expression stays placement.
+    // The expression is the source of truth: pos must agree with its
+    // evaluation or the design data is inconsistent and refuses. A zero
+    // coordinate cannot carry a zero-length dimension: it is position-
+    // verified and recorded as a driver note - never silent, never a stop.
+    if point_exprs
+        .iter()
+        .any(|pe| pe[0].is_some() || pe[1].is_some())
+    {
+        let ctx = expr::Context::for_unit("", design_factor, design_text);
+        // The base: the first curve endpoint pinned at the sketch origin.
+        let base_point = (0..sketch.points.len()).find(|&pi| {
+            sketch.points[pi][0] == 0.0 && sketch.points[pi][1] == 0.0 && rep[pi].is_some()
+        });
+        for (pi, pe) in point_exprs.iter().enumerate() {
+            for axis in 0..2 {
+                let text = match &pe[axis] {
+                    Some(t) => t.clone(),
+                    None => continue,
+                };
+                let axis_name = if axis == 0 { "x" } else { "y" };
+                let node = match expr::parse(&text) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        sketch.dropped_constraints.push(format!(
+                            "point {pi} {axis_name} expression not replayable as a driver ({e})"
+                        ));
+                        continue;
+                    }
+                };
+                let q = match expr::eval(&node, &ctx, &env.lookup()) {
+                    Ok(q) => q,
+                    Err(e) => {
+                        sketch.dropped_constraints.push(format!(
+                            "point {pi} {axis_name} expression not replayable as a driver ({e})"
+                        ));
+                        continue;
+                    }
+                };
+                // The expression is the source of truth (the engine fixes
+                // expression points at their evaluated positions before
+                // solve); pos is a cache. A disagreement is recorded and the
+                // expression wins - never the other way round.
+                let eval_mm = q.value * 1000.0;
+                let stored_mm = sketch.points[pi][axis];
+                if (eval_mm - stored_mm).abs() > 1e-3 {
+                    sketch.driver_notes.push(format!(
+                        "point {pi} {axis_name}: pos {stored_mm} mm disagrees with the expression ({eval_mm} mm); the expression wins (source-engine rule)"
+                    ));
+                }
+                sketch.points[pi][axis] = eval_mm;
+                let pos_mm = eval_mm;
+                if pos_mm.abs() < 1e-9 {
+                    sketch.driver_notes.push(format!(
+                        "point {pi} {axis_name}: zero coordinate carries no driver dimension (position verified)"
+                    ));
+                    continue;
+                }
+                let target_slot = match rep[pi] {
+                    Some(slot) => slot,
+                    None => {
+                        sketch.dropped_constraints.push(format!(
+                            "point {pi} {axis_name}: not a curve endpoint, the coordinate binding cannot become a dimension"
+                        ));
+                        continue;
+                    }
+                };
+                let base_slot = match base_point.and_then(|bp| rep[bp]) {
+                    Some(slot) => slot,
+                    None => {
+                        sketch.dropped_constraints.push(format!(
+                            "point {pi} {axis_name}: no curve endpoint anchors the sketch origin, the coordinate binding cannot become a dimension"
+                        ));
+                        continue;
+                    }
+                };
+                let segs =
+                    match expr::translate_with(&node, &ctx, &|n| resolve_name(n, env, model_slots))
+                    {
+                        Ok(segs) => segs,
+                        Err(e) => {
+                            sketch.dropped_constraints.push(format!(
+                                "point {pi} {axis_name} (equation not expressible: {e})"
+                            ));
+                            continue;
+                        }
+                    };
+                let rhs = expr::translate(&node, &ctx);
+                let di = sketch.dimensions.len();
+                sketch.dimensions.push(DimensionT {
+                    kind: if axis == 0 {
+                        DimKind::DistanceX
+                    } else {
+                        DimKind::DistanceY
+                    },
+                    a: base_slot,
+                    b: Some(target_slot),
+                    value: pos_mm,
+                    param: None,
+                });
+                let slot = *next_slot;
+                *next_slot += 1;
+                sketch.dim_equations.push((
+                    di,
+                    DimEquation {
+                        which: 0,
+                        rhs,
+                        segs: coalesce(segs.into_iter().map(seg_from).collect()),
+                        expect_si: pos_mm / 1000.0,
+                        slot,
+                    },
+                ));
+            }
+        }
+    }
     let degrade = !sketch.dropped_constraints.is_empty();
     Ok((sketch, degrade))
 }
@@ -1273,6 +1693,23 @@ fn parse_extrude(
     model_slots: &mut Vec<(String, usize)>,
     next_slot: &mut usize,
 ) -> std::result::Result<ExtrudeStep, String> {
+    // The emitted FeatureExtrusion2 merge/scope flags are hardcoded and
+    // only proven for new_body (the whole corpus). join/subtract/intersect
+    // carry target-body semantics that need the Phase B body registry and
+    // the merge/scope probe - refusing beats operating on whichever bodies
+    // SolidWorks happens to select.
+    match feature
+        .get("operation")
+        .and_then(Value::as_str)
+        .unwrap_or("new_body")
+    {
+        "new_body" => {}
+        other => {
+            return Err(format!(
+                "extrude operation {other:?} is outside the supported subset; targeted merge and feature scope await the Phase B body registry and the merge/scope probe (the emitted flags are proven for new_body only)"
+            ))
+        }
+    }
     let extent = feature
         .get("extent")
         .ok_or("extrude has no extent".to_string())?;
@@ -1847,6 +2284,17 @@ fn coalesce(segs: Vec<RhsSeg>) -> Vec<RhsSeg> {
     out
 }
 
+/// A scalar in a feature payload: an expression string, or a bare JSON
+/// number read as the same kind of literal (solidcraft/57 writes raw
+/// numbers where the script shape writes strings).
+fn scalar_text(v: &Value) -> Option<String> {
+    match v {
+        Value::String(t) => Some(t.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
 /// Primitives replay as a mapped generated sketch plus a blind extrude
 /// through the direction truth table. Placement (corner/base) must be
 /// literal and on the base plane; the axis must be Z; sizes may be
@@ -1870,10 +2318,10 @@ fn parse_prim(
         .and_then(Value::as_str)
         .unwrap_or("new_body")
     {
-        "new_body" | "join" => {}
+        "new_body" => {}
         other => {
             return Err(format!(
-                "primitive operation {other:?} is outside the supported subset"
+                "primitive operation {other:?} is outside the supported subset; targeted merge and feature scope await the Phase B body registry and the merge/scope probe (the emitted flags are proven for new_body only)"
             ))
         }
     }
@@ -1908,10 +2356,9 @@ fn parse_prim(
     }
     let mut xyz = [0.0f64; 3];
     for (i, e) in place_v.iter().enumerate() {
-        let text = e
-            .as_str()
+        let text = scalar_text(e)
             .ok_or_else(|| format!("the primitive {place_key} is not an expression string"))?;
-        let node = expr::parse(text).map_err(|e| format!("the primitive {place_key}: {e}"))?;
+        let node = expr::parse(&text).map_err(|e| format!("the primitive {place_key}: {e}"))?;
         if !matches!(node, expr::Node::Number { .. }) {
             return Err(format!(
                 "the primitive {place_key} is not a literal in this phase"
@@ -1943,9 +2390,9 @@ fn parse_prim(
     for key in size_keys {
         let text = feature
             .get(key)
-            .and_then(Value::as_str)
+            .and_then(scalar_text)
             .ok_or_else(|| format!("the primitive has no {key}"))?;
-        let node = expr::parse(text).map_err(|e| format!("the primitive {key}: {e}"))?;
+        let node = expr::parse(&text).map_err(|e| format!("the primitive {key}: {e}"))?;
         let literal = matches!(node, expr::Node::Number { .. });
         let ctx = expr::Context {
             bare_length: if literal { 0.001 } else { design_factor },

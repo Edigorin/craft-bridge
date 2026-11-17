@@ -123,9 +123,9 @@ fn main() -> ExitCode {
             };
             pack::pack(&options, &limits).map(|report| {
                 eprintln!(
-                    "packed {} ({} commands, {})",
+                    "packed {} ({} steps, {})",
                     report.out.display(),
-                    report.command_count,
+                    report.step_count,
                     report.manifest.warnings.describe()
                 );
             })

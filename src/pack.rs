@@ -32,7 +32,10 @@ pub struct PackOptions<'a> {
 pub struct PackReport {
     pub out: PathBuf,
     pub manifest: Manifest,
-    pub command_count: usize,
+    /// Runtime steps the recipe plans to (recipe::step_count): commands for
+    /// a script, parameters + features for a solidcraft/57 design. Snapshot
+    /// boundaries address these indices.
+    pub step_count: usize,
 }
 
 /// Pack an artifact. Inputs are validated before anything is written; the
@@ -40,7 +43,7 @@ pub struct PackReport {
 pub fn pack(opts: &PackOptions, limits: &Limits) -> Result<PackReport> {
     let recipe_bytes = zipio::read_file_bounded(opts.recipe, limits.max_recipe_bytes, "recipe")?;
     let recipe_value = recipe::validate(&recipe_bytes, limits)?;
-    let command_count = recipe::commands_of(&recipe_value)?.len();
+    let step_count = recipe::step_count(&recipe_value)?;
 
     let step_bytes = zipio::read_file_bounded(opts.step, limits.max_step_bytes, "STEP geometry")?;
     validate_step(&step_bytes)?;
@@ -58,7 +61,7 @@ pub fn pack(opts: &PackOptions, limits: &Limits) -> Result<PackReport> {
     // snapshot prefix. The boundary index must address a real recipe step.
     let mut snapshot_members: Vec<(String, Vec<u8>, profile::SnapshotEntry)> = Vec::new();
     for (index, path) in &opts.snapshots {
-        if *index >= command_count {
+        if *index >= step_count {
             return Err(Error::InvalidRecipe(format!(
                 "snapshot boundary {index} is past the last recipe step"
             )));
@@ -80,12 +83,12 @@ pub fn pack(opts: &PackOptions, limits: &Limits) -> Result<PackReport> {
     if let Some(path) = opts.final_snapshot {
         let bytes = zipio::read_file_bounded(path, limits.max_member_bytes, "final snapshot")?;
         validate_step(&bytes)?;
-        let member = format!("{}step_{:04}.step", profile::SNAPSHOT_PREFIX, command_count);
+        let member = format!("{}step_{:04}.step", profile::SNAPSHOT_PREFIX, step_count);
         snapshot_members.push((
             member.clone(),
             bytes,
             profile::SnapshotEntry {
-                step_index: command_count,
+                step_index: step_count,
                 member,
                 bytes: 0,
                 scope: profile::SnapshotScope::Final,
@@ -157,7 +160,7 @@ pub fn pack(opts: &PackOptions, limits: &Limits) -> Result<PackReport> {
     Ok(PackReport {
         out: opts.out.to_path_buf(),
         manifest,
-        command_count,
+        step_count,
     })
 }
 

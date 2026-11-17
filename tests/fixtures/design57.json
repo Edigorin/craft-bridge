@@ -1,0 +1,119 @@
+{
+  "format": "solidcraft/57",
+  "name": "Vane plate (synthetic loader fixture)",
+  "units": "mm",
+  "params": [
+    { "name": "VaneSpan", "expr": "137 mm", "unit": "mm", "model": false },
+    { "name": "VaneRise", "expr": "61 mm", "unit": "mm", "model": false },
+    { "name": "VaneThickness", "expr": "9 mm", "unit": "mm", "model": false }
+  ],
+  "features": [
+    {
+      "id": 5,
+      "name": "Vane outline",
+      "suppressed": false,
+      "type": "sketch",
+      "plane": { "type": "origin", "name": "XY" },
+      "sketch": {
+        "points": [
+          { "id": "origin", "pos": [0.0, 0.0], "fixed": true },
+          {
+            "id": "p1",
+            "pos": [0.0, 0.0],
+            "fixed": true,
+            "exprs": { "x": "0 * VaneSpan", "y": "0 * VaneRise" }
+          },
+          { "id": "p2", "pos": [137.0, 0.0], "exprs": { "x": "VaneSpan" } },
+          {
+            "id": "p3",
+            "pos": [87.1, 61.0],
+            "exprs": { "x": "0.6 * VaneSpan + 4.9 mm", "y": "VaneRise" }
+          },
+          {
+            "id": "p4",
+            "pos": [31.0, 44.5],
+            "fixed": true,
+            "exprs": { "x": "31 mm", "y": "VaneRise * 0.5 + 14 mm" }
+          }
+        ],
+        "curves": [
+          { "id": "l1", "type": "line", "a": 1, "b": 2, "construction": false },
+          { "id": "l2", "type": "line", "a": 2, "b": 3, "construction": false },
+          { "id": "l3", "type": "line", "a": 3, "b": 4, "construction": false },
+          { "id": "l4", "type": "line", "a": 4, "b": 1, "construction": false }
+        ],
+        "constraints": [{ "id": "k1", "type": "fix", "p": 4 }],
+        "counters": { "l": 4, "p": 5 }
+      }
+    },
+    {
+      "id": 9000,
+      "name": "Vane body",
+      "suppressed": false,
+      "body_names": ["Vane"],
+      "param_names": ["d1"],
+      "type": "extrude",
+      "sketch": 5,
+      "profiles": { "type": "all" },
+      "extent": {
+        "distance": "VaneThickness",
+        "convention": "total_distance",
+        "direction": "positive"
+      },
+      "operation": "new_body"
+    },
+    {
+      "id": 9001,
+      "name": "Skipped boss",
+      "suppressed": true,
+      "body_names": ["Boss"],
+      "param_names": ["d2"],
+      "type": "box",
+      "corner": ["0", "0", "0"],
+      "length": "23 mm",
+      "width": "11 mm",
+      "height": "7 mm",
+      "operation": "new_body"
+    },
+    {
+      "id": 9002,
+      "name": "Tail outline",
+      "suppressed": false,
+      "type": "sketch",
+      "plane": { "type": "origin", "name": "XY" },
+      "sketch": {
+        "points": [
+          { "id": "origin", "pos": [0.0, 0.0], "fixed": true },
+          { "id": "q1", "pos": [0.0, 0.0], "fixed": true },
+          { "id": "q2", "pos": [29.0, 0.0], "fixed": true },
+          { "id": "q3", "pos": [8.0, 17.0], "fixed": true }
+        ],
+        "curves": [
+          { "id": "m1", "type": "line", "a": 1, "b": 2, "construction": false },
+          { "id": "m2", "type": "line", "a": 2, "b": 3, "construction": false },
+          { "id": "m3", "type": "line", "a": 3, "b": 1, "construction": false }
+        ],
+        "constraints": [],
+        "counters": { "l": 3, "p": 3 }
+      }
+    },
+    {
+      "id": 100000,
+      "name": "Tail body",
+      "suppressed": false,
+      "body_names": ["Tail"],
+      "param_names": ["d3"],
+      "type": "extrude",
+      "sketch": 9002,
+      "profiles": { "type": "all" },
+      "extent": {
+        "distance": "4 mm",
+        "convention": "total_distance",
+        "direction": "positive"
+      },
+      "operation": "new_body"
+    }
+  ],
+  "next_id": 100001,
+  "next_component_color_index": 0
+}

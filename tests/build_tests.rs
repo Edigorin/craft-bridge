@@ -726,7 +726,10 @@ fn sketch_to_model_inverts_a_translated_rotated_frame() {
     // The sketch origin must map to (0,0,0) in sketch space.
     let o_s = model_to_sketch(&a, o);
     for (got, want) in o_s.iter().zip([0.0, 0.0, 0.0]) {
-        assert!((got - want).abs() < 1e-12, "origin does not map to zero: {o_s:?}");
+        assert!(
+            (got - want).abs() < 1e-12,
+            "origin does not map to zero: {o_s:?}"
+        );
     }
     // Round-trip: any sketch point (s,t) -> model -> sketch gives (s,t,0).
     for (s, t) in [(0.0, 0.0), (0.03, -0.02), (-0.11, 0.07)] {
@@ -739,7 +742,10 @@ fn sketch_to_model_inverts_a_translated_rotated_frame() {
     // The raw translation must NOT be the origin (the bug this fixes).
     let raw = [a[9], a[10], a[11]];
     let d2 = (0..3).map(|i| (raw[i] - o[i]).powi(2)).sum::<f64>();
-    assert!(d2 > 1e-9, "test frame must separate translation from origin");
+    assert!(
+        d2 > 1e-9,
+        "test frame must separate translation from origin"
+    );
 }
 
 #[test]

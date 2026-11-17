@@ -1,0 +1,363 @@
+//! solidcraft/57 loader tests: format-aware validation, source identity vs
+//! dense runtime indices, native coordinate drivers, suppression, the named
+//! stop policy and prefix semantics. Fixtures are independently authored
+//! synthetic designs - never client geometry.
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::PathBuf;
+
+use craft_bridge::build::{self, BuildOptions};
+use craft_bridge::limits::Limits;
+use craft_bridge::pack::{self, PackOptions};
+use craft_bridge::recipe;
+use craft_bridge::replay::{self, DimKind, PlanStatus, Work};
+
+const DESIGN: &str = include_str!("fixtures/design57.json");
+const STEP_FIXTURE: &str = include_str!("fixtures/part.step");
+
+fn plan_of(recipe_json: &str) -> Vec<replay::PlannedStep> {
+    let limits = Limits::default();
+    let value = recipe::validate(recipe_json.as_bytes(), &limits).unwrap();
+    replay::plan(&value, &limits, &BTreeMap::new()).unwrap()
+}
+
+fn plan_err(recipe_json: &str) -> String {
+    let limits = Limits::default();
+    match recipe::validate(recipe_json.as_bytes(), &limits) {
+        Err(e) => e.to_string(),
+        Ok(value) => match replay::plan(&value, &limits, &BTreeMap::new()) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("expected a refusal"),
+        },
+    }
+}
+
+/// A minimal one-sketch solidcraft/57 design around `points`.
+fn sketch_design(id: u64, plane: &str, points: &str) -> String {
+    format!(
+        r#"{{
+  "format": "solidcraft/57",
+  "units": "mm",
+  "params": [{{ "name": "W", "expr": "50 mm", "unit": "mm" }}],
+  "features": [
+    {{
+      "id": {id},
+      "name": "s",
+      "suppressed": false,
+      "type": "sketch",
+      "plane": {plane},
+      "sketch": {{
+        "points": [{points}],
+        "curves": [
+          {{ "id": "l1", "type": "line", "a": 0, "b": 1 }},
+          {{ "id": "l2", "type": "line", "a": 1, "b": 2 }},
+          {{ "id": "l3", "type": "line", "a": 2, "b": 0 }}
+        ],
+        "constraints": [],
+        "counters": {{ "l": 3, "p": 3 }}
+      }}
+    }}
+  ]
+}}"#
+    )
+}
+
+#[test]
+fn design57_plans_dense_indices_and_source_ids() {
+    let steps = plan_of(DESIGN);
+    // 3 parameter equations first, then the 5 features: dense 0..7.
+    assert_eq!(steps.len(), 8);
+    assert_eq!(steps[0].source_id, "parameter VaneSpan");
+    assert_eq!(steps[0].command, "parameter");
+    assert!(matches!(steps[0].work, Work::UserParam { .. }));
+    assert_eq!(steps[2].source_id, "parameter VaneThickness");
+    // Source feature ids travel in source_id; the runtime index is dense.
+    assert_eq!(
+        (steps[3].index, steps[3].source_id.as_str()),
+        (3, "feature 5")
+    );
+    assert_eq!(
+        (steps[4].index, steps[4].source_id.as_str()),
+        (4, "feature 9000")
+    );
+    assert_eq!(
+        (steps[7].index, steps[7].source_id.as_str()),
+        (7, "feature 100000")
+    );
+    assert!(matches!(steps[3].work, Work::Sketch(_)));
+    assert!(matches!(steps[4].work, Work::Extrude(_)));
+    assert_eq!(steps[3].status, PlanStatus::Mapped);
+    assert_eq!(steps[4].status, PlanStatus::Mapped);
+    assert_eq!(steps[6].status, PlanStatus::Mapped);
+    assert_eq!(steps[7].status, PlanStatus::Mapped);
+}
+
+#[test]
+fn design57_coordinate_drivers_become_native_dimensions() {
+    let steps = plan_of(DESIGN);
+    let sketch = match &steps[3].work {
+        Work::Sketch(s) => s,
+        _ => panic!("feature 5 is a sketch"),
+    };
+    // Five driven coordinates (p2.x, p3.x, p3.y, p4.x, p4.y) each become a
+    // Distance* dimension bound by an equation; the two zero coordinates on
+    // p1 are recorded notes (no zero-length dimension can land).
+    let driver_dims: Vec<_> = sketch
+        .dimensions
+        .iter()
+        .filter(|d| matches!(d.kind, DimKind::DistanceX | DimKind::DistanceY))
+        .collect();
+    assert_eq!(driver_dims.len(), 5);
+    assert_eq!(sketch.dim_equations.len(), 5);
+    assert_eq!(sketch.driver_notes.len(), 2);
+    for note in &sketch.driver_notes {
+        assert!(note.contains("zero coordinate"), "{note}");
+    }
+    // The fix constraint is a faithful no-op and must not degrade.
+    assert!(sketch.dropped_constraints.is_empty());
+    // The fixed point p4 is driven by its expressions (precedence rule).
+    let driven_fixed = sketch
+        .dim_equations
+        .iter()
+        .filter(|(_, eq)| eq.rhs.contains("VaneRise"))
+        .count();
+    assert!(driven_fixed >= 1, "p4.y must follow VaneRise");
+}
+
+#[test]
+fn sparse_and_huge_feature_ids_resolve_by_map() {
+    let steps = plan_of(DESIGN);
+    let ex1 = match &steps[4].work {
+        Work::Extrude(e) => e,
+        _ => panic!(),
+    };
+    let ex2 = match &steps[7].work {
+        Work::Extrude(e) => e,
+        _ => panic!(),
+    };
+    // Feature 100000 references sketch 9002: the reference is a map lookup
+    // over source ids, never an index.
+    assert_eq!(ex1.sketch_step, 3);
+    assert_eq!(ex2.sketch_step, 6);
+}
+
+#[test]
+fn duplicate_and_out_of_bound_feature_ids_refuse() {
+    let dup = DESIGN.replace("\"id\": 9000", "\"id\": 5");
+    let err = plan_err(&dup);
+    assert!(err.contains("not unique"), "{err}");
+    let huge = DESIGN.replace("\"id\": 100000", "\"id\": 4503599627370496");
+    let err = plan_err(&huge);
+    assert!(err.contains("2^52"), "{err}");
+}
+
+#[test]
+fn the_rollback_marker_refuses_when_it_changes_behavior() {
+    // A marker past the last feature is a no-op cursor and replays fine.
+    let ok = DESIGN.replace("\"next_id\": 100001", "\"marker\": 9, \"next_id\": 100001");
+    assert_eq!(plan_of(&ok).len(), 8);
+    // A marker inside the timeline decides what the evaluated model is; its
+    // index semantics are unpinned, so it refuses named.
+    let refused = DESIGN.replace("\"next_id\": 100001", "\"marker\": 1, \"next_id\": 100001");
+    let err = plan_err(&refused);
+    assert!(err.contains("rollback marker"), "{err}");
+}
+
+#[test]
+fn operations_outside_new_body_stop_named() {
+    for op in ["join", "cut", "intersect"] {
+        let design = DESIGN.replace(
+            "\"operation\": \"new_body\"",
+            &format!("\"operation\": \"{op}\""),
+        );
+        let steps = plan_of(&design);
+        // The first new_body is feature 9000 at index 4: the replacement
+        // hits all three operations in the file, so the first stop is there.
+        assert_eq!(steps[4].status, PlanStatus::FallbackPlanned);
+        assert!(matches!(steps[4].work, Work::Unmappable));
+        assert!(
+            steps[4].detail.contains("Phase B body registry"),
+            "{op}: {}",
+            steps[4].detail
+        );
+        // Prefix semantics: everything after the stop is not-executed.
+        assert_eq!(steps[5].status, PlanStatus::NotExecuted);
+        assert!(matches!(steps[5].work, Work::AfterStop));
+    }
+}
+
+#[test]
+fn unknown_feature_types_stop_named() {
+    let design = DESIGN.replace(
+        "\"id\": 100000,\n      \"name\": \"Tail body\"",
+        "\"id\": 100000,\n      \"name\": \"Tail body\",\n      \"teleport\": true",
+    );
+    let design = design.replace(
+        "\"type\": \"extrude\",\n      \"sketch\": 9002",
+        "\"type\": \"teleport\",\n      \"sketch\": 9002",
+    );
+    let steps = plan_of(&design);
+    assert_eq!(steps[7].status, PlanStatus::FallbackPlanned);
+    assert!(
+        steps[7].detail.contains("\"teleport\""),
+        "{}",
+        steps[7].detail
+    );
+}
+
+#[test]
+fn suppression_skips_without_stopping() {
+    // A suppressed feature is a recorded note; the timeline continues, so
+    // the sketches around it map normally.
+    let steps = plan_of(DESIGN);
+    assert_eq!(steps[5].status, PlanStatus::NotExecuted);
+    assert!(matches!(steps[5].work, Work::Note));
+    assert!(steps[5].detail.contains("suppressed"));
+    assert_eq!(steps[6].status, PlanStatus::Mapped);
+}
+
+#[test]
+fn offset_and_construction_plane_sketches_stop_named() {
+    let points = r#"{ "id": "origin", "pos": [0.0, 0.0], "fixed": true },
+        { "id": "p1", "pos": [50.0, 0.0] },
+        { "id": "p2", "pos": [12.0, 30.0] }"#;
+    let offset =
+        r#"{ "type": "offset", "base": { "type": "origin", "name": "XY" }, "distance": "W" }"#;
+    let steps = plan_of(&sketch_design(7, offset, points));
+    assert!(matches!(steps[1].work, Work::Unmappable));
+    assert!(
+        steps[1]
+            .detail
+            .contains("offset plane (offset from XY by W)"),
+        "{}",
+        steps[1].detail
+    );
+    assert!(steps[1].detail.contains("offset-plane probe"));
+    let construction = r#"{ "type": "construction", "feature": 16 }"#;
+    let steps = plan_of(&sketch_design(7, construction, points));
+    assert!(matches!(steps[1].work, Work::Unmappable));
+    assert!(
+        steps[1].detail.contains("construction_plane feature 16"),
+        "{}",
+        steps[1].detail
+    );
+}
+
+#[test]
+fn point_expressions_win_over_stored_positions() {
+    // The source engine fixes expression points at their EVALUATED
+    // positions; a stored pos that disagrees is a stale cache and loses.
+    let points = r#"{ "id": "origin", "pos": [0.0, 0.0], "fixed": true },
+        { "id": "p1", "pos": [40.0, 0.0], "exprs": { "x": "W" } },
+        { "id": "p2", "pos": [12.0, 30.0] }"#;
+    let steps = plan_of(&sketch_design(
+        7,
+        r#"{ "type": "origin", "name": "XY" }"#,
+        points,
+    ));
+    let sketch = match &steps[1].work {
+        Work::Sketch(s) => s,
+        _ => panic!(),
+    };
+    assert!(
+        sketch
+            .driver_notes
+            .iter()
+            .any(|n| n.contains("the expression wins")),
+        "{:?}",
+        sketch.driver_notes
+    );
+    assert_eq!(sketch.points[1][0], 50.0);
+    // The driver dimension carries the evaluated value.
+    let dim = sketch
+        .dimensions
+        .iter()
+        .find(|d| matches!(d.kind, DimKind::DistanceX))
+        .unwrap();
+    assert_eq!(dim.value, 50.0);
+}
+
+#[test]
+fn expressions_outside_the_subset_degrade_named() {
+    let points = r#"{ "id": "origin", "pos": [0.0, 0.0], "fixed": true },
+        { "id": "p1", "pos": [50.0, 0.0], "exprs": { "x": "sin(W)" } },
+        { "id": "p2", "pos": [12.0, 30.0] }"#;
+    let steps = plan_of(&sketch_design(
+        7,
+        r#"{ "type": "origin", "name": "XY" }"#,
+        points,
+    ));
+    assert_eq!(steps[1].status, PlanStatus::DegradePlanned);
+    let sketch = match &steps[1].work {
+        Work::Sketch(s) => s,
+        _ => panic!(),
+    };
+    assert!(
+        sketch
+            .dropped_constraints
+            .iter()
+            .any(|d| d.contains("not replayable as a driver")),
+        "{:?}",
+        sketch.dropped_constraints
+    );
+}
+
+#[test]
+fn the_57_surface_counts_and_summarizes_in_runtime_order() {
+    let limits = Limits::default();
+    let value = recipe::validate(DESIGN.as_bytes(), &limits).unwrap();
+    // Parameters first, then features: the addressable runtime count.
+    assert_eq!(recipe::step_count(&value).unwrap(), 8);
+    let (steps, params) = recipe::summarize(&value);
+    assert_eq!(steps.len(), 8);
+    assert_eq!(steps[0].command, "parameter");
+    assert_eq!(steps[3].command, "sketch");
+    assert_eq!(steps[4].command, "extrude");
+    assert_eq!(params.user.len(), 3);
+    assert!(params.model.is_empty());
+}
+
+#[test]
+fn a_57_artifact_packs_and_builds() {
+    let dir = tempfile::tempdir().unwrap();
+    let recipe_path = dir.path().join("design.json");
+    let step_path = dir.path().join("part.step");
+    let artifact = dir.path().join("design.craftx");
+    let out: PathBuf = dir.path().join("design.swb");
+    fs::write(&recipe_path, DESIGN).unwrap();
+    fs::write(&step_path, STEP_FIXTURE).unwrap();
+    pack::pack(
+        &PackOptions {
+            recipe: &recipe_path,
+            step: &step_path,
+            out: &artifact,
+            warnings: None,
+            name: None,
+            overwrite: false,
+            snapshots: Vec::new(),
+            final_snapshot: None,
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    build::build(
+        &BuildOptions {
+            artifact: &artifact,
+            out: &out,
+            plan: None,
+            plan_text: None,
+            overwrite: true,
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    let macro_text = fs::read_to_string(&out).unwrap();
+    // The parameter equations land as global variables, and the extrude
+    // depth equation follows VaneThickness.
+    assert!(macro_text.contains("VaneSpan"), "global equations missing");
+    assert!(
+        macro_text.contains("VaneThickness"),
+        "extent equation missing"
+    );
+}
