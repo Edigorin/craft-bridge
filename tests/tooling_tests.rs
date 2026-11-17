@@ -342,6 +342,20 @@ fn the_decision_mirror_is_pinned_to_the_vbs_logic() {
         !LOGIC.contains("IsNumeric(") && !LOGIC.contains("CDbl(") && !LOGIC.contains("Val(s)"),
         "locale-sensitive or nonexistent numeric conversion survived in the decision logic"
     );
+    // The solid=none contract: a no-solid item verifies the absence
+    // two-way and never hides a broken read.
+    for pin in [
+        "solid=none",
+        "check:solid=pass",
+        "check:solid=fail",
+        "absence unverifiable",
+        "unexpected solid volume ",
+    ] {
+        assert!(
+            LOGIC.contains(pin),
+            "the decision logic lost its solid=none contract: {pin}"
+        );
+    }
     // The zero-body/surface branches are REACHED (finding 2): the found
     // count allows zero and names surface/empty imports.
     assert!(
@@ -706,6 +720,37 @@ fn real_part_artifacts_stay_untracked() {
         assert!(
             gitignore.lines().any(|l| l.trim() == zone),
             ".gitignore does not cover {zone}"
+        );
+    }
+}
+
+
+// ---- the solid=none contract (a no-solid corpus item verifies absence
+// two-way; a solid-expected item keeps the fail-closed data gate) ----
+
+fn solid_none_verdict(rebuilt: Option<f64>) -> (&'static str, &'static str) {
+    // mirrors MassSkipLines' noSolid branch: (solid, mass) verdicts.
+    match rebuilt {
+        Some(v) if v > 0.0 => ("fail", "skipped"),
+        Some(_) => ("pass", "skipped"),
+        None => ("fail", "fail"),
+    }
+}
+
+#[test]
+fn solid_none_is_verified_two_way() {
+    // A clean zero volume passes; an unexpected solid fails; an unreadable
+    // read cannot prove absence and fails closed.
+    assert_eq!(solid_none_verdict(Some(0.0)), ("pass", "skipped"));
+    assert_eq!(solid_none_verdict(Some(-1.0)), ("pass", "skipped"));
+    assert_eq!(solid_none_verdict(Some(0.0004)), ("fail", "skipped"));
+    assert_eq!(solid_none_verdict(None), ("fail", "fail"));
+    // The corpus items that build no solid declare it.
+    for item in ["frame-omission", "frame-sign-chain", "stop-rule-degrade"] {
+        let expect = std::fs::read_to_string(format!("corpus/{item}/expect.txt")).unwrap();
+        assert!(
+            expect.contains("solid=none"),
+            "{item} lost its solid=none declaration"
         );
     }
 }

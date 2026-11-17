@@ -129,6 +129,7 @@ rebuiltSolidsText = CountText(bodiesArr, Err.Number)
 
 ' ---- the expect parameters (raw text; validated by the logic module) ----
 skipVolume = False
+noSolid = False
 minFeatures = 0
 volumeTol = ""
 volumeTolAbs = ""
@@ -139,6 +140,7 @@ Set scan = scanFso.OpenTextFile(expectPath, 1)
 Do Until scan.AtEndOfStream
   line = Trim(scan.ReadLine)
   If line = "volume_compare=skip" Then skipVolume = True
+  If line = "solid=none" Then noSolid = True
   If Left(line, 12) = "min_features=" Then minFeatures = CInt(Mid(line, 13))
   If Left(line, 15) = "volume_tol_abs=" Then volumeTolAbs = Mid(line, 16)
   If Left(line, 11) = "volume_tol=" Then volumeTol = Mid(line, 12)
@@ -201,7 +203,7 @@ Else
   Loop
 End If
 If skipVolume Then
-  blocks = MassSkipLines(rebuiltText)
+  blocks = MassSkipLines(rebuiltText, noSolid)
   blocks = blocks & RefImportSkipLines()
   blocks = blocks & BodiesSkipLines()
   blocks = blocks & PlacementSkipLines()

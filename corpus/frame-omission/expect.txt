@@ -1,6 +1,7 @@
 sha256=459527d1c67a183ec4b7847bf099e35c3263f08f7c38509ee38327abbd90fa87
 min_features=5
 volume_compare=skip
+solid=none
 # reference.step is a placeholder body: mass comparison activates when
 # real SolidCraft exports replace it (see docs/seat-acceptance.md).
 # BOUNDED-SUPPORT CAVEAT (non-permutation omission path): all three origin

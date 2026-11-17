@@ -149,6 +149,18 @@ Check "a bare decimal parses", (ParsePeriod(".5", pv) And Abs(pv - 0.5) < 0.0000
 Check "malformed shapes are refused", ((Not ParsePeriod("1.2.3", pv)) And (Not ParsePeriod("1e", pv)) And (Not ParsePeriod("abc", pv)) And (Not ParsePeriod("", pv)) And (Not ParsePeriod("+", pv))), "junk parsed"
 Check "the validators inherit the locale-safe parse", ((PositiveError("0.01") = "") And (PositiveError("0,01") = "not numeric")), "comma text validated"
 
+' ---- the solid=none contract: a no-solid item verifies the absence
+' two-way; an unexpected solid or an unreadable read fails named ----
+Dim ms
+ms = MassSkipLines("0", True)
+Check "a zero volume passes a solid=none item", ((VerdictOf(ms, "solid") = "pass") And (VerdictOf(ms, "mass") = "skipped") And (VerdictOf(ms, "mass_vs_reference") = "skipped")), ms
+ms = MassSkipLines("0.0004", True)
+Check "an unexpected solid fails a solid=none item", ((VerdictOf(ms, "solid") = "fail") And (Has(ms, "unexpected solid volume"))), ms
+ms = MassSkipLines("missing or unreadable", True)
+Check "an unreadable read cannot prove absence", ((VerdictOf(ms, "solid") = "fail") And (VerdictOf(ms, "mass") = "fail") And (Has(ms, "absence unverifiable"))), ms
+ms = MassSkipLines("0", False)
+Check "a solid-expected item keeps the fail-closed data gate", ((VerdictOf(ms, "solid") = "") And (VerdictOf(ms, "mass") = "fail")), ms
+
 ' ---- a zero found count is named downstream, never refused as invalid
 ' (finding 2: the surface/empty-import branches must be reachable) ----
 Check "a zero found count is valid", (FoundCountError("0") = ""), FoundCountError("0")

@@ -1,6 +1,7 @@
 sha256=8105c2a7bc979cc5524d5a32afb38c15145232b433895cef558ab56a7aa94cbd
 min_features=5
 volume_compare=skip
+solid=none
 # reference.step is a placeholder body: mass comparison activates when
 # real SolidCraft exports replace it (see docs/seat-acceptance.md).
 # Frame adaptation: this sketch lives on the XZ source frame (u=+X, v=-Z,

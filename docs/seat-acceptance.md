@@ -216,3 +216,14 @@ cross/dot products, tangency gap):
 Trap: `sgVERTPOINTS2D` is a SILENT NO-OP (no error, no effect) - the working
 spelling is `sgVERTICALPOINTS2D`. And a merge invalidates pre-solve point
 handles: re-acquire before measuring (automation error otherwise).
+
+## The `solid=none` expect declaration
+
+`expect.txt` may declare `solid=none` for corpus items whose macros
+deliberately build no solid (sketch-only frame probes, stop-rule items).
+The checker then verifies the absence two-way: a clean zero volume gives
+`check:solid=pass` and `check:mass=skipped`; any solid volume gives
+`check:solid=fail` (an unexpected body); an unreadable mass read cannot
+prove absence and fails named. Items without the declaration keep the
+fail-closed data gate: a missing, unreadable or nonpositive rebuilt
+volume is `check:mass=fail`. Real designs never declare `solid=none`.

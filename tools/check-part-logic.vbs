@@ -315,9 +315,37 @@ End Function
 ' skip-with-placeholder behavior; every required entry is still emitted.
 ' An unreadable rebuilt volume still fails check:mass (the data gate), as
 ' the historical path did.
-Function MassSkipLines(ByVal rebuiltText)
+Function MassSkipLines(ByVal rebuiltText, ByVal noSolid)
   Dim out, errR
   out = ""
+  If noSolid Then
+    ' The item declares it builds no solid (solid=none): verify the
+    ' absence two-way. A clean zero volume passes; any solid is an
+    ' unexpected-body failure; an unreadable read cannot prove absence
+    ' and fails named.
+    errR = PositiveError(rebuiltText)
+    If errR = "nonpositive" Then
+      out = out & "detail:solid=no solid as declared (solid=none)" & vbCrLf
+      out = out & "check:solid=pass" & vbCrLf
+      out = out & "detail:mass=volume comparison skipped by expect (volume_compare=skip; solid=none)" & vbCrLf
+      out = out & "check:mass=skipped" & vbCrLf
+      out = out & "check:mass_vs_reference=skipped" & vbCrLf
+    ElseIf errR = "" Then
+      out = out & "volume:rebuilt=" & rebuiltText & vbCrLf
+      out = out & "detail:solid=unexpected solid volume " & rebuiltText & " on a solid=none item" & vbCrLf
+      out = out & "check:solid=fail" & vbCrLf
+      out = out & "check:mass=skipped" & vbCrLf
+      out = out & "check:mass_vs_reference=skipped" & vbCrLf
+    Else
+      out = out & "detail:solid=absence unverifiable (" & errR & ": " & rebuiltText & ")" & vbCrLf
+      out = out & "check:solid=fail" & vbCrLf
+      out = out & "detail:mass=rebuilt volume " & errR & ": " & rebuiltText & vbCrLf
+      out = out & "check:mass=fail" & vbCrLf
+      out = out & "check:mass_vs_reference=skipped" & vbCrLf
+    End If
+    MassSkipLines = out
+    Exit Function
+  End If
   errR = PositiveError(rebuiltText)
   If errR = "" Then
     out = out & "volume:rebuilt=" & rebuiltText & vbCrLf
