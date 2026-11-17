@@ -111,6 +111,8 @@ Function PeriodValue(ByVal s)
       ElseIf c <> "+" Then
         expo = expo * 10 + (Asc(c) - 48)
       End If
+    ElseIf c = "e" Or c = "E" Then
+      inExp = True
     ElseIf c = "." Then
       inFrac = True
     Else
