@@ -297,13 +297,15 @@ Sub main()
     End If
     Err.Clear
     On Error GoTo Fail
-    WriteStep stepIdx, "trace", "created", "contained done"
-    WriteStep stepIdx, "trace", "created", "sqr done off=" & Trim(Str(off))
-    off = Sqr(cphX * cphX + cphY * cphY + cphZ * cphZ)
+    WriteStep stepIdx, "trace", "created", "contained via=" & centreVia & " err=" & Trim(Str(centreErr)) & " xyz=" & SafeNum(cphX) & "/" & SafeNum(cphY) & "/" & SafeNum(cphZ) & " types=" & TypeName(cphX) & "," & TypeName(cphY) & "," & TypeName(cphZ)
+    off = cphX * cphX + cphY * cphY + cphZ * cphZ
+    WriteStep stepIdx, "trace", "created", "sumsq=" & SafeNum(off)
+    off = Sqr(off)
+    WriteStep stepIdx, "trace", "created", "root=" & SafeNum(off)
     WriteStep stepIdx, "trace", "created", "p1 via=" & centreVia
-    WriteStep stepIdx, "trace", "created", "p2 err=" & Trim(Str(centreErr))
+    WriteStep stepIdx, "trace", "created", "p2 err=" & Trim(Str(centreErr)) & " cphIsNothing=" & CStr(cph Is Nothing)
     WriteStep stepIdx, "trace", "created", "p3 txt=" & Vec3Text(cphX, cphY, cphZ)
-    WriteStep stepIdx, "trace", "created", "p4 off=" & Trim(Str(off))
+    WriteStep stepIdx, "trace", "created", "p4 off=" & SafeNum(off)
     WriteStep stepIdx, "circle.centre", "created", "via " & centreVia & " at " & Vec3Text(cphX, cphY, cphZ)
     WriteStep stepIdx, "trace", "created", "msg done"
     If centreVia = "none" Then Err.Raise vbObjectError + 539, "probe-refplane.swb", "the circle centre is unreadable by both handles (last err " & Trim(Str(centreErr)) & ")"
@@ -1030,8 +1032,14 @@ Function FrameText() As String
     FrameText = "u=(" & Vec3Text(a(0), a(3), a(6)) & ") v=(" & Vec3Text(a(1), a(4), a(7)) & ") n=(" & Vec3Text(a(2), a(5), a(8)) & ") o=(" & Vec3Text(a(9), a(10), a(11)) & ")"
 End Function
 
+Function SafeNum(ByVal x As Double) As String
+    If x <> x Then SafeNum = "NaN": Exit Function
+    If Abs(x) > 1E+100 Then SafeNum = "INF": Exit Function
+    SafeNum = Trim(Str(x))
+End Function
+
 Function Vec3Text(ByVal x As Double, ByVal y As Double, ByVal z As Double) As String
-    Vec3Text = Trim(Str(x)) & "," & Trim(Str(y)) & "," & Trim(Str(z))
+    Vec3Text = SafeNum(x) & "," & SafeNum(y) & "," & SafeNum(z)
 End Function
 
 ' A live feature-tree lookup by name. Returns the feature when a complete
