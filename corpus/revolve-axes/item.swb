@@ -420,7 +420,7 @@ Function Dims0() As Boolean
     v2 = sl0(3).GetEndPoint
     chk = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))
     If Abs(chk - Abs(0.005)) > TOL Then gMsg = "the value edit did not carry the length line 3 geometry (length " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.005))) & ")": GoTo DimFail
-    If Not AddDimEquation(dm, "10mm", signVal * 0.005, 0, signVal) Then GoTo DimFail
+    If Not AddDimEquation(dm, "10mm", signVal * 0.005, 0, signVal, skName0) Then GoTo DimFail
     SolveSketch skName0
     swDoc.ClearSelection2 True
     Dims0 = True
@@ -1488,17 +1488,20 @@ End Function
 ' Add an equation driving a dimension and verify it evaluated: the
 ' dimension name is captured at runtime, the value must match the
 ' expectation after a rebuild. Never presence alone.
-Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long, ByVal signVal As Double) As Boolean
+Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long, ByVal signVal As Double, ByVal qual As String) As Boolean
 On Error GoTo EqFail
 Dim eqMgr As Object
 Dim eqText As String
 Dim idx As Long
+Dim qName As String
 Set eqMgr = swDoc.GetEquationMgr
 If eqMgr Is Nothing Then gMsg = "the equation manager is missing": GoTo EqFail
+qName = dm.Name
+If InStr(qName, "@") = 0 Then qName = qName & "@" & qual
 If signVal < 0 Then
-eqText = """" & dm.Name & """=-1 * (" & rhs & ")"
+eqText = """" & qName & """=-1 * (" & rhs & ")"
 Else
-eqText = """" & dm.Name & """=" & rhs
+eqText = """" & qName & """=" & rhs
 End If
 idx = eqMgr.Add(-1, eqText)
 If idx < 0 Then gMsg = "the dimension equation was not accepted: " & eqText: GoTo EqFail
@@ -1506,7 +1509,7 @@ swDoc.EditRebuild3
 If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = "the driven value does not match": GoTo EqFail
 
 If eqMgr.Equation(idx) <> eqText Then gMsg = "the stored equation reads back differently": GoTo EqFail
-If slot >= 0 Then regName(slot) = dm.Name
+If slot >= 0 Then regName(slot) = qName
 If slot >= 0 Then regSign(slot) = signVal
 AddDimEquation = True
 Exit Function

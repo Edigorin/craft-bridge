@@ -430,7 +430,7 @@ Function Dims1() As Boolean
     gMsg = "the value edit moved the perpendicular axis - the DistanceX 0-1 kind is wrong"
     GoTo DimFail
     End If
-    If Not AddDimEquation(dm, "40mm", signVal * 0.04, 0, signVal) Then GoTo DimFail
+    If Not AddDimEquation(dm, "40mm", signVal * 0.04, 0, signVal, skName1) Then GoTo DimFail
     SolveSketch skName1
     swDoc.ClearSelection2 True
     End If
@@ -505,7 +505,7 @@ Function Dims1() As Boolean
     gMsg = "the value edit moved the perpendicular axis - the DistanceY 0-5 kind is wrong"
     GoTo DimFail
     End If
-    If Not AddDimEquation(dm, "80mm", signVal * 0.08, 1, signVal) Then GoTo DimFail
+    If Not AddDimEquation(dm, "80mm", signVal * 0.08, 1, signVal, skName1) Then GoTo DimFail
     SolveSketch skName1
     swDoc.ClearSelection2 True
     End If
@@ -549,7 +549,7 @@ Function Dims1() As Boolean
     chk = Sqr((nbx - nax) * (nbx - nax) + (nby - nay) * (nby - nay))
     If Abs(chk - Abs(0.08)) > TOL Then gMsg = "the value edit did not carry the distance 8-9 geometry (distance " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.08))) & ")": GoTo DimFail
     If regName(0) = "" Then gMsg = "the parameter slot 0 is not bound (its dimension was omitted or failed)": GoTo DimFail
-    If Not AddDimEquation(dm, SlotRef(0) & " * 2", signVal * 0.08, 2, signVal) Then GoTo DimFail
+    If Not AddDimEquation(dm, SlotRef(0) & " * 2", signVal * 0.08, 2, signVal, skName1) Then GoTo DimFail
     SolveSketch skName1
     swDoc.ClearSelection2 True
     ' dimension: distance 3-5
@@ -593,7 +593,7 @@ Function Dims1() As Boolean
     If Abs(chk - Abs(0.04)) > TOL Then gMsg = "the value edit did not carry the distance 3-5 geometry (distance " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.04))) & ")": GoTo DimFail
     If regName(1) = "" Then gMsg = "the parameter slot 1 is not bound (its dimension was omitted or failed)": GoTo DimFail
     If regName(0) = "" Then gMsg = "the parameter slot 0 is not bound (its dimension was omitted or failed)": GoTo DimFail
-    If Not AddDimEquation(dm, "(" & SlotRef(1) & " - " & SlotRef(0) & ")", signVal * 0.04, 3, signVal) Then GoTo DimFail
+    If Not AddDimEquation(dm, "(" & SlotRef(1) & " - " & SlotRef(0) & ")", signVal * 0.04, 3, signVal, skName1) Then GoTo DimFail
     SolveSketch skName1
     swDoc.ClearSelection2 True
     Dims1 = True
@@ -1561,17 +1561,20 @@ End Function
 ' Add an equation driving a dimension and verify it evaluated: the
 ' dimension name is captured at runtime, the value must match the
 ' expectation after a rebuild. Never presence alone.
-Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long, ByVal signVal As Double) As Boolean
+Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long, ByVal signVal As Double, ByVal qual As String) As Boolean
 On Error GoTo EqFail
 Dim eqMgr As Object
 Dim eqText As String
 Dim idx As Long
+Dim qName As String
 Set eqMgr = swDoc.GetEquationMgr
 If eqMgr Is Nothing Then gMsg = "the equation manager is missing": GoTo EqFail
+qName = dm.Name
+If InStr(qName, "@") = 0 Then qName = qName & "@" & qual
 If signVal < 0 Then
-eqText = """" & dm.Name & """=-1 * (" & rhs & ")"
+eqText = """" & qName & """=-1 * (" & rhs & ")"
 Else
-eqText = """" & dm.Name & """=" & rhs
+eqText = """" & qName & """=" & rhs
 End If
 idx = eqMgr.Add(-1, eqText)
 If idx < 0 Then gMsg = "the dimension equation was not accepted: " & eqText: GoTo EqFail
@@ -1579,7 +1582,7 @@ swDoc.EditRebuild3
 If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = "the driven value does not match": GoTo EqFail
 
 If eqMgr.Equation(idx) <> eqText Then gMsg = "the stored equation reads back differently": GoTo EqFail
-If slot >= 0 Then regName(slot) = dm.Name
+If slot >= 0 Then regName(slot) = qName
 If slot >= 0 Then regSign(slot) = signVal
 AddDimEquation = True
 Exit Function

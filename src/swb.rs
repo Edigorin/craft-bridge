@@ -1369,17 +1369,20 @@ End Function\n\
          ' Add an equation driving a dimension and verify it evaluated: the\n\
          ' dimension name is captured at runtime, the value must match the\n\
          ' expectation after a rebuild. Never presence alone.\n\
-         Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long, ByVal signVal As Double) As Boolean
+         Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long, ByVal signVal As Double, ByVal qual As String) As Boolean
 On Error GoTo EqFail
 Dim eqMgr As Object
 Dim eqText As String
 Dim idx As Long
+Dim qName As String
 Set eqMgr = swDoc.GetEquationMgr
 If eqMgr Is Nothing Then gMsg = \"the equation manager is missing\": GoTo EqFail
+qName = dm.Name
+If InStr(qName, \"@\") = 0 Then qName = qName & \"@\" & qual
 If signVal < 0 Then
-eqText = \"\"\"\" & dm.Name & \"\"\"=-1 * (\" & rhs & \")\"
+eqText = \"\"\"\" & qName & \"\"\"=-1 * (\" & rhs & \")\"
 Else
-eqText = \"\"\"\" & dm.Name & \"\"\"=\" & rhs
+eqText = \"\"\"\" & qName & \"\"\"=\" & rhs
 End If
 idx = eqMgr.Add(-1, eqText)
 If idx < 0 Then gMsg = \"the dimension equation was not accepted: \" & eqText: GoTo EqFail
@@ -1387,7 +1390,7 @@ swDoc.EditRebuild3
 If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = \"the driven value does not match\": GoTo EqFail
 
 If eqMgr.Equation(idx) <> eqText Then gMsg = \"the stored equation reads back differently\": GoTo EqFail
-If slot >= 0 Then regName(slot) = dm.Name
+If slot >= 0 Then regName(slot) = qName
 If slot >= 0 Then regSign(slot) = signVal
 AddDimEquation = True
 Exit Function
@@ -1974,7 +1977,7 @@ fn emit_dimension(
     if let Some(equation) = equation {
         tail.push_str(&slot_guards(equation, "DimFail"));
         tail.push_str(&format!(
-            "    If Not AddDimEquation(dm, {}, signVal * {}, {}, signVal) Then GoTo DimFail\n    SolveSketch skName{index}\n",
+            "    If Not AddDimEquation(dm, {}, signVal * {}, {}, signVal, skName{index}) Then GoTo DimFail\n    SolveSketch skName{index}\n",
             rhs_vba(equation),
             vba_num(equation.expect_si),
             equation.slot
@@ -2738,7 +2741,7 @@ fn emit_size(entity: &str, size: &crate::replay::PrimSize, what: &str, circle: b
     if let Some(eq) = &size.equation {
         out.push_str(&slot_guards(eq, "ExFail"));
         out.push_str(&format!(
-            "    If Not AddDimEquation(dm, {}, signVal * {}, {}, signVal) Then gMsg = \"{what} equation did not evaluate\": GoTo ExFail\n    SolveSketch primName\n",
+            "    If Not AddDimEquation(dm, {}, signVal * {}, {}, signVal, primName) Then gMsg = \"{what} equation did not evaluate\": GoTo ExFail\n    SolveSketch primName\n",
             rhs_vba(eq),
             mn,
             eq.slot

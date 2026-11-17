@@ -427,7 +427,7 @@ Function Dims1() As Boolean
     v2 = sl1(0).GetEndPoint
     chk = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))
     If Abs(chk - Abs(0.04)) > TOL Then gMsg = "the value edit did not carry the length line 0 geometry (length " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.04))) & ")": GoTo DimFail
-    If Not AddDimEquation(dm, """width""", signVal * 0.04, 0, signVal) Then GoTo DimFail
+    If Not AddDimEquation(dm, """width""", signVal * 0.04, 0, signVal, skName1) Then GoTo DimFail
     SolveSketch skName1
     swDoc.ClearSelection2 True
     Dims1 = True
@@ -679,7 +679,7 @@ Function BuildPrim2() As String
     If Abs(chk - 0.08) > TOL Then gMsg = "the box length geometry did not follow the value edit (length " & Trim(Str(chk)) & ")": GoTo ExFail
     swDoc.ClearSelection2 True
     If regName(0) = "" Then gMsg = "the parameter slot 0 is not bound (its dimension was omitted or failed)": GoTo ExFail
-    If Not AddDimEquation(dm, SlotRef(0) & " * 2", signVal * 0.08, 1, signVal) Then gMsg = "the box length equation did not evaluate": GoTo ExFail
+    If Not AddDimEquation(dm, SlotRef(0) & " * 2", signVal * 0.08, 1, signVal, primName) Then gMsg = "the box length equation did not evaluate": GoTo ExFail
     SolveSketch primName
     If Not ln1.Select(False) Then gMsg = "the box width would not select": GoTo ExFail
     Set dd = swDoc.AddDimension2(0#, 0#, 0#)
@@ -825,7 +825,7 @@ Function BuildPrim3() As String
     chk = ci.GetRadius
     If Abs(chk - 0.04) > TOL Then gMsg = "the cylinder radius geometry did not follow the value edit (radius " & Trim(Str(chk)) & ")": GoTo ExFail
     swDoc.ClearSelection2 True
-    If Not AddDimEquation(dm, """width""", signVal * 0.04, 2, signVal) Then gMsg = "the cylinder radius equation did not evaluate": GoTo ExFail
+    If Not AddDimEquation(dm, """width""", signVal * 0.04, 2, signVal, primName) Then gMsg = "the cylinder radius equation did not evaluate": GoTo ExFail
     SolveSketch primName
     SolveSketch primName
     Set pA = ci.GetCenterPoint2
@@ -1679,17 +1679,20 @@ End Function
 ' Add an equation driving a dimension and verify it evaluated: the
 ' dimension name is captured at runtime, the value must match the
 ' expectation after a rebuild. Never presence alone.
-Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long, ByVal signVal As Double) As Boolean
+Function AddDimEquation(ByVal dm As SldWorks.Dimension, ByVal rhs As String, ByVal expect As Double, ByVal slot As Long, ByVal signVal As Double, ByVal qual As String) As Boolean
 On Error GoTo EqFail
 Dim eqMgr As Object
 Dim eqText As String
 Dim idx As Long
+Dim qName As String
 Set eqMgr = swDoc.GetEquationMgr
 If eqMgr Is Nothing Then gMsg = "the equation manager is missing": GoTo EqFail
+qName = dm.Name
+If InStr(qName, "@") = 0 Then qName = qName & "@" & qual
 If signVal < 0 Then
-eqText = """" & dm.Name & """=-1 * (" & rhs & ")"
+eqText = """" & qName & """=-1 * (" & rhs & ")"
 Else
-eqText = """" & dm.Name & """=" & rhs
+eqText = """" & qName & """=" & rhs
 End If
 idx = eqMgr.Add(-1, eqText)
 If idx < 0 Then gMsg = "the dimension equation was not accepted: " & eqText: GoTo EqFail
@@ -1697,7 +1700,7 @@ swDoc.EditRebuild3
 If Abs(dm.SystemValue - expect) > 0.000001 Then gMsg = "the driven value does not match": GoTo EqFail
 
 If eqMgr.Equation(idx) <> eqText Then gMsg = "the stored equation reads back differently": GoTo EqFail
-If slot >= 0 Then regName(slot) = dm.Name
+If slot >= 0 Then regName(slot) = qName
 If slot >= 0 Then regSign(slot) = signVal
 AddDimEquation = True
 Exit Function
