@@ -44,6 +44,7 @@ Dim treeCount, featWalk
 Dim refDoc, refTitle, refText, refCx, refCy, refCz
 Dim docTypeText, solidsText, sheetsText, refAcquireErr
 Dim distText, blocks, dtRaw, refBodiesArr, refSheetsArr, refCloseLines
+Dim preTitles, preErr, d, t2
 If WScript.Arguments.Count < 4 Then
   WScript.Echo "usage: check-part.vbs <expect> <step-reference> <out> <owned-title>"
   WScript.Quit 4
@@ -124,7 +125,7 @@ Else
 End If
 Err.Clear
 bodiesArr = swDoc.GetBodies2(0, False)
-rebuiltSolidsText = CountText(bodiesArr)
+rebuiltSolidsText = CountText(bodiesArr, Err.Number)
 
 ' ---- the expect parameters (raw text; validated by the logic module) ----
 skipVolume = False
@@ -173,6 +174,32 @@ refAcquireErr = ""
 refTitle = ""
 distText = ""
 blocks = ""
+' FINDING 4 fix: ownership is established BEFORE the import. Documents
+' already open belong to the user and are never closed; the snapshot
+' decides later whether the reference title pre-existed.
+preTitles = ""
+preErr = 0
+Err.Clear
+Set d = swApp.GetFirstDocument
+If Err.Number <> 0 Then
+  preErr = Err.Number
+Else
+  Do While Not d Is Nothing
+    Err.Clear
+    t2 = d.GetTitle
+    If Err.Number <> 0 Then
+      preErr = Err.Number
+      Exit Do
+    End If
+    preTitles = preTitles & t2 & vbCrLf
+    Err.Clear
+    Set d = d.GetNext
+    If Err.Number <> 0 Then
+      preErr = Err.Number
+      Exit Do
+    End If
+  Loop
+End If
 If skipVolume Then
   blocks = MassSkipLines(rebuiltText)
   blocks = blocks & RefImportSkipLines()
@@ -209,10 +236,10 @@ Else
     End If
     Err.Clear
     refBodiesArr = refDoc.GetBodies2(0, False)
-    solidsText = CountText(refBodiesArr)
+    solidsText = CountText(refBodiesArr, Err.Number)
     Err.Clear
     refSheetsArr = refDoc.GetBodies2(1, False)
-    sheetsText = CountText(refSheetsArr)
+    sheetsText = CountText(refSheetsArr, Err.Number)
     Err.Clear
     Set mp = refDoc.Extension.CreateMassProperty()
     If Err.Number <> 0 Then
@@ -240,6 +267,10 @@ Else
   If refDoc Is Nothing Then
     refCloseLines = "check:ref_close=skipped" & vbCrLf
     refCloseLines = refCloseLines & "detail:ref_close=no reference document was opened" & vbCrLf
+  ElseIf preErr <> 0 Then
+    refCloseLines = "check:ref_close=fail" & vbCrLf & "detail:ref_close=the pre-import document enumeration failed; ownership of the reference close cannot be established" & vbCrLf
+  ElseIf IsPreExistingTitle(preTitles, refTitle) Then
+    refCloseLines = "check:ref_close=fail" & vbCrLf & "detail:ref_close=the reference title was already open before the import; refusing to close a pre-existing document (the imported document is preserved, not closed)" & vbCrLf
   Else
     refCloseLines = VerifiedCloseLines(swApp, refDoc, refTitle)
   End If
@@ -314,7 +345,7 @@ f.Close
 ' whatever is active - and verify the close by a live enumeration. An
 ' empty or ambiguous title is refused; every enumeration call is checked
 ' immediately and any failure leaves the close unverified.
-Dim closeTitle, d, t2, cnt, isOurs
+Dim closeTitle, cnt, isOurs
 closeTitle = ownedTitle
 If Trim(closeTitle) = "" Then
   outFile.WriteLine "check:close:=fail"
@@ -397,6 +428,82 @@ End If
 outFile.WriteLine "check:close:=pass"
 outFile.Close
 WScript.Quit 0
+
+' Typed acquisition of a body count from GetBodies2(BodyType,
+' BVisibleOnly): an unreadable call, an unexpected return shape or
+' unreadable array bounds is a NAMED refusal; a typed Empty/Null return
+' proves the body set is empty. Never a guessed count.
+Function CountText(ByVal res, ByVal arrErr)
+  Dim lo2, hi2
+  If arrErr <> 0 Then
+    CountText = "missing or unreadable"
+    Exit Function
+  End If
+  If IsArray(res) Then
+    Err.Clear
+    On Error Resume Next
+    lo2 = LBound(res)
+    hi2 = UBound(res)
+    If Err.Number = 0 Then
+      CountText = NumStr(hi2 - lo2 + 1)
+    Else
+      CountText = "unexpected return shape (array bounds unreadable)"
+    End If
+    On Error GoTo 0
+    Exit Function
+  End If
+  If IsEmpty(res) Or IsNull(res) Then
+    CountText = "0"
+    Exit Function
+  End If
+  CountText = "unexpected return shape (vartype " & NumStr(VarType(res)) & ")"
+End Function
+
+' Typed centroid acquisition: the measured centerofmass array's shape and
+' every component are proven before any verdict uses them - a failed read
+' is named in the return text, never coerced to zero.
+Function CentroidText(ByVal mpObj, ByRef cx, ByRef cy, ByRef cz, ByVal what)
+  Dim arr, lo2, hi2
+  CentroidText = ""
+  cx = 0
+  cy = 0
+  cz = 0
+  Err.Clear
+  On Error Resume Next
+  arr = mpObj.centerofmass
+  If Err.Number <> 0 Then
+    CentroidText = "cannot read " & what & ": " & Err.Description
+    On Error GoTo 0
+    Exit Function
+  End If
+  If Not IsArray(arr) Then
+    CentroidText = what & " did not come back as an array (vartype " & NumStr(VarType(arr)) & ")"
+    On Error GoTo 0
+    Exit Function
+  End If
+  Err.Clear
+  lo2 = LBound(arr)
+  hi2 = UBound(arr)
+  If Err.Number <> 0 Then
+    CentroidText = what & " has unreadable bounds"
+    On Error GoTo 0
+    Exit Function
+  End If
+  If lo2 <> 0 Or hi2 <> 2 Then
+    CentroidText = what & " has an unexpected shape (bounds " & NumStr(lo2) & ".." & NumStr(hi2) & ")"
+    On Error GoTo 0
+    Exit Function
+  End If
+  If Not IsNumeric(arr(0)) Or Not IsNumeric(arr(1)) Or Not IsNumeric(arr(2)) Then
+    CentroidText = what & " has nonnumeric components"
+    On Error GoTo 0
+    Exit Function
+  End If
+  cx = arr(0)
+  cy = arr(1)
+  cz = arr(2)
+  On Error GoTo 0
+End Function
 
 ' Verified close of the independently owned STEP reference document: the
 ' CloseOwnedDoc discipline - a live enumeration must identify exactly the

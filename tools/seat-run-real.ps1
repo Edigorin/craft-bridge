@@ -51,8 +51,9 @@ param(
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "seat-run.ps1")
 
-# The four tooling scripts this runner executes: each must be pinned.
-function Get-RequiredTooling { @("tools/seat-run.ps1", "tools/run-macro.vbs", "tools/check-part.vbs", "tools/check-part-logic.vbs") }
+# Every tooling script this run executes - THIS RUNNER INCLUDED - must be
+# pinned: the pins cover the execution path, not just the repo copy.
+function Get-RequiredTooling { @("tools/seat-run-real.ps1", "tools/seat-run.ps1", "tools/run-macro.vbs", "tools/check-part.vbs", "tools/check-part-logic.vbs") }
 
 function Get-RealFileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -87,8 +88,29 @@ function Test-RealUntracked {
         [Parameter(Mandatory = $true)][string]$RelPath
     )
     git -C $Root ls-files --error-unmatch -- $RelPath 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) {
+    $code = $LASTEXITCODE
+    if ($code -eq 0) {
         throw "refusing: $RelPath is a tracked file; real-part artifacts must stay untracked (AGENTS.md)"
+    }
+    if ($code -ne 1) {
+        throw "refusing: the untracked check for $RelPath could not be established (git exited $code)"
+    }
+}
+
+# A whole zone (manifest and output destinations live here) must contain
+# no tracked file at all.
+function Test-RealZoneUntracked {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$RelDir
+    )
+    $out = git -C $Root ls-files -- $RelDir 2>$null
+    $code = $LASTEXITCODE
+    if ($code -ne 0) {
+        throw "refusing: the untracked check for $RelDir could not be established (git exited $code)"
+    }
+    if (@($out).Count -gt 0) {
+        throw "refusing: $RelDir contains tracked files; real-part artifacts must stay untracked (AGENTS.md)"
     }
 }
 
@@ -187,21 +209,59 @@ function Test-RealInputPins {
 }
 
 # The tooling this runner executes must all be pinned; anything not pinned
-# is refused. Returns the verified pins keyed by tooling path.
+# is refused. The pins are verified against the EXECUTED bytes - the files
+# at ScriptDir (where this script and its callees live) - never against a
+# possibly different checkout at Root. Returns the verified pins.
 function Test-RealToolingPins {
     param(
         [Parameter(Mandatory = $true)]$Manifest,
-        [Parameter(Mandatory = $true)][string]$Root
+        [Parameter(Mandatory = $true)][string]$ScriptDir
     )
     $toolPins = @{}
     foreach ($tool in Get-RequiredTooling) {
         if (-not $Manifest.tooling.PSObject.Properties[$tool] -or -not $Manifest.tooling.$tool) {
             throw "refusing: the manifest does not pin $tool (anything not pinned is refused)"
         }
-        $toolFull = [System.IO.Path]::GetFullPath((Join-Path $Root $tool))
-        $toolPins[$tool] = Test-RealPin -ExpectedSha "$($Manifest.tooling.$tool)" -Path $toolFull -What "tooling $tool"
+        $toolFull = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir (Split-Path -Leaf $tool)))
+        $toolPins[$tool] = Test-RealPin -ExpectedSha "$($Manifest.tooling.$tool)" -Path $toolFull -What "tooling $tool (executed bytes)"
     }
     return $toolPins
+}
+
+# Every manifest input AND every extra pinned file (fallback sidecars are
+# CONSUMED by the run): confined to uploads/<design>/, untracked, pinned.
+# Anything the run consumes without a pin is refused.
+function Test-RealInputPins {
+    param(
+        [Parameter(Mandatory = $true)]$Manifest,
+        [Parameter(Mandatory = $true)][string]$DesignName,
+        [Parameter(Mandatory = $true)][string]$Root
+    )
+    $inputs = @{}
+    foreach ($what in $Manifest.files.PSObject.Properties.Name) {
+        $entry = $Manifest.files.$what
+        $full = Test-RealInputPath -DesignName $DesignName -RelPath "$($entry.path)" -Root $Root
+        $rel = "$($entry.path)" -replace "\\", "/"
+        Test-RealUntracked -Root $Root -RelPath $rel
+        $null = Test-RealPin -ExpectedSha "$($entry.sha256)" -Path $full -What $what
+        $inputs[$what] = $full
+    }
+    foreach ($what in @("source", "macro", "reference", "expect")) {
+        if (-not $inputs.ContainsKey($what)) {
+            throw "refusing: the manifest does not pin $what"
+        }
+    }
+    # Consumed fallback sidecars beside the macro must each be pinned.
+    $macroDir = Split-Path -Parent $inputs["macro"]
+    $sidecars = @(Get-ChildItem -LiteralPath $macroDir -Filter "fallback-step-*.step" -File -ErrorAction SilentlyContinue)
+    foreach ($sc in $sidecars) {
+        $scRel = ($sc.FullName.Substring([System.IO.Path]::GetFullPath($Root).Length)).TrimStart("\", "/") -replace "\\", "/"
+        $hit = @($Manifest.files.PSObject.Properties | Where-Object { "$($_.Value.path)" -replace "\\", "/" -eq $scRel })
+        if ($hit.Count -eq 0) {
+            throw "refusing: a consumed fallback sidecar is not pinned ($scRel)"
+        }
+    }
+    return $inputs
 }
 
 function Invoke-RealDesignRun {
