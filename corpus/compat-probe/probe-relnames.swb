@@ -22,6 +22,7 @@ Dim swDoc As SldWorks.ModelDoc2
 Dim swSketchMgr As SketchManager
 Dim reportPath As String
 Dim gProbeLog As String
+Dim gSketchFeat As SldWorks.Feature
 Dim gDimToggle As Boolean
 Dim gDimToggleSaved As Boolean
 Dim skName As String
@@ -1027,6 +1028,24 @@ End Function
 ' (Name identity), because minimal.swb's Err.Raise runs under its own
 ' On Error Resume Next and silently falls through. Here any uncertainty
 ' returns False with a reason and fails the run: never a fake success.
+' The just-created sketch as a TREE FEATURE (ActiveSketch.Name can be an
+' internal name that no tree walk finds; the tree object always works).
+Function LastFeature() As SldWorks.Feature
+    Dim f As SldWorks.Feature
+    Dim last As SldWorks.Feature
+    On Error Resume Next
+    Err.Clear
+    Set f = swDoc.FirstFeature
+    If Err.Number <> 0 Then Exit Function
+    Do While Not f Is Nothing
+        Set last = f
+        Err.Clear
+        Set f = f.GetNextFeature
+        If Err.Number <> 0 Then Exit Function
+    Loop
+    Set LastFeature = last
+End Function
+
 Function SolveSketch(ByRef reason As String) As Boolean
     Dim sk As Object
     Dim nm As String
@@ -1052,7 +1071,8 @@ Function SolveSketch(ByRef reason As String) As Boolean
     End If
     If sk Is Nothing Then
         Err.Clear
-        selOk = swDoc.Extension.SelectByID2(skName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+        If Not gSketchFeat Is Nothing Then selOk = gSketchFeat.Select(False)
+        If Not selOk Then selOk = swDoc.Extension.SelectByID2(skName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
         If Err.Number <> 0 Then
             reason = "select-for-reentry err " & Trim(Str(Err.Number)) & " " & Err.Description
             Exit Function
@@ -1251,6 +1271,7 @@ Function OpenFirstPlane() As Boolean
                     Exit Function
                 End If
                 gProbeLog = gProbeLog & fname & ": opened; "
+                Set gSketchFeat = LastFeature()
                 OpenFirstPlane = True
                 Exit Function
             Else
