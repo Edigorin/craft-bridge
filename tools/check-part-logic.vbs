@@ -87,8 +87,8 @@ End Function
 ' exponent. Digit accumulation only - see ParsePeriod.
 Function PeriodValue(ByVal s)
   Dim i, c, n, sign, mant, frac, expo, esign, inExp, inFrac, k, scale
-  sign = 1#
-  mant = 0#
+  sign = 1.0
+  mant = 0.0
   frac = 0
   expo = 0
   esign = 1
@@ -98,7 +98,7 @@ Function PeriodValue(ByVal s)
   i = 1
   c = Mid(s, i, 1)
   If c = "-" Then
-    sign = -1#
+    sign = -1.0
     i = i + 1
   ElseIf c = "+" Then
     i = i + 1
@@ -114,7 +114,7 @@ Function PeriodValue(ByVal s)
     ElseIf c = "." Then
       inFrac = True
     Else
-      mant = mant * 10# + (Asc(c) - 48)
+      mant = mant * 10.0 + (Asc(c) - 48)
       If inFrac Then frac = frac + 1
     End If
     i = i + 1
@@ -122,11 +122,11 @@ Function PeriodValue(ByVal s)
   scale = esign * expo - frac
   If scale > 0 Then
     For k = 1 To scale
-      mant = mant * 10#
+      mant = mant * 10.0
     Next
   Else
     For k = 1 To -scale
-      mant = mant / 10#
+      mant = mant / 10.0
     Next
   End If
   PeriodValue = sign * mant
