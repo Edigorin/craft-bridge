@@ -427,7 +427,7 @@ Function Dims2() As Boolean
     v = sl2(0).GetStartPoint
     v2 = sl2(0).GetEndPoint
     chk = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))
-    If Abs(chk - Abs(dimScale * 0.04)) > TOL Then gMsg = "the value edit did not carry the length line 0 geometry (length " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(dimScale * 0.04))) & ")": GoTo DimFail
+    If Abs(chk - Abs(0.04)) > TOL Then gMsg = "the value edit did not carry the length line 0 geometry (length " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.04))) & ")": GoTo DimFail
     If Not AddDimEquation(dm, "40mm", signVal * 0.04 * dimScale, 0, signVal, skName2, dimScale) Then GoTo DimFail
     SolveSketch skName2, skFeat2
     swDoc.ClearSelection2 True
@@ -467,7 +467,7 @@ Function Dims2() As Boolean
     v = sl2(1).GetStartPoint
     v2 = sl2(1).GetEndPoint
     chk = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))
-    If Abs(chk - Abs(dimScale * 0.02)) > TOL Then gMsg = "the value edit did not carry the length line 1 geometry (length " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(dimScale * 0.02))) & ")": GoTo DimFail
+    If Abs(chk - Abs(0.02)) > TOL Then gMsg = "the value edit did not carry the length line 1 geometry (length " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.02))) & ")": GoTo DimFail
     If Not AddDimEquation(dm, "20mm", signVal * 0.02 * dimScale, 1, signVal, skName2, dimScale) Then GoTo DimFail
     SolveSketch skName2, skFeat2
     swDoc.ClearSelection2 True

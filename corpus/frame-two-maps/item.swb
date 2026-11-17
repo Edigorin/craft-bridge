@@ -462,7 +462,7 @@ Function Dims1() As Boolean
     chk = nby - nay
     chk2 = nbx - nax
     End If
-    If Abs(Abs(chk) - Abs(0.03)) > TOL Then gMsg = "the value edit did not carry the DistanceX 0-1 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(dimScale * 0.03))) & ")": GoTo DimFail
+    If Abs(Abs(chk) - Abs(0.03)) > TOL Then gMsg = "the value edit did not carry the DistanceX 0-1 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.03))) & ")": GoTo DimFail
     If Abs(Abs(chk2) - Abs(other)) > TOL Then
     gMsg = "the value edit moved the perpendicular axis - the DistanceX 0-1 kind is wrong"
     GoTo DimFail
@@ -538,7 +538,7 @@ Function Dims1() As Boolean
     chk = nby - nay
     chk2 = nbx - nax
     End If
-    If Abs(Abs(chk) - Abs(0.05)) > TOL Then gMsg = "the value edit did not carry the DistanceY 0-5 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(dimScale * 0.05))) & ")": GoTo DimFail
+    If Abs(Abs(chk) - Abs(0.05)) > TOL Then gMsg = "the value edit did not carry the DistanceY 0-5 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.05))) & ")": GoTo DimFail
     If Abs(Abs(chk2) - Abs(other)) > TOL Then
     gMsg = "the value edit moved the perpendicular axis - the DistanceY 0-5 kind is wrong"
     GoTo DimFail
@@ -990,7 +990,7 @@ Function Dims2() As Boolean
     chk = nby - nay
     chk2 = nbx - nax
     End If
-    If Abs(Abs(chk) - Abs(0.02)) > TOL Then gMsg = "the value edit did not carry the DistanceX 0-1 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(dimScale * 0.02))) & ")": GoTo DimFail
+    If Abs(Abs(chk) - Abs(0.02)) > TOL Then gMsg = "the value edit did not carry the DistanceX 0-1 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.02))) & ")": GoTo DimFail
     If Abs(Abs(chk2) - Abs(other)) > TOL Then
     gMsg = "the value edit moved the perpendicular axis - the DistanceX 0-1 kind is wrong"
     GoTo DimFail
@@ -1066,7 +1066,7 @@ Function Dims2() As Boolean
     chk = nby - nay
     chk2 = nbx - nax
     End If
-    If Abs(Abs(chk) - Abs(0.06)) > TOL Then gMsg = "the value edit did not carry the DistanceY 0-5 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(dimScale * 0.06))) & ")": GoTo DimFail
+    If Abs(Abs(chk) - Abs(0.06)) > TOL Then gMsg = "the value edit did not carry the DistanceY 0-5 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.06))) & ")": GoTo DimFail
     If Abs(Abs(chk2) - Abs(other)) > TOL Then
     gMsg = "the value edit moved the perpendicular axis - the DistanceY 0-5 kind is wrong"
     GoTo DimFail
@@ -1242,7 +1242,7 @@ Function BuildExtrude3() As String
     If regName(0) = "" Then gMsg = "the parameter slot 0 is not bound (its dimension was omitted or failed)": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
     If dm Is Nothing Then gMsg = "the extrude dimension D1 is missing": GoTo ExFail
-    If Not AddDimEquation(dm, SlotRef(0), 0.03, 4, 1#, feat.Name) Then gMsg = "the extrude depth equation did not evaluate": GoTo ExFail
+    If Not AddDimEquation(dm, SlotRef(0), 0.03, 4, 1#, feat.Name, 1#) Then gMsg = "the extrude depth equation did not evaluate": GoTo ExFail
     Set feat3 = feat
     gMsg = "depth 0.03 m"
     BuildExtrude3 = "created"

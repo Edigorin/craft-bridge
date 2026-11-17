@@ -354,7 +354,7 @@ fn primitives_and_cross_references_replay() {
     // resolved from the dimension readback and travels through
     // AddDimEquation's signVal (regSign -> SlotRef normalization).
     assert!(
-        box_region.contains("signVal * 0.08, 1, signVal"),
+        box_region.contains("signVal * 0.08 * dimScale, 1, signVal"),
         "the box length equation lost the sign contract"
     );
     let outcome = case.build_to("prim2.swb", false).unwrap();
@@ -1851,6 +1851,61 @@ fn extrude_calls_use_the_full_signature_and_construction_geometry() {
 }
 
 #[test]
+fn adddimequation_calls_pass_exactly_seven_arguments() {
+    // Compile-error regression (twice burned): AddDimEquation gained the
+    // qualifier and the dimension scale; any call site left at the old
+    // arity is a silent VBA compile failure (RunMacro returns failure with
+    // no report at all).
+    fn count_args(call: &str) -> usize {
+        let inner = &call[call.find('(').unwrap() + 1..call.rfind(')').unwrap()];
+        let mut depth = 0usize;
+        let mut commas = 0usize;
+        for c in inner.chars() {
+            match c {
+                '(' | '[' => depth += 1,
+                ')' | ']' => depth = depth.saturating_sub(1),
+                ',' if depth == 0 => commas += 1,
+                _ => {}
+            }
+        }
+        commas + 1
+    }
+    for (name, recipe) in [
+        ("tracer", TRACER),
+        ("primitives", TRACER_PRIM),
+        ("revolve", TRACER_REVOLVE),
+    ] {
+        let case = Case::new(recipe);
+        case.build_to("arity2.swb", false).unwrap();
+        let text = fs::read_to_string(case.dir.path().join("arity2.swb")).unwrap();
+        for line in text.lines() {
+            if line.contains("AddDimEquation(dm, ") {
+                assert_eq!(
+                    count_args(line.split("AddDimEquation").nth(1).unwrap()),
+                    7,
+                    "{name}: AddDimEquation call has the wrong arity: {line}"
+                );
+            }
+        }
+    }
+    for item in [
+        include_str!("../corpus/frame-two-maps/item.swb"),
+        include_str!("../corpus/frame-sign-chain/item.swb"),
+        include_str!("../corpus/primitives-crossrefs/item.swb"),
+    ] {
+        for line in item.lines() {
+            if line.contains("AddDimEquation(dm, ") {
+                assert_eq!(
+                    count_args(line.split("AddDimEquation").nth(1).unwrap()),
+                    7,
+                    "corpus item: AddDimEquation call has the wrong arity: {line}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn no_identifier_shadows_a_vba_intrinsic() {
     // Seat-proven compile rule: a VBA intrinsic name cannot be an
     // identifier - `Dim sgn As Double` is a compile error that RunMacro
@@ -2424,7 +2479,7 @@ fn extrude_directions_fold_signs_and_refuse_unrepresentable_shapes() {
     let blind = builder_region(&text, "BuildExtrude3");
     assert!(
         blind.contains(
-            "-1#, feat.Name) Then gMsg = \"the extrude depth equation did not evaluate\""
+            "-1#, feat.Name, 1#) Then gMsg = \"the extrude depth equation did not evaluate\""
         ),
         "the negative source sign did not travel through signVal"
     );
@@ -3309,27 +3364,23 @@ fn primitive_refusals_are_named() {
             "{name}: the orientation refusal does not name its probe"
         );
     }
-    // The circle-size dimension kind is established unambiguously BEFORE
-    // the value is written and the dimension registered (plan review): the
-    // coincident-reading scale and the diameter-kind reading are refused
-    // by name.
+    // The API circle dimension is diameter-valued (seat-established:
+    // probe-circlerad and frame-sign-chain): the 2r reading is EXPECTED and
+    // any other reading is refused by name BEFORE the value is written and
+    // the dimension registered.
     assert!(
-        cyl_region.contains("the radius- and diameter-kind readings coincide within tolerance"),
-        "the radius-kind ambiguity is not refused"
+        cyl_region.contains("twice the source radius is"),
+        "the diameter-valued reading contract is missing"
     );
-    assert!(
-        cyl_region.contains("reads the diameter"),
-        "the diameter-kind reading is not refused"
-    );
-    let ambiguous = cyl_region
-        .find("coincide within tolerance")
-        .expect("no ambiguity refusal");
+    let kindcheck = cyl_region
+        .find("twice the source radius")
+        .expect("no kind check");
     let write = cyl_region
         .find("dm.SystemValue = signVal")
         .expect("no value write");
     let register = cyl_region.find("AddDimEquation").expect("no registration");
     assert!(
-        ambiguous < write && write < register,
+        kindcheck < write && write < register,
         "the kind check runs after the write or the registration"
     );
     // Mapped-placement readback refusals name what failed.

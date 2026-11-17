@@ -439,7 +439,7 @@ Function Dims1() As Boolean
     chk = nby - nay
     chk2 = nbx - nax
     End If
-    If Abs(Abs(chk) - Abs(0.04)) > TOL Then gMsg = "the value edit did not carry the DistanceX 0-1 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(dimScale * 0.04))) & ")": GoTo DimFail
+    If Abs(Abs(chk) - Abs(0.04)) > TOL Then gMsg = "the value edit did not carry the DistanceX 0-1 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.04))) & ")": GoTo DimFail
     If Abs(Abs(chk2) - Abs(other)) > TOL Then
     gMsg = "the value edit moved the perpendicular axis - the DistanceX 0-1 kind is wrong"
     GoTo DimFail
@@ -515,7 +515,7 @@ Function Dims1() As Boolean
     chk = nby - nay
     chk2 = nbx - nax
     End If
-    If Abs(Abs(chk) - Abs(0.08)) > TOL Then gMsg = "the value edit did not carry the DistanceY 0-5 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(dimScale * 0.08))) & ")": GoTo DimFail
+    If Abs(Abs(chk) - Abs(0.08)) > TOL Then gMsg = "the value edit did not carry the DistanceY 0-5 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.08))) & ")": GoTo DimFail
     If Abs(Abs(chk2) - Abs(other)) > TOL Then
     gMsg = "the value edit moved the perpendicular axis - the DistanceY 0-5 kind is wrong"
     GoTo DimFail
@@ -555,7 +555,7 @@ Function Dims1() As Boolean
     End If
     dm.SystemValue = signVal * dimScale * 0.01
     chk = ci1(0).GetRadius
-    If Abs(chk - Abs(dimScale * 0.01)) > TOL Then gMsg = "the value edit did not carry the radius circle 0 geometry (measure " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(dimScale * 0.01))) & ")": GoTo DimFail
+    If Abs(chk - Abs(0.01)) > TOL Then gMsg = "the value edit did not carry the radius circle 0 geometry (measure " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.01))) & ")": GoTo DimFail
     If regName(1) = "" Then gMsg = "the parameter slot 1 is not bound (its dimension was omitted or failed)": GoTo DimFail
     If Not AddDimEquation(dm, "2*(" & SlotRef(1) & " / 8" & ")", signVal * 0.01 * dimScale, 2, signVal, skName1, dimScale) Then GoTo DimFail
     SolveSketch skName1, skFeat1

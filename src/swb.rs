@@ -1976,7 +1976,7 @@ fn emit_dimension(
         DimKind::Length => {
             let l = dim.a;
             format!(
-                "    v = sl{index}({l}).GetStartPoint\n    v2 = sl{index}({l}).GetEndPoint\n    chk = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))\n    If Abs(chk - Abs(dimScale * {si})) > TOL Then gMsg = \"the value edit did not carry the {label} geometry (length \" & Trim(Str(chk)) & \" after driving \" & Trim(Str(Abs(dimScale * {si}))) & \")\": GoTo DimFail\n",
+                "    v = sl{index}({l}).GetStartPoint\n    v2 = sl{index}({l}).GetEndPoint\n    chk = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))\n    If Abs(chk - Abs({si})) > TOL Then gMsg = \"the value edit did not carry the {label} geometry (length \" & Trim(Str(chk)) & \" after driving \" & Trim(Str(Abs({si}))) & \")\": GoTo DimFail\n",
                 si = vba_num(si)
             )
         }
@@ -1988,7 +1988,7 @@ fn emit_dimension(
                 format!("2# * ci{index}({j}).GetRadius")
             };
             format!(
-                "    chk = {measure}\n    If Abs(chk - Abs(dimScale * {si})) > TOL Then gMsg = \"the value edit did not carry the {label} geometry (measure \" & Trim(Str(chk)) & \" after driving \" & Trim(Str(Abs(dimScale * {si}))) & \")\": GoTo DimFail\n",
+                "    chk = {measure}\n    If Abs(chk - Abs({si})) > TOL Then gMsg = \"the value edit did not carry the {label} geometry (measure \" & Trim(Str(chk)) & \" after driving \" & Trim(Str(Abs({si}))) & \")\": GoTo DimFail\n",
                 si = vba_num(si)
             )
         }
@@ -1999,14 +1999,14 @@ fn emit_dimension(
         DimKind::DistanceX | DimKind::DistanceY => {
             let (a, b) = (dim.a, dim.b.unwrap_or(0));
             format!(
-                "    nax = pt{index}({a}).X\n    nay = pt{index}({a}).Y\n    nbx = pt{index}({b}).X\n    nby = pt{index}({b}).Y\n    If axClass = 0 Then\n    chk = nbx - nax\n    chk2 = nby - nay\n    Else\n    chk = nby - nay\n    chk2 = nbx - nax\n    End If\n    If Abs(Abs(chk) - Abs({si})) > TOL Then gMsg = \"the value edit did not carry the {label} geometry (classified-axis \" & Trim(Str(chk)) & \" after driving \" & Trim(Str(Abs(dimScale * {si}))) & \")\": GoTo DimFail\n    If Abs(Abs(chk2) - Abs(other)) > TOL Then\n    gMsg = \"the value edit moved the perpendicular axis - the {label} kind is wrong\"\n    GoTo DimFail\n    End If\n",
+                "    nax = pt{index}({a}).X\n    nay = pt{index}({a}).Y\n    nbx = pt{index}({b}).X\n    nby = pt{index}({b}).Y\n    If axClass = 0 Then\n    chk = nbx - nax\n    chk2 = nby - nay\n    Else\n    chk = nby - nay\n    chk2 = nbx - nax\n    End If\n    If Abs(Abs(chk) - Abs({si})) > TOL Then gMsg = \"the value edit did not carry the {label} geometry (classified-axis \" & Trim(Str(chk)) & \" after driving \" & Trim(Str(Abs({si}))) & \")\": GoTo DimFail\n    If Abs(Abs(chk2) - Abs(other)) > TOL Then\n    gMsg = \"the value edit moved the perpendicular axis - the {label} kind is wrong\"\n    GoTo DimFail\n    End If\n",
                 si = vba_num(si)
             )
         }
         _ => {
             let (a, b) = (dim.a, dim.b.unwrap_or(0));
             format!(
-                "    nax = pt{index}({a}).X\n    nay = pt{index}({a}).Y\n    nbx = pt{index}({b}).X\n    nby = pt{index}({b}).Y\n    chk = Sqr((nbx - nax) * (nbx - nax) + (nby - nay) * (nby - nay))\n    If Abs(chk - Abs(dimScale * {si})) > TOL Then gMsg = \"the value edit did not carry the {label} geometry (distance \" & Trim(Str(chk)) & \" after driving \" & Trim(Str(Abs(dimScale * {si}))) & \")\": GoTo DimFail\n",
+                "    nax = pt{index}({a}).X\n    nay = pt{index}({a}).Y\n    nbx = pt{index}({b}).X\n    nby = pt{index}({b}).Y\n    chk = Sqr((nbx - nax) * (nbx - nax) + (nby - nay) * (nby - nay))\n    If Abs(chk - Abs({si})) > TOL Then gMsg = \"the value edit did not carry the {label} geometry (distance \" & Trim(Str(chk)) & \" after driving \" & Trim(Str(Abs({si}))) & \")\": GoTo DimFail\n",
                 si = vba_num(si)
             )
         }
@@ -2109,7 +2109,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
             for eq in &ex.equations {
                 body.push_str(&slot_guards(eq, "ExFail"));
                 body.push_str(&format!(
-                    "    Set dm = swDoc.Parameter(\"D1@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D1 is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
+                    "    Set dm = swDoc.Parameter(\"D1@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D1 is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name, 1#) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
                     rhs_vba(eq),
                     vba_num(eq.expect_si.abs()),
                     eq.slot,
@@ -2135,7 +2135,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
             for eq in &ex.equations {
                 body.push_str(&slot_guards(eq, "ExFail"));
                 body.push_str(&format!(
-                    "    Set dm = swDoc.Parameter(\"D1@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D1 is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
+                    "    Set dm = swDoc.Parameter(\"D1@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D1 is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name, 1#) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
                     rhs_vba(eq),
                     vba_num(eq.expect_si.abs()),
                     eq.slot,
@@ -2187,7 +2187,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
                     let which = if eq.which == 1 { "wFirst" } else { "wSecond" };
                     body.push_str(&slot_guards(eq, "ExFail"));
                     body.push_str(&format!(
-                        "    Set dm = swDoc.Parameter(\"D\" & Trim(Str({which})) & \"@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude depth dimension is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
+                        "    Set dm = swDoc.Parameter(\"D\" & Trim(Str({which})) & \"@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude depth dimension is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name, 1#) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
                         rhs_vba(eq),
                         vba_num(eq.expect_si.abs()),
                         eq.slot,
@@ -2565,7 +2565,7 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
         PrimKind::Cylinder => "    Dim ci As Object\n",
     };
     out.push_str(&format!(
-        "Function BuildPrim{index}() As String\n    On Error GoTo HardFail\n    Const TOL As Double = 0.000001\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim skFeat As SldWorks.Feature\n    Dim primName As String\n    Dim dm As SldWorks.Dimension\n    Dim dd As SldWorks.DisplayDimension\n    Dim created As Double\n    Dim signVal As Double\n    Dim chk As Double\n    Dim v As Variant\n    Dim v2 As Variant\n    Dim wantSide As Long\n    Dim dirFlag As Boolean\n    Dim axClassU As Long\n    Dim axClassV As Long\n    Dim nameU As String\n    Dim nameV As String\n    Dim pA As Object\n    Dim pB As Object\n    Dim uncertain As Boolean\n    Dim cur As Object\n{entity_decls}"
+        "Function BuildPrim{index}() As String\n    On Error GoTo HardFail\n    Const TOL As Double = 0.000001\n    Dim ok As Boolean\n    Dim dimScale As Double\n    Dim feat As SldWorks.Feature\n    Dim skFeat As SldWorks.Feature\n    Dim primName As String\n    Dim dm As SldWorks.Dimension\n    Dim dd As SldWorks.DisplayDimension\n    Dim created As Double\n    Dim signVal As Double\n    Dim chk As Double\n    Dim v As Variant\n    Dim v2 As Variant\n    Dim wantSide As Long\n    Dim dirFlag As Boolean\n    Dim axClassU As Long\n    Dim axClassV As Long\n    Dim nameU As String\n    Dim nameV As String\n    Dim pA As Object\n    Dim pB As Object\n    Dim uncertain As Boolean\n    Dim cur As Object\n{entity_decls}"
     ));
     out.push_str(&format!("    ok = OpenSketchOnPlane({}, \"XY\")\n", index));
     out.push_str("    If Not ok Then gMsg = \"no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: \" & gProbeLog & \"; tree scan saw: \" & TreeSummary(): GoTo ExFail\n");
@@ -2765,14 +2765,14 @@ fn emit_size(entity: &str, size: &crate::replay::PrimSize, what: &str, circle: b
     ));
     if circle {
         out.push_str(&format!(
-            "    chk = Abs(created)\n    If Abs(chk - {mn}) <= TOL And Abs(chk - 2# * {mn}) <= TOL Then gMsg = \"{what} dimension kind cannot be established at this scale (the radius- and diameter-kind readings coincide within tolerance)\": GoTo ExFail\n    If Abs(chk - 2# * {mn}) <= TOL Then gMsg = \"{what} dimension reads the diameter (\" & Trim(Str(created)) & \"); the radius equation needs the radius-kind reading pinned by probe-primorient\": GoTo ExFail\n    If Abs(chk - {mn}) > TOL Then gMsg = \"{what} dimension measures \" & Trim(Str(created)) & \" but the source value is {mn}\": GoTo ExFail\n    If Abs(created - {mn}) <= TOL Then\n    signVal = 1#\n    Else\n    signVal = -1#\n    End If\n"
+            "    dimScale = 2#\n    chk = Abs(created)\n    If Abs(chk - 2# * {mn}) > TOL Then gMsg = \"{what} dimension measures \" & Trim(Str(created)) & \" but twice the source radius is {mn} * 2 (the API circle dimension is diameter-valued)\": GoTo ExFail\n    If Abs(created - 2# * {mn}) <= TOL Then\n    signVal = 1#\n    Else\n    signVal = -1#\n    End If\n"
         ));
     } else {
         out.push_str(&format!(
-            "    If Abs(created - {mn}) <= TOL Then\n    signVal = 1#\n    ElseIf Abs(created + {mn}) <= TOL Then\n    signVal = -1#\n    Else\n    gMsg = \"{what} dimension measures \" & Trim(Str(created)) & \" but the source value is {mn}\": GoTo ExFail\n    End If\n"
+            "    dimScale = 1#\n    If Abs(created - {mn}) <= TOL Then\n    signVal = 1#\n    ElseIf Abs(created + {mn}) <= TOL Then\n    signVal = -1#\n    Else\n    gMsg = \"{what} dimension measures \" & Trim(Str(created)) & \" but the source value is {mn}\": GoTo ExFail\n    End If\n"
         ));
     }
-    out.push_str(&format!("    dm.SystemValue = signVal * {mn}\n"));
+    out.push_str(&format!("    dm.SystemValue = signVal * dimScale * {mn}\n"));
     // Behavioural kind evidence: the value edit must carry exactly the
     // measured quantity (docs/mapping.md, Evidence rules).
     if circle {
@@ -2786,9 +2786,14 @@ fn emit_size(entity: &str, size: &crate::replay::PrimSize, what: &str, circle: b
     }
     if let Some(eq) = &size.equation {
         out.push_str(&slot_guards(eq, "ExFail"));
+        let rhs_expr = if circle {
+            format!("\"2*(\" & {} & \")\"", rhs_vba(eq))
+        } else {
+            rhs_vba(eq)
+        };
         out.push_str(&format!(
-            "    If Not AddDimEquation(dm, {}, signVal * {}, {}, signVal, primName) Then gMsg = \"{what} equation did not evaluate\": GoTo ExFail\n    SolveSketch primName, skFeat\n",
-            rhs_vba(eq),
+            "    If Not AddDimEquation(dm, {}, signVal * {} * dimScale, {}, signVal, primName, dimScale) Then gMsg = \"{what} equation did not evaluate\": GoTo ExFail\n    SolveSketch primName, skFeat\n",
+            rhs_expr,
             mn,
             eq.slot
         ));
@@ -2801,7 +2806,7 @@ fn emit_size_eq(size: &crate::replay::PrimSize, what: &str) -> String {
         Some(eq) => {
             let mut out = slot_guards(eq, "ExFail");
             out.push_str(&format!(
-            "    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name) Then gMsg = \"{} equation did not evaluate\": GoTo ExFail\n",
+            "    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name, 1#) Then gMsg = \"{} equation did not evaluate\": GoTo ExFail\n",
             rhs_vba(eq),
             vba_num(eq.expect_si.abs()),
             eq.slot,
@@ -2939,7 +2944,7 @@ fn emit_mod_subs(index: usize, md: &crate::replay::ModStep) -> String {
     for eq in &md.equations {
         out.push_str(&slot_guards(eq, "ExFail"));
         out.push_str(&format!(
-            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name) Then gMsg = \"the equation did not evaluate\": GoTo ExFail\n",
+            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name, 1#) Then gMsg = \"the equation did not evaluate\": GoTo ExFail\n",
             eq.which,
             eq.which,
             rhs_vba(eq),
@@ -2978,7 +2983,7 @@ fn dim_check(which: usize, expect: f64, what: &str) -> String {
 /// and the registered regSign normalizes downstream SlotRef references.
 fn dim_eq(which: usize, eq: &crate::replay::DimEquation, what: &str, fail: &str) -> String {
     format!(
-        "    Set dm = swDoc.Parameter(\"D{which}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the {what} dimension is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name) Then gMsg = \"{fail}\": GoTo ExFail\n",
+        "    Set dm = swDoc.Parameter(\"D{which}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the {what} dimension is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name, 1#) Then gMsg = \"{fail}\": GoTo ExFail\n",
         rhs_vba(eq),
         vba_num(eq.expect_si.abs()),
         eq.slot,
@@ -3005,7 +3010,7 @@ fn dim_eq_dyn(
     fail: &str,
 ) -> String {
     format!(
-        "    Set dm = swDoc.Parameter(\"D\" & Trim(Str({which_local})) & \"@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the {what} dimension is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name) Then gMsg = \"{fail}\": GoTo ExFail\n",
+        "    Set dm = swDoc.Parameter(\"D\" & Trim(Str({which_local})) & \"@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the {what} dimension is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name, 1#) Then gMsg = \"{fail}\": GoTo ExFail\n",
         rhs_vba(eq),
         vba_num(eq.expect_si.abs()),
         eq.slot,

@@ -435,7 +435,7 @@ Function Dims1() As Boolean
     v = sl1(0).GetStartPoint
     v2 = sl1(0).GetEndPoint
     chk = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))
-    If Abs(chk - Abs(dimScale * 0.04)) > TOL Then gMsg = "the value edit did not carry the length line 0 geometry (length " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(dimScale * 0.04))) & ")": GoTo DimFail
+    If Abs(chk - Abs(0.04)) > TOL Then gMsg = "the value edit did not carry the length line 0 geometry (length " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.04))) & ")": GoTo DimFail
     If Not AddDimEquation(dm, """width""", signVal * 0.04 * dimScale, 0, signVal, skName1, dimScale) Then GoTo DimFail
     SolveSketch skName1, skFeat1
     swDoc.ClearSelection2 True
@@ -584,6 +584,7 @@ Function BuildPrim2() As String
     On Error GoTo HardFail
     Const TOL As Double = 0.000001
     Dim ok As Boolean
+    Dim dimScale As Double
     Dim feat As SldWorks.Feature
     Dim skFeat As SldWorks.Feature
     Dim primName As String
@@ -684,6 +685,7 @@ Function BuildPrim2() As String
     Set dm = dd.GetDimension2(0)
     If dm Is Nothing Then gMsg = "the box length dimension has no core dimension": GoTo ExFail
     created = dm.SystemValue
+    dimScale = 1#
     If Abs(created - 0.08) <= TOL Then
     signVal = 1#
     ElseIf Abs(created + 0.08) <= TOL Then
@@ -691,14 +693,14 @@ Function BuildPrim2() As String
     Else
     gMsg = "the box length dimension measures " & Trim(Str(created)) & " but the source value is 0.08": GoTo ExFail
     End If
-    dm.SystemValue = signVal * 0.08
+    dm.SystemValue = signVal * dimScale * 0.08
     v = ln0.GetStartPoint
     v2 = ln0.GetEndPoint
     chk = Sqr((v2(0) - v(0)) ^ 2 + (v2(1) - v(1)) ^ 2)
     If Abs(chk - 0.08) > TOL Then gMsg = "the box length geometry did not follow the value edit (length " & Trim(Str(chk)) & ")": GoTo ExFail
     swDoc.ClearSelection2 True
     If regName(0) = "" Then gMsg = "the parameter slot 0 is not bound (its dimension was omitted or failed)": GoTo ExFail
-    If Not AddDimEquation(dm, SlotRef(0) & " * 2", signVal * 0.08, 1, signVal, primName) Then gMsg = "the box length equation did not evaluate": GoTo ExFail
+    If Not AddDimEquation(dm, SlotRef(0) & " * 2", signVal * 0.08 * dimScale, 1, signVal, primName, dimScale) Then gMsg = "the box length equation did not evaluate": GoTo ExFail
     SolveSketch primName, skFeat
     If Not ln1.Select(False) Then gMsg = "the box width would not select": GoTo ExFail
     Set dd = swDoc.AddDimension2(0#, 0#, 0#)
@@ -706,6 +708,7 @@ Function BuildPrim2() As String
     Set dm = dd.GetDimension2(0)
     If dm Is Nothing Then gMsg = "the box width dimension has no core dimension": GoTo ExFail
     created = dm.SystemValue
+    dimScale = 1#
     If Abs(created - 0.02) <= TOL Then
     signVal = 1#
     ElseIf Abs(created + 0.02) <= TOL Then
@@ -713,7 +716,7 @@ Function BuildPrim2() As String
     Else
     gMsg = "the box width dimension measures " & Trim(Str(created)) & " but the source value is 0.02": GoTo ExFail
     End If
-    dm.SystemValue = signVal * 0.02
+    dm.SystemValue = signVal * dimScale * 0.02
     v = ln1.GetStartPoint
     v2 = ln1.GetEndPoint
     chk = Sqr((v2(0) - v(0)) ^ 2 + (v2(1) - v(1)) ^ 2)
@@ -793,6 +796,7 @@ Function BuildPrim3() As String
     On Error GoTo HardFail
     Const TOL As Double = 0.000001
     Dim ok As Boolean
+    Dim dimScale As Double
     Dim feat As SldWorks.Feature
     Dim skFeat As SldWorks.Feature
     Dim primName As String
@@ -839,20 +843,19 @@ Function BuildPrim3() As String
     Set dm = dd.GetDimension2(0)
     If dm Is Nothing Then gMsg = "the cylinder radius dimension has no core dimension": GoTo ExFail
     created = dm.SystemValue
+    dimScale = 2#
     chk = Abs(created)
-    If Abs(chk - 0.04) <= TOL And Abs(chk - 2# * 0.04) <= TOL Then gMsg = "the cylinder radius dimension kind cannot be established at this scale (the radius- and diameter-kind readings coincide within tolerance)": GoTo ExFail
-    If Abs(chk - 2# * 0.04) <= TOL Then gMsg = "the cylinder radius dimension reads the diameter (" & Trim(Str(created)) & "); the radius equation needs the radius-kind reading pinned by probe-primorient": GoTo ExFail
-    If Abs(chk - 0.04) > TOL Then gMsg = "the cylinder radius dimension measures " & Trim(Str(created)) & " but the source value is 0.04": GoTo ExFail
-    If Abs(created - 0.04) <= TOL Then
+    If Abs(chk - 2# * 0.04) > TOL Then gMsg = "the cylinder radius dimension measures " & Trim(Str(created)) & " but twice the source radius is 0.04 * 2 (the API circle dimension is diameter-valued)": GoTo ExFail
+    If Abs(created - 2# * 0.04) <= TOL Then
     signVal = 1#
     Else
     signVal = -1#
     End If
-    dm.SystemValue = signVal * 0.04
+    dm.SystemValue = signVal * dimScale * 0.04
     chk = ci.GetRadius
     If Abs(chk - 0.04) > TOL Then gMsg = "the cylinder radius geometry did not follow the value edit (radius " & Trim(Str(chk)) & ")": GoTo ExFail
     swDoc.ClearSelection2 True
-    If Not AddDimEquation(dm, """width""", signVal * 0.04, 2, signVal, primName) Then gMsg = "the cylinder radius equation did not evaluate": GoTo ExFail
+    If Not AddDimEquation(dm, "2*(" & """width""" & ")", signVal * 0.04 * dimScale, 2, signVal, primName, dimScale) Then gMsg = "the cylinder radius equation did not evaluate": GoTo ExFail
     SolveSketch primName, skFeat
     SolveSketch primName, skFeat
     Set pA = ci.GetCenterPoint2

@@ -434,7 +434,7 @@ Function Dims1() As Boolean
     chk = nby - nay
     chk2 = nbx - nax
     End If
-    If Abs(Abs(chk) - Abs(0.04)) > TOL Then gMsg = "the value edit did not carry the DistanceX 0-1 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(dimScale * 0.04))) & ")": GoTo DimFail
+    If Abs(Abs(chk) - Abs(0.04)) > TOL Then gMsg = "the value edit did not carry the DistanceX 0-1 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.04))) & ")": GoTo DimFail
     If Abs(Abs(chk2) - Abs(other)) > TOL Then
     gMsg = "the value edit moved the perpendicular axis - the DistanceX 0-1 kind is wrong"
     GoTo DimFail
@@ -510,7 +510,7 @@ Function Dims1() As Boolean
     chk = nby - nay
     chk2 = nbx - nax
     End If
-    If Abs(Abs(chk) - Abs(0.08)) > TOL Then gMsg = "the value edit did not carry the DistanceY 0-5 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(dimScale * 0.08))) & ")": GoTo DimFail
+    If Abs(Abs(chk) - Abs(0.08)) > TOL Then gMsg = "the value edit did not carry the DistanceY 0-5 geometry (classified-axis " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.08))) & ")": GoTo DimFail
     If Abs(Abs(chk2) - Abs(other)) > TOL Then
     gMsg = "the value edit moved the perpendicular axis - the DistanceY 0-5 kind is wrong"
     GoTo DimFail
@@ -558,7 +558,7 @@ Function Dims1() As Boolean
     nbx = pt1(9).X
     nby = pt1(9).Y
     chk = Sqr((nbx - nax) * (nbx - nax) + (nby - nay) * (nby - nay))
-    If Abs(chk - Abs(dimScale * 0.08)) > TOL Then gMsg = "the value edit did not carry the distance 8-9 geometry (distance " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(dimScale * 0.08))) & ")": GoTo DimFail
+    If Abs(chk - Abs(0.08)) > TOL Then gMsg = "the value edit did not carry the distance 8-9 geometry (distance " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.08))) & ")": GoTo DimFail
     If regName(0) = "" Then gMsg = "the parameter slot 0 is not bound (its dimension was omitted or failed)": GoTo DimFail
     If Not AddDimEquation(dm, SlotRef(0) & " * 2", signVal * 0.08 * dimScale, 2, signVal, skName1, dimScale) Then GoTo DimFail
     SolveSketch skName1, skFeat1
@@ -602,7 +602,7 @@ Function Dims1() As Boolean
     nbx = pt1(5).X
     nby = pt1(5).Y
     chk = Sqr((nbx - nax) * (nbx - nax) + (nby - nay) * (nby - nay))
-    If Abs(chk - Abs(dimScale * 0.04)) > TOL Then gMsg = "the value edit did not carry the distance 3-5 geometry (distance " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(dimScale * 0.04))) & ")": GoTo DimFail
+    If Abs(chk - Abs(0.04)) > TOL Then gMsg = "the value edit did not carry the distance 3-5 geometry (distance " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.04))) & ")": GoTo DimFail
     If regName(1) = "" Then gMsg = "the parameter slot 1 is not bound (its dimension was omitted or failed)": GoTo DimFail
     If regName(0) = "" Then gMsg = "the parameter slot 0 is not bound (its dimension was omitted or failed)": GoTo DimFail
     If Not AddDimEquation(dm, "(" & SlotRef(1) & " - " & SlotRef(0) & ")", signVal * 0.04 * dimScale, 3, signVal, skName1, dimScale) Then GoTo DimFail

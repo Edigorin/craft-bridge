@@ -199,7 +199,7 @@ fn two_maps_keep_per_slot_state_and_restore_on_reference() {
     // Its depth equation reads the first sketch's registered dimension -
     // registry state is per slot across features, guarded dead-closed.
     assert!(
-        extrude.contains("AddDimEquation(dm, SlotRef(0), 0.03, 4, 1#, feat.Name)"),
+        extrude.contains("AddDimEquation(dm, SlotRef(0), 0.03, 4, 1#, feat.Name, 1#)"),
         "the extrude depth equation does not reference the earlier sketch's slot"
     );
     assert!(
