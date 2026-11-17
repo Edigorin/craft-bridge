@@ -319,14 +319,18 @@ fn the_decision_mirror_is_pinned_to_the_vbs_logic() {
         );
     }
     // Locale-independent parsing (finding 3): the strict period-decimal
-    // parser with Val; the locale-sensitive members never parse again.
+    // parser converts by locale-free arithmetic. VBScript has no Val (the
+    // first attempt called it and silently failed every parse), and the
+    // locale-sensitive members never parse again.
     assert!(
-        LOGIC.contains("Function ParsePeriod") && LOGIC.contains("value = Val(s)"),
+        LOGIC.contains("Function ParsePeriod")
+            && LOGIC.contains("value = PeriodValue(s)")
+            && LOGIC.contains("Function PeriodValue"),
         "the decision logic lost its locale-independent parser"
     );
     assert!(
-        !LOGIC.contains("IsNumeric(") && !LOGIC.contains("CDbl("),
-        "locale-sensitive numeric parsing survived in the decision logic"
+        !LOGIC.contains("IsNumeric(") && !LOGIC.contains("CDbl(") && !LOGIC.contains("Val(s)"),
+        "locale-sensitive or nonexistent numeric conversion survived in the decision logic"
     );
     // The zero-body/surface branches are REACHED (finding 2): the found
     // count allows zero and names surface/empty imports.
