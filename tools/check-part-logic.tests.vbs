@@ -91,9 +91,9 @@ b = MassLines("1.002", "1", "0.001", "0.01")
 Check "the absolute floor can widen the limit", (VerdictOf(b, "mass") = "pass"), b
 
 ' ---- the synthetic placeholder keeps its behavior ----
-b = MassSkipLines("0.01")
+b = MassSkipLines("0.01", False)
 Check "the skip placeholder is skipped on both entries", (VerdictOf(b, "mass") = "skipped" And VerdictOf(b, "mass_vs_reference") = "skipped"), b
-b = MassSkipLines("")
+b = MassSkipLines("", False)
 Check "an unreadable rebuilt volume still fails the data gate", (VerdictOf(b, "mass") = "fail" And VerdictOf(b, "mass_vs_reference") = "skipped"), b
 
 ' ---- reference import validation: assembly, surface, incomplete ----
