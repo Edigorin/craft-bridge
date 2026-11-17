@@ -780,14 +780,17 @@ End Function
 ' re-entry is required before any further sketch API call. The final state
 ' is verified; the refusal is raised only AFTER error handling is restored,
 ' so it cannot be swallowed.
-Sub SolveSketch(ByVal nm As String)
+Sub SolveSketch(ByVal nm As String, ByVal skObj As SldWorks.Feature)
 Dim sk As Object
+Dim okSel As Boolean
 swDoc.EditRebuild3
 On Error Resume Next
 Set sk = swSketchMgr.ActiveSketch
 If sk Is Nothing Then
 Err.Clear
-swDoc.Extension.SelectByID2 nm, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault
+okSel = False
+If Not skObj Is Nothing Then okSel = skObj.Select(False)
+If Not okSel Then swDoc.Extension.SelectByID2 nm, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault
 swSketchMgr.InsertSketch True
 Set sk = swSketchMgr.ActiveSketch
 End If

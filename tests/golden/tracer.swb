@@ -39,6 +39,7 @@ Const TT_REV_PROBE_CHIRALITY As Long = -1   ' the configuration chirality the re
 Const TT_PRIM_DIR_TRUE_SIDE As Long = 0   ' probe-primorient: the primitive height extends toward TT * the sketch normal for Dir=True (0 = unmeasured)
 Dim feat3 As SldWorks.Feature
 Dim skName2 As String
+Dim skFeat2 As SldWorks.Feature
 Dim pt2(0 To 7) As Object
 Dim sl2(0 To 3) As Object
 
@@ -161,12 +162,15 @@ Function BuildSketch2() As String
     On Error GoTo HardFail
     Dim ok As Boolean
     Dim skFeat As SldWorks.Feature
+    Dim uncertain As Boolean
     gMsg = ""
     gOmit = ""
     ok = OpenSketchOnPlane(2, "XY")
     If Not ok Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo SketchFailed
     Set skFeat = swSketchMgr.ActiveSketch
     skName2 = skFeat.Name
+    Set skFeat2 = FindFeatureByName(skName2, uncertain)
+    If skFeat2 Is Nothing Then gMsg = "the sketch feature object could not be captured for later selection: name=<" & skName2 & ">, tree scan saw: " & TreeSummary(): GoTo SketchFailed
     DrawGeometry2
     If Not Relations2() Then GoTo Degrade
     If Not Dims2() Then GoTo Degrade
@@ -245,32 +249,32 @@ Function Relations2() As Boolean
     If Not pt2(2).Select(True) Then gMsg = "the point slot 2 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgCoincident"
     swDoc.ClearSelection2 True
-    SolveSketch skName2
+    SolveSketch skName2, skFeat2
     If Abs(pt2(1).X - pt2(2).X) > TOL Or Abs(pt2(1).Y - pt2(2).Y) > TOL Then gMsg = "the points-coincident 1-2 relation did not coincide the points": GoTo RelFail
     If Not pt2(3).Select(False) Then gMsg = "the point slot 3 would not select": GoTo RelFail
     If Not pt2(4).Select(True) Then gMsg = "the point slot 4 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgCoincident"
     swDoc.ClearSelection2 True
-    SolveSketch skName2
+    SolveSketch skName2, skFeat2
     If Abs(pt2(3).X - pt2(4).X) > TOL Or Abs(pt2(3).Y - pt2(4).Y) > TOL Then gMsg = "the points-coincident 3-4 relation did not coincide the points": GoTo RelFail
     If Not pt2(5).Select(False) Then gMsg = "the point slot 5 would not select": GoTo RelFail
     If Not pt2(6).Select(True) Then gMsg = "the point slot 6 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgCoincident"
     swDoc.ClearSelection2 True
-    SolveSketch skName2
+    SolveSketch skName2, skFeat2
     If Abs(pt2(5).X - pt2(6).X) > TOL Or Abs(pt2(5).Y - pt2(6).Y) > TOL Then gMsg = "the points-coincident 5-6 relation did not coincide the points": GoTo RelFail
     If Not pt2(0).Select(False) Then gMsg = "the point slot 0 would not select": GoTo RelFail
     If Not pt2(7).Select(True) Then gMsg = "the point slot 7 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgCoincident"
     swDoc.ClearSelection2 True
-    SolveSketch skName2
+    SolveSketch skName2, skFeat2
     If Abs(pt2(0).X - pt2(7).X) > TOL Or Abs(pt2(0).Y - pt2(7).Y) > TOL Then gMsg = "the points-coincident 0-7 relation did not coincide the points": GoTo RelFail
     Select Case AxisClass(2, True)
     Case 0
     If Not sl2(0).Select(False) Then gMsg = "the line 0 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgHORIZONTAL2D"
     swDoc.ClearSelection2 True
-    SolveSketch skName2
+    SolveSketch skName2, skFeat2
     vA = sl2(0).GetStartPoint
     vB = sl2(0).GetEndPoint
     If Abs(vA(1) - vB(1)) > TOL Then gMsg = "the line-horizontal 0 relation did not level the classified axis": GoTo RelFail
@@ -278,7 +282,7 @@ Function Relations2() As Boolean
     If Not sl2(0).Select(False) Then gMsg = "the line 0 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgVERTICAL2D"
     swDoc.ClearSelection2 True
-    SolveSketch skName2
+    SolveSketch skName2, skFeat2
     vA = sl2(0).GetStartPoint
     vB = sl2(0).GetEndPoint
     If Abs(vA(0) - vB(0)) > TOL Then gMsg = "the line-horizontal 0 relation did not level the classified axis": GoTo RelFail
@@ -290,7 +294,7 @@ Function Relations2() As Boolean
     If Not sl2(1).Select(False) Then gMsg = "the line 1 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgHORIZONTAL2D"
     swDoc.ClearSelection2 True
-    SolveSketch skName2
+    SolveSketch skName2, skFeat2
     vA = sl2(1).GetStartPoint
     vB = sl2(1).GetEndPoint
     If Abs(vA(1) - vB(1)) > TOL Then gMsg = "the line-vertical 1 relation did not level the classified axis": GoTo RelFail
@@ -298,7 +302,7 @@ Function Relations2() As Boolean
     If Not sl2(1).Select(False) Then gMsg = "the line 1 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgVERTICAL2D"
     swDoc.ClearSelection2 True
-    SolveSketch skName2
+    SolveSketch skName2, skFeat2
     vA = sl2(1).GetStartPoint
     vB = sl2(1).GetEndPoint
     If Abs(vA(0) - vB(0)) > TOL Then gMsg = "the line-vertical 1 relation did not level the classified axis": GoTo RelFail
@@ -310,7 +314,7 @@ Function Relations2() As Boolean
     If Not sl2(2).Select(False) Then gMsg = "the line 2 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgHORIZONTAL2D"
     swDoc.ClearSelection2 True
-    SolveSketch skName2
+    SolveSketch skName2, skFeat2
     vA = sl2(2).GetStartPoint
     vB = sl2(2).GetEndPoint
     If Abs(vA(1) - vB(1)) > TOL Then gMsg = "the line-horizontal 2 relation did not level the classified axis": GoTo RelFail
@@ -318,7 +322,7 @@ Function Relations2() As Boolean
     If Not sl2(2).Select(False) Then gMsg = "the line 2 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgVERTICAL2D"
     swDoc.ClearSelection2 True
-    SolveSketch skName2
+    SolveSketch skName2, skFeat2
     vA = sl2(2).GetStartPoint
     vB = sl2(2).GetEndPoint
     If Abs(vA(0) - vB(0)) > TOL Then gMsg = "the line-horizontal 2 relation did not level the classified axis": GoTo RelFail
@@ -330,7 +334,7 @@ Function Relations2() As Boolean
     If Not sl2(3).Select(False) Then gMsg = "the line 3 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgHORIZONTAL2D"
     swDoc.ClearSelection2 True
-    SolveSketch skName2
+    SolveSketch skName2, skFeat2
     vA = sl2(3).GetStartPoint
     vB = sl2(3).GetEndPoint
     If Abs(vA(1) - vB(1)) > TOL Then gMsg = "the line-vertical 3 relation did not level the classified axis": GoTo RelFail
@@ -338,7 +342,7 @@ Function Relations2() As Boolean
     If Not sl2(3).Select(False) Then gMsg = "the line 3 would not select": GoTo RelFail
     swDoc.SketchAddConstraints "sgVERTICAL2D"
     swDoc.ClearSelection2 True
-    SolveSketch skName2
+    SolveSketch skName2, skFeat2
     vA = sl2(3).GetStartPoint
     vB = sl2(3).GetEndPoint
     If Abs(vA(0) - vB(0)) > TOL Then gMsg = "the line-vertical 3 relation did not level the classified axis": GoTo RelFail
@@ -420,7 +424,7 @@ Function Dims2() As Boolean
     chk = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))
     If Abs(chk - Abs(0.04)) > TOL Then gMsg = "the value edit did not carry the length line 0 geometry (length " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.04))) & ")": GoTo DimFail
     If Not AddDimEquation(dm, "40mm", signVal * 0.04, 0, signVal, skName2) Then GoTo DimFail
-    SolveSketch skName2
+    SolveSketch skName2, skFeat2
     swDoc.ClearSelection2 True
     ' dimension: length line 1
     ax = pt2(2).X
@@ -459,7 +463,7 @@ Function Dims2() As Boolean
     chk = Sqr((v2(0) - v(0)) * (v2(0) - v(0)) + (v2(1) - v(1)) * (v2(1) - v(1)))
     If Abs(chk - Abs(0.02)) > TOL Then gMsg = "the value edit did not carry the length line 1 geometry (length " & Trim(Str(chk)) & " after driving " & Trim(Str(Abs(0.02))) & ")": GoTo DimFail
     If Not AddDimEquation(dm, "20mm", signVal * 0.02, 1, signVal, skName2) Then GoTo DimFail
-    SolveSketch skName2
+    SolveSketch skName2, skFeat2
     swDoc.ClearSelection2 True
     Dims2 = True
     Exit Function
@@ -520,10 +524,11 @@ Function CleanSketch2() As Boolean
     Dim pts As Variant
     Dim ub As Long
     Dim skFeat As SldWorks.Feature
+    Dim uncertain As Boolean
     CleanSketch2 = False
     gCause = gMsg
     gMsg = ""
-    SolveSketch skName2
+    SolveSketch skName2, skFeat2
     ClearMap 2
     regName(0) = ""
     regSign(0) = 1#
@@ -591,6 +596,8 @@ Function CleanSketch2() As Boolean
     Set skFeat = swSketchMgr.ActiveSketch
     If skFeat Is Nothing Then gMsg = "the recreated sketch has no active sketch object": GoTo CleanFail
     skName2 = skFeat.Name
+    Set skFeat2 = FindFeatureByName(skName2, uncertain)
+    If skFeat2 Is Nothing Then gMsg = "the recreated sketch feature object could not be captured for selection: name=<" & skName2 & ">, tree scan saw: " & TreeSummary(): GoTo CleanFail
     CleanSketch2 = True
     Exit Function
 CleanFail:
@@ -611,8 +618,10 @@ Function BuildExtrude3() As String
     If TT_EX_DIR_TRUE_SIDE = 0 Then gMsg = "the extrude direction truth table is unmeasured: probe-extrudedir has not established which physical side the Dir flag sends material to; refusing to report created": GoTo ExFail
     wantSide = 1 * gMapSide(2)
     dirFlag = (wantSide = TT_EX_DIR_TRUE_SIDE)
-    ok = swDoc.Extension.SelectByID2(skName2, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-    If Not ok Then gMsg = "could not select the sketch for the extrude: name=<" & skName2 & ">": GoTo ExFail
+    ok = False
+    If Not skFeat2 Is Nothing Then ok = skFeat2.Select(False)
+    If Not ok Then ok = swDoc.Extension.SelectByID2(skName2, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    If Not ok Then gMsg = "could not select the sketch for the extrude (object and name selection both failed): name=<" & skName2 & ">, tree scan saw: " & TreeSummary(): GoTo ExFail
     Set feat = gFeatMgr.FeatureExtrusion2(True, False, dirFlag, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.012, 0#, False, False, False, False, 0#, 0#, False, False, False, False, True, True, True, 0, 0#, False)
     If feat Is Nothing Then gMsg = "the extrude was not created": GoTo ExFail
     Set dm = swDoc.Parameter("D1@" & feat.Name)
@@ -1167,14 +1176,17 @@ End Function
 ' re-entry is required before any further sketch API call. The final state
 ' is verified; the refusal is raised only AFTER error handling is restored,
 ' so it cannot be swallowed.
-Sub SolveSketch(ByVal nm As String)
+Sub SolveSketch(ByVal nm As String, ByVal skObj As SldWorks.Feature)
 Dim sk As Object
+Dim okSel As Boolean
 swDoc.EditRebuild3
 On Error Resume Next
 Set sk = swSketchMgr.ActiveSketch
 If sk Is Nothing Then
 Err.Clear
-swDoc.Extension.SelectByID2 nm, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault
+okSel = False
+If Not skObj Is Nothing Then okSel = skObj.Select(False)
+If Not okSel Then swDoc.Extension.SelectByID2 nm, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault
 swSketchMgr.InsertSketch True
 Set sk = swSketchMgr.ActiveSketch
 End If

@@ -279,6 +279,7 @@ pub fn emit(
     }
     for (index, sk) in &sketches {
         out.push_str(&format!("Dim skName{index} As String\n"));
+        out.push_str(&format!("Dim skFeat{index} As SldWorks.Feature\n"));
         out.push_str(&format!(
             "Dim pt{index}(0 To {}) As Object\n",
             sk.slot_count().saturating_sub(1)
@@ -1093,14 +1094,17 @@ End Function
 ' re-entry is required before any further sketch API call. The final state
 ' is verified; the refusal is raised only AFTER error handling is restored,
 ' so it cannot be swallowed.
-Sub SolveSketch(ByVal nm As String)
+Sub SolveSketch(ByVal nm As String, ByVal skObj As SldWorks.Feature)
 Dim sk As Object
+Dim okSel As Boolean
 swDoc.EditRebuild3
 On Error Resume Next
 Set sk = swSketchMgr.ActiveSketch
 If sk Is Nothing Then
 Err.Clear
-swDoc.Extension.SelectByID2 nm, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault
+okSel = False
+If Not skObj Is Nothing Then okSel = skObj.Select(False)
+If Not okSel Then swDoc.Extension.SelectByID2 nm, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault
 swSketchMgr.InsertSketch True
 Set sk = swSketchMgr.ActiveSketch
 End If
@@ -1425,7 +1429,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     };
     out.push_str(&format!("' Sketch step {index}: {}\n", vb_lit(&sk.name)));
     out.push_str(&format!(
-        "Function BuildSketch{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim skFeat As SldWorks.Feature\n    gMsg = \"\"\n    gOmit = \"\"\n"
+        "Function BuildSketch{index}() As String\n    On Error GoTo HardFail\n    Dim ok As Boolean\n    Dim skFeat As SldWorks.Feature\n    Dim uncertain As Boolean\n    gMsg = \"\"\n    gOmit = \"\"\n"
     ));
     out.push_str(&format!(
         "    ok = OpenSketchOnPlane({}, {})\n",
@@ -1438,7 +1442,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
         frame_desc(solidcraft_frame(sk.plane))
     ));
     out.push_str(&format!(
-        "    Set skFeat = swSketchMgr.ActiveSketch\n    skName{index} = skFeat.Name\n",
+        "    Set skFeat = swSketchMgr.ActiveSketch\n    skName{index} = skFeat.Name\n    Set skFeat{index} = FindFeatureByName(skName{index}, uncertain)\n    If skFeat{index} Is Nothing Then gMsg = \"the sketch feature object could not be captured for later selection: name=<\" & skName{index} & \">, tree scan saw: \" & TreeSummary(): GoTo SketchFailed\n",
     ));
     out.push_str(&format!("    DrawGeometry{index}\n"));
     out.push_str(&format!(
@@ -1603,7 +1607,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     // this sketch registered are cleared so the redraw rebinds them under
     // fresh runtime names.
     out.push_str(&format!(
-        "Function CleanSketch{index}() As Boolean\n    On Error GoTo CleanFail\n    Dim anySel As Boolean\n    Dim okSel As Boolean\n    Dim cleanOk As Boolean\n    Dim pts As Variant\n    Dim ub As Long\n    Dim skFeat As SldWorks.Feature\n    CleanSketch{index} = False\n    gCause = gMsg\n    gMsg = \"\"\n    SolveSketch skName{index}\n    ClearMap {index}\n"
+        "Function CleanSketch{index}() As Boolean\n    On Error GoTo CleanFail\n    Dim anySel As Boolean\n    Dim okSel As Boolean\n    Dim cleanOk As Boolean\n    Dim pts As Variant\n    Dim ub As Long\n    Dim skFeat As SldWorks.Feature\n    Dim uncertain As Boolean\n    CleanSketch{index} = False\n    gCause = gMsg\n    gMsg = \"\"\n    SolveSketch skName{index}, skFeat{index}\n    ClearMap {index}\n"
     ));
     for (_, eq) in &sk.dim_equations {
         out.push_str(&format!(
@@ -1633,7 +1637,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
         "    Set skFeat = swSketchMgr.ActiveSketch\n    If skFeat Is Nothing Then gMsg = \"the recreated sketch has no active sketch object\": GoTo CleanFail\n",
     );
     out.push_str(&format!(
-        "    skName{index} = skFeat.Name\n    CleanSketch{index} = True\n    Exit Function\nCleanFail:\n    If Err.Number <> 0 Then gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description\n    gMsg = gCause & \" | recreate refused: \" & gMsg\n    CleanSketch{index} = False\nEnd Function\n\n"
+        "    skName{index} = skFeat.Name\n    Set skFeat{index} = FindFeatureByName(skName{index}, uncertain)\n    If skFeat{index} Is Nothing Then gMsg = \"the recreated sketch feature object could not be captured for selection: name=<\" & skName{index} & \">, tree scan saw: \" & TreeSummary(): GoTo CleanFail\n    CleanSketch{index} = True\n    Exit Function\nCleanFail:\n    If Err.Number <> 0 Then gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description\n    gMsg = gCause & \" | recreate refused: \" & gMsg\n    CleanSketch{index} = False\nEnd Function\n\n"
     ));
     out
 }
@@ -1655,7 +1659,7 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
     // SketchAddConstraints), so application is established behaviourally:
     // the constraint's own predicate must hold on the solved geometry.
     let apply = |c: &str| {
-        format!("    swDoc.SketchAddConstraints \"{c}\"\n    swDoc.ClearSelection2 True\n    SolveSketch skName{index}\n")
+        format!("    swDoc.SketchAddConstraints \"{c}\"\n    swDoc.ClearSelection2 True\n    SolveSketch skName{index}, skFeat{index}\n")
     };
     // Level checks per classified axis: 0 = the pair shares t (Y), 1 = s (X).
     let level_pts = |a: usize, b: usize, axis0: bool, label: &str| {
@@ -1684,7 +1688,7 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
                       name0: &str,
                       name1: &str| {
         format!(
-            "    Select Case AxisClass({index}, {is_horiz})\n    Case 0\n{sel}    swDoc.SketchAddConstraints \"{name0}\"\n    swDoc.ClearSelection2 True\n    SolveSketch skName{index}\n{check0}    Case 1\n{sel}    swDoc.SketchAddConstraints \"{name1}\"\n    swDoc.ClearSelection2 True\n    SolveSketch skName{index}\n{check1}    Case Else\n    gOmit = gOmit & \"relation {label}: the SC {dir} axis is not axis-aligned in this sketch frame (non-permutation map); \"\n    End Select\n"
+            "    Select Case AxisClass({index}, {is_horiz})\n    Case 0\n{sel}    swDoc.SketchAddConstraints \"{name0}\"\n    swDoc.ClearSelection2 True\n    SolveSketch skName{index}, skFeat{index}\n{check0}    Case 1\n{sel}    swDoc.SketchAddConstraints \"{name1}\"\n    swDoc.ClearSelection2 True\n    SolveSketch skName{index}, skFeat{index}\n{check1}    Case Else\n    gOmit = gOmit & \"relation {label}: the SC {dir} axis is not axis-aligned in this sketch frame (non-permutation map); \"\n    End Select\n"
         )
     };
     match *rel {
@@ -1977,7 +1981,7 @@ fn emit_dimension(
     if let Some(equation) = equation {
         tail.push_str(&slot_guards(equation, "DimFail"));
         tail.push_str(&format!(
-            "    If Not AddDimEquation(dm, {}, signVal * {}, {}, signVal, skName{index}) Then GoTo DimFail\n    SolveSketch skName{index}\n",
+            "    If Not AddDimEquation(dm, {}, signVal * {}, {}, signVal, skName{index}) Then GoTo DimFail\n    SolveSketch skName{index}, skFeat{index}\n",
             rhs_vba(equation),
             vba_num(equation.expect_si),
             equation.slot
@@ -2039,7 +2043,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
         "    If Not gMapValid({sk}) Then gMsg = \"frame adaptation: the profile sketch carries no valid adaptation map; refusing to report created\": GoTo ExFail\n"
     ));
     let select_sketch = format!(
-        "    ok = swDoc.Extension.SelectByID2(skName{sk}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n    If Not ok Then gMsg = \"could not select the sketch for the extrude: name=<\" & skName{sk} & \">\": GoTo ExFail\n"
+        "    ok = False\n    If Not skFeat{sk} Is Nothing Then ok = skFeat{sk}.Select(False)\n    If Not ok Then ok = swDoc.Extension.SelectByID2(skName{sk}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n    If Not ok Then gMsg = \"could not select the sketch for the extrude (object and name selection both failed): name=<\" & skName{sk} & \">, tree scan saw: \" & TreeSummary(): GoTo ExFail\n"
     );
     let no_depth_note =
         "    ' through-all: the end condition is the geometry; depth readback does not apply\n";
@@ -2063,7 +2067,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
             for eq in &ex.equations {
                 body.push_str(&slot_guards(eq, "ExFail"));
                 body.push_str(&format!(
-                    "    Set dm = swDoc.Parameter(\"D1@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D1 is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
+                    "    Set dm = swDoc.Parameter(\"D1@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D1 is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
                     rhs_vba(eq),
                     vba_num(eq.expect_si.abs()),
                     eq.slot,
@@ -2089,7 +2093,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
             for eq in &ex.equations {
                 body.push_str(&slot_guards(eq, "ExFail"));
                 body.push_str(&format!(
-                    "    Set dm = swDoc.Parameter(\"D1@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D1 is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
+                    "    Set dm = swDoc.Parameter(\"D1@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude dimension D1 is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
                     rhs_vba(eq),
                     vba_num(eq.expect_si.abs()),
                     eq.slot,
@@ -2141,7 +2145,7 @@ fn emit_extrude_subs(index: usize, ex: &ExtrudeStep) -> String {
                     let which = if eq.which == 1 { "wFirst" } else { "wSecond" };
                     body.push_str(&slot_guards(eq, "ExFail"));
                     body.push_str(&format!(
-                        "    Set dm = swDoc.Parameter(\"D\" & Trim(Str({which})) & \"@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude depth dimension is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
+                        "    Set dm = swDoc.Parameter(\"D\" & Trim(Str({which})) & \"@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the extrude depth dimension is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name) Then gMsg = \"the extrude depth equation did not evaluate\": GoTo ExFail\n",
                         rhs_vba(eq),
                         vba_num(eq.expect_si.abs()),
                         eq.slot,
@@ -2292,7 +2296,7 @@ fn emit_revolve_subs(index: usize, rv: &RevolveStep, sk: Option<&SketchStep>) ->
     )
     };
     let select_sketch = format!(
-        "    ok = swDoc.Extension.SelectByID2(skName{sidx}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n    If Not ok Then gMsg = \"could not select the profile sketch: name=<\" & skName{sidx} & \">\": GoTo ExFail\n"
+        "    ok = False\n    If Not skFeat{sidx} Is Nothing Then ok = skFeat{sidx}.Select(False)\n    If Not ok Then ok = swDoc.Extension.SelectByID2(skName{sidx}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n    If Not ok Then gMsg = \"could not select the profile sketch (object and name selection both failed): name=<\" & skName{sidx} & \">, tree scan saw: \" & TreeSummary(): GoTo ExFail\n"
     );
     if let Some(reason) = refusal {
         body.push_str(&format!(
@@ -2482,7 +2486,7 @@ fn emit_helper_axis(sidx: usize, axis: &AxisSel, locals: &mut String) -> String 
     );
     out.push_str("    swDoc.SketchAddConstraints \"sgFix\"\n    swDoc.ClearSelection2 True\n");
     out.push_str(&format!(
-        "    SolveSketch skName{sidx}\n    vA = ax.GetStartPoint\n    vB = ax.GetEndPoint\n    If Abs(vA(0) - MapU({sidx}, {}, {})) > 0.000001 Then gMsg = \"the revolve helper axis start does not sit where the map put it\": GoTo ExFail\n    If Abs(vA(1) - MapV({sidx}, {}, {})) > 0.000001 Then gMsg = \"the revolve helper axis start does not sit where the map put it\": GoTo ExFail\n    If Abs(vA(2)) > 0.000001 Then gMsg = \"the revolve helper axis start is off the sketch plane\": GoTo ExFail\n    If Abs(vB(0) - MapU({sidx}, {}, {})) > 0.000001 Then gMsg = \"the revolve helper axis end does not sit where the map put it\": GoTo ExFail\n    If Abs(vB(1) - MapV({sidx}, {}, {})) > 0.000001 Then gMsg = \"the revolve helper axis end does not sit where the map put it\": GoTo ExFail\n    If Abs(vB(2)) > 0.000001 Then gMsg = \"the revolve helper axis end is off the sketch plane\": GoTo ExFail\n",
+        "    SolveSketch skName{sidx}, skFeat{sidx}\n    vA = ax.GetStartPoint\n    vB = ax.GetEndPoint\n    If Abs(vA(0) - MapU({sidx}, {}, {})) > 0.000001 Then gMsg = \"the revolve helper axis start does not sit where the map put it\": GoTo ExFail\n    If Abs(vA(1) - MapV({sidx}, {}, {})) > 0.000001 Then gMsg = \"the revolve helper axis start does not sit where the map put it\": GoTo ExFail\n    If Abs(vA(2)) > 0.000001 Then gMsg = \"the revolve helper axis start is off the sketch plane\": GoTo ExFail\n    If Abs(vB(0) - MapU({sidx}, {}, {})) > 0.000001 Then gMsg = \"the revolve helper axis end does not sit where the map put it\": GoTo ExFail\n    If Abs(vB(1) - MapV({sidx}, {}, {})) > 0.000001 Then gMsg = \"the revolve helper axis end does not sit where the map put it\": GoTo ExFail\n    If Abs(vB(2)) > 0.000001 Then gMsg = \"the revolve helper axis end is off the sketch plane\": GoTo ExFail\n",
         vba_num(x1),
         vba_num(y1),
         vba_num(x1),
@@ -2519,7 +2523,7 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
         PrimKind::Cylinder => "    Dim ci As Object\n",
     };
     out.push_str(&format!(
-        "Function BuildPrim{index}() As String\n    On Error GoTo HardFail\n    Const TOL As Double = 0.000001\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim skFeat As SldWorks.Feature\n    Dim primName As String\n    Dim dm As SldWorks.Dimension\n    Dim dd As SldWorks.DisplayDimension\n    Dim created As Double\n    Dim signVal As Double\n    Dim chk As Double\n    Dim v As Variant\n    Dim v2 As Variant\n    Dim wantSide As Long\n    Dim dirFlag As Boolean\n    Dim axClassU As Long\n    Dim axClassV As Long\n    Dim nameU As String\n    Dim nameV As String\n    Dim pA As Object\n    Dim pB As Object\n{entity_decls}"
+        "Function BuildPrim{index}() As String\n    On Error GoTo HardFail\n    Const TOL As Double = 0.000001\n    Dim ok As Boolean\n    Dim feat As SldWorks.Feature\n    Dim skFeat As SldWorks.Feature\n    Dim primName As String\n    Dim dm As SldWorks.Dimension\n    Dim dd As SldWorks.DisplayDimension\n    Dim created As Double\n    Dim signVal As Double\n    Dim chk As Double\n    Dim v As Variant\n    Dim v2 As Variant\n    Dim wantSide As Long\n    Dim dirFlag As Boolean\n    Dim axClassU As Long\n    Dim axClassV As Long\n    Dim nameU As String\n    Dim nameV As String\n    Dim pA As Object\n    Dim pB As Object\n    Dim uncertain As Boolean\n    Dim cur As Object\n{entity_decls}"
     ));
     out.push_str(&format!("    ok = OpenSketchOnPlane({}, \"XY\")\n", index));
     out.push_str("    If Not ok Then gMsg = \"no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: \" & gProbeLog & \"; tree scan saw: \" & TreeSummary(): GoTo ExFail\n");
@@ -2582,7 +2586,7 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
     // The sketch name is captured before any equation rebuild: SolveSketch
     // re-enters the sketch by name after AddDimEquation's EditRebuild3
     // exits sketch edit (seat-measured semantics).
-    out.push_str("    Set skFeat = swSketchMgr.ActiveSketch\n    If skFeat Is Nothing Then gMsg = \"the primitive sketch was not created\": GoTo ExFail\n    primName = skFeat.Name\n");
+    out.push_str("    Set skFeat = swSketchMgr.ActiveSketch\n    If skFeat Is Nothing Then gMsg = \"the primitive sketch was not created\": GoTo ExFail\n    primName = skFeat.Name\n    Set skFeat = FindFeatureByName(primName, uncertain)\n    If skFeat Is Nothing Then gMsg = \"the primitive sketch feature object could not be captured for selection: name=<\" & primName & \">, tree scan saw: \" & TreeSummary(): GoTo ExFail\n");
     match pr.kind {
         PrimKind::Box => {
             // The shape contract (parameter-edit safety): coincident
@@ -2637,7 +2641,7 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
     // helper-axis standard): after the solve the drawn geometry must sit
     // exactly where the map put it. The eight edge endpoints against the
     // four mapped corners also prove the contour stayed closed.
-    out.push_str("    SolveSketch primName\n");
+    out.push_str("    SolveSketch primName, skFeat\n");
     match pr.kind {
         PrimKind::Box => {
             let l = pr.sizes[0].value / 1000.0;
@@ -2669,13 +2673,13 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
         }
     }
     out.push_str(
-        "    Set skFeat = swSketchMgr.ActiveSketch\n    If skFeat Is Nothing Then gMsg = \"the primitive sketch was not open at closing\": GoTo ExFail\n    swDoc.ClearSelection2 True\n    swSketchMgr.InsertSketch True\n",
+        "    Set cur = swSketchMgr.ActiveSketch\n    If cur Is Nothing Then gMsg = \"the primitive sketch was not open at closing\": GoTo ExFail\n    swDoc.ClearSelection2 True\n    swSketchMgr.InsertSketch True\n",
     );
     // The blind extrude carries the last size (height).
     let height = pr.sizes.last().map(|s| s.value / 1000.0).unwrap_or(0.0);
-    out.push_str("    ok = swDoc.Extension.SelectByID2(primName, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n");
+    out.push_str("    ok = False\n    If Not skFeat Is Nothing Then ok = skFeat.Select(False)\n    If Not ok Then ok = swDoc.Extension.SelectByID2(primName, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n");
     out.push_str(
-        "    If Not ok Then gMsg = \"could not select the primitive sketch: name=<\" & primName & \">\": GoTo ExFail\n",
+        "    If Not ok Then gMsg = \"could not select the primitive sketch (object and name selection both failed): name=<\" & primName & \">, tree scan saw: \" & TreeSummary(): GoTo ExFail\n",
     );
     // The operation orientation: the SolidCraft height extends toward +Z
     // (the XY source normal), so its end sits toward +1 * gMapSide in
@@ -2741,7 +2745,7 @@ fn emit_size(entity: &str, size: &crate::replay::PrimSize, what: &str, circle: b
     if let Some(eq) = &size.equation {
         out.push_str(&slot_guards(eq, "ExFail"));
         out.push_str(&format!(
-            "    If Not AddDimEquation(dm, {}, signVal * {}, {}, signVal, primName) Then gMsg = \"{what} equation did not evaluate\": GoTo ExFail\n    SolveSketch primName\n",
+            "    If Not AddDimEquation(dm, {}, signVal * {}, {}, signVal, primName) Then gMsg = \"{what} equation did not evaluate\": GoTo ExFail\n    SolveSketch primName, skFeat\n",
             rhs_vba(eq),
             mn,
             eq.slot
@@ -2755,7 +2759,7 @@ fn emit_size_eq(size: &crate::replay::PrimSize, what: &str) -> String {
         Some(eq) => {
             let mut out = slot_guards(eq, "ExFail");
             out.push_str(&format!(
-            "    If Not AddDimEquation(dm, {}, {}, {}, {}) Then gMsg = \"{} equation did not evaluate\": GoTo ExFail\n",
+            "    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name) Then gMsg = \"{} equation did not evaluate\": GoTo ExFail\n",
             rhs_vba(eq),
             vba_num(eq.expect_si.abs()),
             eq.slot,
@@ -2893,7 +2897,7 @@ fn emit_mod_subs(index: usize, md: &crate::replay::ModStep) -> String {
     for eq in &md.equations {
         out.push_str(&slot_guards(eq, "ExFail"));
         out.push_str(&format!(
-            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}) Then gMsg = \"the equation did not evaluate\": GoTo ExFail\n",
+            "    Set dm = swDoc.Parameter(\"D{}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the dimension D{} is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name) Then gMsg = \"the equation did not evaluate\": GoTo ExFail\n",
             eq.which,
             eq.which,
             rhs_vba(eq),
@@ -2932,7 +2936,7 @@ fn dim_check(which: usize, expect: f64, what: &str) -> String {
 /// and the registered regSign normalizes downstream SlotRef references.
 fn dim_eq(which: usize, eq: &crate::replay::DimEquation, what: &str, fail: &str) -> String {
     format!(
-        "    Set dm = swDoc.Parameter(\"D{which}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the {what} dimension is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}) Then gMsg = \"{fail}\": GoTo ExFail\n",
+        "    Set dm = swDoc.Parameter(\"D{which}@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the {what} dimension is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name) Then gMsg = \"{fail}\": GoTo ExFail\n",
         rhs_vba(eq),
         vba_num(eq.expect_si.abs()),
         eq.slot,
@@ -2959,7 +2963,7 @@ fn dim_eq_dyn(
     fail: &str,
 ) -> String {
     format!(
-        "    Set dm = swDoc.Parameter(\"D\" & Trim(Str({which_local})) & \"@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the {what} dimension is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}) Then gMsg = \"{fail}\": GoTo ExFail\n",
+        "    Set dm = swDoc.Parameter(\"D\" & Trim(Str({which_local})) & \"@\" & feat.Name)\n    If dm Is Nothing Then gMsg = \"the {what} dimension is missing\": GoTo ExFail\n    If Not AddDimEquation(dm, {}, {}, {}, {}, feat.Name) Then gMsg = \"{fail}\": GoTo ExFail\n",
         rhs_vba(eq),
         vba_num(eq.expect_si.abs()),
         eq.slot,
@@ -3053,7 +3057,7 @@ Function Fallback{index}() As String\n\
 /// the pre-step state) and clear their live bindings.
 fn emit_delete_created(steps: &[PlannedStep]) -> String {
     let mut out = String::new();
-    out.push_str("' Restore the pre-step state: delete everything created so far.\nSub DeleteCreated()\n    On Error Resume Next\n    Dim sel As Boolean\n");
+    out.push_str("' Restore the pre-step state: delete everything created so far.\nSub DeleteCreated()\n    On Error Resume Next\n    Dim sel As Boolean\n    Dim selOk As Boolean\n");
     for step in steps.iter().rev() {
         match &step.work {
             Work::Extrude(_) | Work::Revolve(_) | Work::Primitive(_) | Work::Modifier(_) => {
@@ -3064,7 +3068,7 @@ fn emit_delete_created(steps: &[PlannedStep]) -> String {
             }
             Work::Sketch(_) => {
                 out.push_str(&format!(
-                    "    If skName{idx} <> \"\" Then\n        swDoc.Extension.SelectByID2(skName{idx}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n        swDoc.EditDelete\n        skName{idx} = \"\"\n        ClearMap {idx}\n    End If\n",
+                    "    If skName{idx} <> \"\" Then\n        selOk = False\n        If Not skFeat{idx} Is Nothing Then selOk = skFeat{idx}.Select(False)\n        If Not selOk Then selOk = swDoc.Extension.SelectByID2(skName{idx}, \"SKETCH\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n        If selOk Then swDoc.EditDelete\n        Set skFeat{idx} = Nothing\n        skName{idx} = \"\"\n        ClearMap {idx}\n    End If\n",
                     idx = step.index
                 ));
             }

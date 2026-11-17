@@ -2117,13 +2117,18 @@ fn close_mode_parsing_is_tri_state_and_fail_closed() {
 use craft_bridge::replay::{ExtrudeKind, RevolveKind};
 use craft_bridge::truth;
 
-/// The builder region of an emitted macro function (up to its End Function).
+/// The builder region of an emitted macro procedure (up to its end).
 fn builder_region<'a>(text: &'a str, fname: &str) -> &'a str {
-    let i = text
+    let start = text
         .find(&format!("Function {fname}("))
+        .or_else(|| text.find(&format!("Sub {fname}(")))
         .unwrap_or_else(|| panic!("no {fname} builder"));
-    let j = text[i..].find("End Function").expect("the builder ends") + i;
-    &text[i..j]
+    let end = text[start..]
+        .find("End Function")
+        .or_else(|| text[start..].find("End Sub"))
+        .expect("the builder ends")
+        + start;
+    &text[start..end]
 }
 
 #[test]
@@ -2418,7 +2423,9 @@ fn extrude_directions_fold_signs_and_refuse_unrepresentable_shapes() {
     let text = fs::read_to_string(case.dir.path().join("neg2.swb")).unwrap();
     let blind = builder_region(&text, "BuildExtrude3");
     assert!(
-        blind.contains("-1#) Then gMsg = \"the extrude depth equation did not evaluate\""),
+        blind.contains(
+            "-1#, feat.Name) Then gMsg = \"the extrude depth equation did not evaluate\""
+        ),
         "the negative source sign did not travel through signVal"
     );
     assert!(
@@ -3020,6 +3027,116 @@ fn assert_locals_declared(text: &str, what: &str) {
             }
         }
     }
+}
+
+#[test]
+fn sketch_selection_uses_the_stored_feature_object() {
+    // Seat evidence (2026-11-17): SelectByID2 by SKETCH name returns False
+    // once a probe sketch has been created and deleted before the target
+    // sketch (the tracer flow) - the name is right and the selection still
+    // fails. A LIVE FEATURE OBJECT's Select is the pinned-reliable path
+    // (probe-endpoints, DiscardProbeSketch), with the named selection kept
+    // as fallback and TreeSummary() in the refusal for the next evidence
+    // round.
+    let case = Case::new(TRACER);
+    case.build_to("sell.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("sell.swb")).unwrap();
+    // Capture: the proven tree walk stores the object per sketch step.
+    let sketch = builder_region(&text, "BuildSketch2");
+    assert!(
+        sketch.contains("Set skFeat2 = FindFeatureByName(skName2, uncertain)")
+            && sketch.contains("the sketch feature object could not be captured"),
+        "the sketch feature object is not captured through the proven walk"
+    );
+    // Selection: object first, named fallback, TreeSummary on refusal.
+    let extrude = builder_region(&text, "BuildExtrude3");
+    assert!(
+        extrude.contains("If Not skFeat2 Is Nothing Then ok = skFeat2.Select(False)"),
+        "the extrude does not select through the stored feature object"
+    );
+    assert!(
+        extrude.contains("If Not ok Then ok = swDoc.Extension.SelectByID2(skName2,")
+            && extrude.contains("object and name selection both failed")
+            && extrude.contains("TreeSummary()"),
+        "the extrude lost its named fallback or the TreeSummary refusal"
+    );
+    // SolveSketch re-enters through the same object, keeping the hardened
+    // final-state gate and the raise-after-On-Error-GoTo-0 form.
+    let solve = builder_region(&text, "SolveSketch");
+    assert!(
+        solve.contains("Sub SolveSketch(ByVal nm As String, ByVal skObj As SldWorks.Feature)")
+            && solve.contains("If Not skObj Is Nothing Then okSel = skObj.Select(False)"),
+        "SolveSketch does not re-enter through the stored feature object"
+    );
+    assert!(
+        solve.contains("On Error GoTo 0") && solve.contains("If sk Is Nothing Then Err.Raise"),
+        "SolveSketch lost its verified-final-state gate or raise form"
+    );
+    assert!(
+        text.contains("SolveSketch skName2, skFeat2"),
+        "a SolveSketch call site does not pass the stored object"
+    );
+    // The delete path selects through the object and never blind-deletes.
+    // DeleteCreated is emitted only for snapshot-carrying artifacts.
+    let dir = tempfile::tempdir().unwrap();
+    let recipe_path = dir.path().join("script.json");
+    let step_path = dir.path().join("part.step");
+    let artifact = dir.path().join("stop.craftx");
+    fs::write(&recipe_path, TRACER_STOP).unwrap();
+    fs::write(&step_path, STEP_FIXTURE).unwrap();
+    pack::pack(
+        &PackOptions {
+            recipe: &recipe_path,
+            step: &step_path,
+            out: &artifact,
+            warnings: None,
+            name: None,
+            overwrite: false,
+            snapshots: vec![(1, step_path.as_path())],
+            final_snapshot: None,
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    let out = dir.path().join("stop.swb");
+    build::build(
+        &BuildOptions {
+            artifact: &artifact,
+            out: &out,
+            plan: None,
+            plan_text: None,
+            overwrite: false,
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    let stop_text = fs::read_to_string(&out).unwrap();
+    let deleted = builder_region(&stop_text, "DeleteCreated");
+    assert!(
+        deleted.contains("If Not skFeat0 Is Nothing Then selOk = skFeat0.Select(False)")
+            && deleted.contains("If selOk Then swDoc.EditDelete")
+            && deleted.contains("Set skFeat0 = Nothing"),
+        "DeleteCreated still selects the sketch by name alone"
+    );
+    // Recreate re-captures into the same slot.
+    let clean = builder_region(&text, "CleanSketch2");
+    assert!(
+        clean.contains("Set skFeat2 = FindFeatureByName(skName2, uncertain)")
+            && clean.contains("SolveSketch skName2, skFeat2"),
+        "CleanSketch does not re-capture the recreated sketch object"
+    );
+    // The primitive builder follows the same path with its local object.
+    let case = Case::new(TRACER_PRIM);
+    case.build_to("sell2.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("sell2.swb")).unwrap();
+    let prim = builder_region(&text, "BuildPrim2");
+    assert!(
+        prim.contains("Set skFeat = FindFeatureByName(primName, uncertain)")
+            && prim.contains("If Not skFeat Is Nothing Then ok = skFeat.Select(False)")
+            && prim.contains("object and name selection both failed")
+            && prim.contains("SolveSketch primName, skFeat"),
+        "the primitive builder does not select through its stored feature object"
+    );
 }
 
 #[test]

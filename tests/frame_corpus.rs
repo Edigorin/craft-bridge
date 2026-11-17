@@ -103,9 +103,7 @@ fn sign_chain_equations_flow_through_slotrefs() {
     // dimension values is a seat question; the generated coverage pins both
     // branches and the seat check (expect.txt) reads the stored equation.
     assert!(
-        text.contains(
-            "If Not AddDimEquation(dm, \"40mm\", signVal * 0.04, 0, signVal, skName"
-        ),
+        text.contains("If Not AddDimEquation(dm, \"40mm\", signVal * 0.04, 0, signVal, skName"),
         "the upstream dimension does not register its slot with the runtime sign"
     );
     for needle in ["signVal = 1#", "signVal = -1#", "but the source value is"] {
@@ -123,11 +121,15 @@ fn sign_chain_equations_flow_through_slotrefs() {
     // Downstream equations reference the upstream slots through SlotRef -
     // two hops: slot 0 -> slot 1 -> slot 2.
     assert!(
-        text.contains("AddDimEquation(dm, SlotRef(0) & \" * 2\", signVal * 0.08, 1, signVal, skName"),
+        text.contains(
+            "AddDimEquation(dm, SlotRef(0) & \" * 2\", signVal * 0.08, 1, signVal, skName"
+        ),
         "the first downstream equation does not reference the upstream slot"
     );
     assert!(
-        text.contains("AddDimEquation(dm, SlotRef(1) & \" / 8\", signVal * 0.01, 2, signVal, skName"),
+        text.contains(
+            "AddDimEquation(dm, SlotRef(1) & \" / 8\", signVal * 0.01, 2, signVal, skName"
+        ),
         "the second downstream equation does not reference the mid-chain slot"
     );
     // SlotRef normalizes the upstream sign back to source semantics, so a
@@ -197,7 +199,7 @@ fn two_maps_keep_per_slot_state_and_restore_on_reference() {
     // Its depth equation reads the first sketch's registered dimension -
     // registry state is per slot across features, guarded dead-closed.
     assert!(
-        extrude.contains("AddDimEquation(dm, SlotRef(0), 0.03, 4, 1#)"),
+        extrude.contains("AddDimEquation(dm, SlotRef(0), 0.03, 4, 1#, feat.Name)"),
         "the extrude depth equation does not reference the earlier sketch's slot"
     );
     assert!(

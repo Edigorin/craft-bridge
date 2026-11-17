@@ -38,6 +38,7 @@ Const TT_REV_TWO_FIRST_SIDE As Long = 1    ' probe-revolvedir: the two-sided fir
 Const TT_REV_PROBE_CHIRALITY As Long = -1   ' the configuration chirality the revolve evidence establishes (probe-revolvedir: one directed axis and one profile side)
 Const TT_PRIM_DIR_TRUE_SIDE As Long = 0   ' probe-primorient: the primitive height extends toward TT * the sketch normal for Dir=True (0 = unmeasured)
 Dim skName0 As String
+Dim skFeat0 As SldWorks.Feature
 Dim pt0(0 To 2) As Object
 Dim sl0(0 To 0) As Object
 Dim ci0(0 To 0) As Object
@@ -144,12 +145,15 @@ Function BuildSketch0() As String
     On Error GoTo HardFail
     Dim ok As Boolean
     Dim skFeat As SldWorks.Feature
+    Dim uncertain As Boolean
     gMsg = ""
     gOmit = ""
     ok = OpenSketchOnPlane(0, "XY")
     If Not ok Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo SketchFailed
     Set skFeat = swSketchMgr.ActiveSketch
     skName0 = skFeat.Name
+    Set skFeat0 = FindFeatureByName(skName0, uncertain)
+    If skFeat0 Is Nothing Then gMsg = "the sketch feature object could not be captured for later selection: name=<" & skName0 & ">, tree scan saw: " & TreeSummary(): GoTo SketchFailed
     DrawGeometry0
     If Not Relations0() Then GoTo Degrade
     If Not Dims0() Then GoTo Degrade
@@ -296,10 +300,11 @@ Function CleanSketch0() As Boolean
     Dim pts As Variant
     Dim ub As Long
     Dim skFeat As SldWorks.Feature
+    Dim uncertain As Boolean
     CleanSketch0 = False
     gCause = gMsg
     gMsg = ""
-    SolveSketch skName0
+    SolveSketch skName0, skFeat0
     ClearMap 0
     If Not sl0(0) Is Nothing Then
     okSel = sl0(0).Select(anySel)
@@ -353,6 +358,8 @@ Function CleanSketch0() As Boolean
     Set skFeat = swSketchMgr.ActiveSketch
     If skFeat Is Nothing Then gMsg = "the recreated sketch has no active sketch object": GoTo CleanFail
     skName0 = skFeat.Name
+    Set skFeat0 = FindFeatureByName(skName0, uncertain)
+    If skFeat0 Is Nothing Then gMsg = "the recreated sketch feature object could not be captured for selection: name=<" & skName0 & ">, tree scan saw: " & TreeSummary(): GoTo CleanFail
     CleanSketch0 = True
     Exit Function
 CleanFail:
@@ -895,14 +902,17 @@ End Function
 ' re-entry is required before any further sketch API call. The final state
 ' is verified; the refusal is raised only AFTER error handling is restored,
 ' so it cannot be swallowed.
-Sub SolveSketch(ByVal nm As String)
+Sub SolveSketch(ByVal nm As String, ByVal skObj As SldWorks.Feature)
 Dim sk As Object
+Dim okSel As Boolean
 swDoc.EditRebuild3
 On Error Resume Next
 Set sk = swSketchMgr.ActiveSketch
 If sk Is Nothing Then
 Err.Clear
-swDoc.Extension.SelectByID2 nm, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault
+okSel = False
+If Not skObj Is Nothing Then okSel = skObj.Select(False)
+If Not okSel Then swDoc.Extension.SelectByID2 nm, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault
 swSketchMgr.InsertSketch True
 Set sk = swSketchMgr.ActiveSketch
 End If
