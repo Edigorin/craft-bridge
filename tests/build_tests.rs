@@ -420,7 +420,7 @@ fn mirrors_replay_over_verified_native_seeds() {
     let case = Case::new(TRACER_PAT);
     case.build_to("pat.swb", false).unwrap();
     let macro_text = fs::read_to_string(case.dir.path().join("pat.swb")).unwrap();
-    assert!(macro_text.contains("FeatureMirror"), "no mirror");
+    assert!(macro_text.contains("InsertMirrorFeature2"), "no mirror");
     assert!(
         macro_text.contains("If feat1 Is Nothing Then"),
         "the seed binding is not live-checked"

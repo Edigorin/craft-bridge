@@ -3059,15 +3059,20 @@ fn emit_pat_subs(index: usize, pt: &crate::replay::PatStep) -> String {
                 "    If gPlane = \"\" Then gMsg = \"no origin plane carries the {code} frame {desc}; probed: \" & gProbeLog & \"; tree scan saw: \" & TreeSummary(): GoTo ExFail\n",
                 desc = frame_desc(solidcraft_frame(*plane))
             ));
-            out.push_str("    Set pf = FindFeatureByName(gPlane, uncertain)\n    ok = False\n    If Not pf Is Nothing Then ok = pf.Select(False)\n    If ok = False Then ok = swDoc.Extension.SelectByID2(gPlane, \"PLANE\", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)\n");
-            out.push_str("    If ok = False Then gMsg = \"the mirror plane could not be selected: gPlane=<\" & gPlane & \"> object-found=\" & CStr(Not pf Is Nothing) & \"; tree scan saw: \" & TreeSummary(): GoTo ExFail\n");
+            // The documented mirror contract (InsertMirrorFeature2 doc):
+            // seeds preselected and marked 1, the plane marked 2, then the
+            // call with its five arguments. Selection order is free; the
+            // marks carry the roles.
             for seed in seeds {
-                out.push_str(&format!("    feat{seed}.Select True\n"));
+                out.push_str(&format!(
+                    "    ok = False\n    If Not feat{seed} Is Nothing Then ok = feat{seed}.Select2(True, 1)\n    If ok = False Then ok = swDoc.Extension.SelectByID2(feat{seed}.Name, \"BODYFEATURE\", 0#, 0#, 0#, True, 1, Nothing, swSelectOption_e.swSelectOptionDefault)\n    If ok = False Then gMsg = \"the mirror seed did not select with mark 1\": GoTo ExFail\n"
+                ));
             }
-            out.push_str("    ' feature call shape pending checkpoint verification\n");
-            out.push_str("    Set feat = gFeatMgr.FeatureMirror(True, False, False, 0#, 0#)\n");
+            out.push_str("    Set pf = FindFeatureByName(gPlane, uncertain)\n    ok = False\n    If Not pf Is Nothing Then ok = pf.Select2(True, 2)\n    If ok = False Then ok = swDoc.Extension.SelectByID2(gPlane, \"PLANE\", 0#, 0#, 0#, True, 2, Nothing, swSelectOption_e.swSelectOptionDefault)\n");
+            out.push_str("    If ok = False Then gMsg = \"the mirror plane could not be selected with mark 2: gPlane=<\" & gPlane & \"> object-found=\" & CStr(Not pf Is Nothing) & \"; tree scan saw: \" & TreeSummary(): GoTo ExFail\n");
+            out.push_str("    ' InsertMirrorFeature2(BMirrorBody, BGeometryPattern, BMerge, BKnit, scope):\n    ' features (not bodies) mirrored, five arguments, selections by mark.\n    Set feat = gFeatMgr.InsertMirrorFeature2(False, False, False, False, swFeatureScope_e.swFeatureScope_AllBodies)\n");
             out.push_str(
-                "    If feat Is Nothing Then gMsg = \"the mirror was not created\": GoTo ExFail\n",
+                "    If feat Is Nothing Then gMsg = \"the mirror was not created (InsertMirrorFeature2 returned nothing)\": GoTo ExFail\n",
             );
         }
         PatKind::Rectangular { .. } => {

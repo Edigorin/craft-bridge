@@ -577,15 +577,19 @@ Function BuildPat2() As String
     If feat1 Is Nothing Then gMsg = "a seed feature did not verify": GoTo ExFail
     gPlane = PlaneNameFor("XY")
     If gPlane = "" Then gMsg = "no origin plane carries the XY frame u=(1,0,0) v=(0,1,0) n=(0,0,1); probed: " & gProbeLog & "; tree scan saw: " & TreeSummary(): GoTo ExFail
+    ok = False
+    If Not feat1 Is Nothing Then ok = feat1.Select2(True, 1)
+    If ok = False Then ok = swDoc.Extension.SelectByID2(feat1.Name, "BODYFEATURE", 0#, 0#, 0#, True, 1, Nothing, swSelectOption_e.swSelectOptionDefault)
+    If ok = False Then gMsg = "the mirror seed did not select with mark 1": GoTo ExFail
     Set pf = FindFeatureByName(gPlane, uncertain)
     ok = False
-    If Not pf Is Nothing Then ok = pf.Select(False)
-    If ok = False Then ok = swDoc.Extension.SelectByID2(gPlane, "PLANE", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
-    If ok = False Then gMsg = "the mirror plane could not be selected: gPlane=<" & gPlane & "> object-found=" & CStr(Not pf Is Nothing) & "; tree scan saw: " & TreeSummary(): GoTo ExFail
-    feat1.Select True
-    ' feature call shape pending checkpoint verification
-    Set feat = gFeatMgr.FeatureMirror(True, False, False, 0#, 0#)
-    If feat Is Nothing Then gMsg = "the mirror was not created": GoTo ExFail
+    If Not pf Is Nothing Then ok = pf.Select2(True, 2)
+    If ok = False Then ok = swDoc.Extension.SelectByID2(gPlane, "PLANE", 0#, 0#, 0#, True, 2, Nothing, swSelectOption_e.swSelectOptionDefault)
+    If ok = False Then gMsg = "the mirror plane could not be selected with mark 2: gPlane=<" & gPlane & "> object-found=" & CStr(Not pf Is Nothing) & "; tree scan saw: " & TreeSummary(): GoTo ExFail
+    ' InsertMirrorFeature2(BMirrorBody, BGeometryPattern, BMerge, BKnit, scope):
+    ' features (not bodies) mirrored, five arguments, selections by mark.
+    Set feat = gFeatMgr.InsertMirrorFeature2(False, False, False, False, swFeatureScope_e.swFeatureScope_AllBodies)
+    If feat Is Nothing Then gMsg = "the mirror was not created (InsertMirrorFeature2 returned nothing)": GoTo ExFail
     swDoc.ClearSelection2 True
     gMsg = "created"
     BuildPat2 = "created"
