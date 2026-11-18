@@ -1791,10 +1791,14 @@ fn exact_draw_switches_inference_off_and_restores_it_verified() {
     );
     assert!(
         text.contains("Function SnapPrefId(")
-            && text.contains(
-                "swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swSketchInference, False"
-            ),
+            && text.contains("swApp.SetUserPreferenceToggle SnapPrefId(0), False"),
         "the helpers must map and switch the inference preference"
+    );
+    // the pinned literal form: an unknown enum member is a VBA compile
+    // error, so the values carry the mapping (names live in comments)
+    assert!(
+        text.contains("SnapPrefId = 249") && text.contains("SnapPrefId = 280"),
+        "the vector map must pin the reflected values"
     );
     // research 08's restoration rule: the WHOLE coupled vector is
     // captured and restored (clearing 249 also clears Automatic
