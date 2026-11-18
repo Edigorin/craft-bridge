@@ -578,6 +578,7 @@ End Function
 ' marshalling can shift array bases).
 Function CentroidText(ByVal mpObj, ByRef cx, ByRef cy, ByRef cz, ByVal what)
   Dim arr, lo2, hi2, k, comp, num, note, errNum, errDesc
+  Dim nx, ny, nz
   CentroidText = what & " acquisition did not complete"
   cx = 0
   cy = 0
@@ -631,13 +632,18 @@ Function CentroidText(ByVal mpObj, ByRef cx, ByRef cy, ByRef cz, ByVal what)
       Exit Function
     End If
     If k = 0 Then
-      cx = num
+      nx = num
     ElseIf k = 1 Then
-      cy = num
+      ny = num
     Else
-      cz = num
+      nz = num
     End If
   Next
+  ' publish only after every component validated: a failed read can
+  ' never leave partially-coerced coordinates looking real
+  cx = nx
+  cy = ny
+  cz = nz
   On Error GoTo 0
   CentroidText = ""
 End Function

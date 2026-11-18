@@ -195,13 +195,17 @@ Set mpFake = FakeWith(Array(1.5, -2.25, 3))
 errText = CentroidText(mpFake, cxT, cyT, czT, "t")
 Check "centroid doubles publish", (errText = "" And cxT = 1.5 And cyT = -2.25 And czT = 3), errText
 
-Dim arrBase1(1 To 3)
-arrBase1(1) = 4.5
-arrBase1(2) = 5
-arrBase1(3) = -6.75
-Set mpFake = FakeWith(arrBase1)
+' (a one-based array cannot be constructed natively in VBScript - Dim
+' takes no bounds - so the any-base code path is exercised through the
+' wrong-count case below and by real COM returns on the seat.)
+Dim arrFour(3)
+arrFour(0) = 1
+arrFour(1) = 2
+arrFour(2) = 3
+arrFour(3) = 4
+Set mpFake = FakeWith(arrFour)
 errText = CentroidText(mpFake, cxT, cyT, czT, "t")
-Check "centroid one-based array", (errText = "" And cxT = 4.5 And cyT = 5 And czT = -6.75), errText
+Check "centroid four elements refused", (InStr(1, errText, "unexpected shape") > 0 And cxT = 0), errText
 
 Set mpFake = FakeWith(Array("1.5", "-2.25", "3"))
 errText = CentroidText(mpFake, cxT, cyT, czT, "t")
@@ -221,7 +225,11 @@ Check "centroid empty component refused", (InStr(1, errText, "unsupported compon
 
 Dim objHolder
 Set objHolder = CreateObject("Scripting.Dictionary")
-Set mpFake = FakeWith(Array(1, objHolder, 3))
+Dim arrObj(2)
+arrObj(0) = 1
+Set arrObj(1) = objHolder
+arrObj(2) = 3
+Set mpFake = FakeWith(arrObj)
 errText = CentroidText(mpFake, cxT, cyT, czT, "t")
 Check "centroid object component refused", (InStr(1, errText, "component 1 is an object") > 0 And cxT = 0), errText
 
