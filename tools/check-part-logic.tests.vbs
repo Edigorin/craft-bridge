@@ -176,6 +176,68 @@ Check "a new title is not pre-existing", (Not IsPreExistingTitle("Doc1" & vbCrLf
 Check "an empty title is never pre-existing", (Not IsPreExistingTitle("Doc1" & vbCrLf, "")), "false positive"
 Check "an empty snapshot owns nothing", (Not IsPreExistingTitle("", "Doc1")), "false positive"
 
+' ===== acquisition tests (CentroidText / ComponentNumber): the actual
+' checker code with synthetic mass-property objects - no SolidWorks.
+Dim mpFake, compNum, compNote, cxT, cyT, czT, errText
+
+Class FakeMass
+  Public centerofmass
+End Class
+
+Function FakeWith(ByVal theArray)
+  Dim m
+  Set m = New FakeMass
+  m.centerofmass = theArray
+  Set FakeWith = m
+End Function
+
+Set mpFake = FakeWith(Array(1.5, -2.25, 3))
+errText = CentroidText(mpFake, cxT, cyT, czT, "t")
+Check "centroid doubles publish", (errText = "" And cxT = 1.5 And cyT = -2.25 And czT = 3), errText
+
+Dim arrBase1(1 To 3)
+arrBase1(1) = 4.5
+arrBase1(2) = 5
+arrBase1(3) = -6.75
+Set mpFake = FakeWith(arrBase1)
+errText = CentroidText(mpFake, cxT, cyT, czT, "t")
+Check "centroid one-based array", (errText = "" And cxT = 4.5 And cyT = 5 And czT = -6.75), errText
+
+Set mpFake = FakeWith(Array("1.5", "-2.25", "3"))
+errText = CentroidText(mpFake, cxT, cyT, czT, "t")
+Check "centroid period-decimal strings", (errText = "" And cxT = 1.5 And cyT = -2.25 And czT = 3), errText
+
+Set mpFake = FakeWith(Array("1,5", "2", "3"))
+errText = CentroidText(mpFake, cxT, cyT, czT, "t")
+Check "centroid comma strings refused", (InStr(1, errText, "not period-decimal") > 0 And cxT = 0), errText
+
+Set mpFake = FakeWith(Array(1, 2))
+errText = CentroidText(mpFake, cxT, cyT, czT, "t")
+Check "centroid wrong shape refused", (InStr(1, errText, "unexpected shape") > 0 And cxT = 0), errText
+
+Set mpFake = FakeWith(Array(1, Empty, 3))
+errText = CentroidText(mpFake, cxT, cyT, czT, "t")
+Check "centroid empty component refused", (InStr(1, errText, "unsupported component type") > 0 And cxT = 0), errText
+
+Dim objHolder
+Set objHolder = CreateObject("Scripting.Dictionary")
+Set mpFake = FakeWith(Array(1, objHolder, 3))
+errText = CentroidText(mpFake, cxT, cyT, czT, "t")
+Check "centroid object component refused", (InStr(1, errText, "component 1 is an object") > 0 And cxT = 0), errText
+
+Set mpFake = FakeWith(Array("1E300", 2, 3))
+errText = CentroidText(mpFake, cxT, cyT, czT, "t")
+Check "centroid nonfinite refused", (InStr(1, errText, "not finite") > 0 And cxT = 0), errText
+
+Set mpFake = CreateObject("Scripting.Dictionary")
+errText = CentroidText(mpFake, cxT, cyT, czT, "t")
+Check "centroid missing property refused", (InStr(1, errText, "cannot read") > 0 And cxT = 0 And cyT = 0 And czT = 0), errText
+
+Check "component doubles convert", ComponentNumber(2.5, compNum, compNote) And compNum = 2.5, compNote
+Check "component strings parse period", ComponentNumber("-0.25", compNum, compNote) And compNum = -0.25, compNote
+Check "component comma strings refused", (Not ComponentNumber("0,25", compNum, compNote)), compNote
+Check "component booleans refused", (Not ComponentNumber(True, compNum, compNote)), compNote
+
 If failures > 0 Then
   WScript.Echo failures & " test(s) failed"
   WScript.Quit 1

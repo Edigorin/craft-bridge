@@ -314,6 +314,39 @@ fn the_decision_mirror_is_pinned_to_the_vbs_logic() {
             "the import verdicts lost their named reasons: {pin}"
         );
     }
+    // Acquisition (CentroidText/ComponentNumber) is fail closed with
+    // named reasons and period-only string parsing (IsNumeric/CDbl are
+    // locale-poisoned; Val does not exist in VBScript).
+    for pin in [
+        "component is an object",
+        "string component is not period-decimal",
+        "unsupported component type",
+        "component is not finite",
+        "unexpected shape",
+        "is not numeric (vartype ",
+    ] {
+        assert!(
+            LOGIC.contains(pin),
+            "the acquisition lost a named reason: {pin}"
+        );
+    }
+    // The STEP import uses the documented LoadFile4 shape with the
+    // ByRef numeric error output (a literal Nothing raised err 424 from
+    // VBScript and the fourth argument was wrongly a string).
+    assert!(
+        CHECKER.contains("GetImportFileData") && CHECKER.contains("api-error "),
+        "the reference import lost its documented, diagnosed form"
+    );
+    assert!(
+        !CHECKER.contains("Function CentroidText("),
+        "the acquisition must live in the shared logic module (testable via cscript)"
+    );
+    // The distance computation is checked end to end (Sqr(0) raised in
+    // the SW VBA host; a failed read must never coerce to zero).
+    assert!(
+        CHECKER.contains("the squared distance") && CHECKER.contains("the square root raised err "),
+        "the distance computation lost its checked failure path"
+    );
     // The validators fail closed with named reasons (the negative tests
     // above pin their behavior through the mirror).
     for pin in [
@@ -459,11 +492,15 @@ fn checker_syntax_is_paired_and_acquisition_is_typed() {
         "the body counts are not proven typed"
     );
     assert!(
-        CHECKER.contains("Function CentroidText") && CHECKER.contains("centerofmass"),
+        LOGIC.contains("Function CentroidText") && LOGIC.contains("centerofmass"),
         "the centroid components are not proven typed"
     );
     assert!(
-        CHECKER.contains("vartype ") && CHECKER.contains("IsArray"),
+        LOGIC.contains("Function ComponentNumber") && LOGIC.contains("VarType(comp)"),
+        "the component type gate is missing"
+    );
+    assert!(
+        LOGIC.contains("vartype ") && LOGIC.contains("IsArray"),
         "the acquisition lost its shape checks"
     );
     // Finding 4: the ownership snapshot precedes the import and a

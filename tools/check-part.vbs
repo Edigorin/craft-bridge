@@ -42,6 +42,8 @@ Dim skipVolume, noSolid, minFeatures, volumeTol, volumeTolAbs, placementTol, ref
 Dim scan, scanFso
 Dim treeCount, featWalk
 Dim refDoc, refTitle, refText, refCx, refCy, refCz
+Dim importData, importErrNum, importErrDesc, apiErrCode, loadErrNum, loadErrDesc
+Dim distSq, distErr, dist
 Dim docTypeText, solidsText, sheetsText, refAcquireErr
 Dim distText, blocks, dtRaw, refBodiesArr, refSheetsArr, refCloseLines
 Dim preTitles, preErr, d, t2
@@ -215,14 +217,35 @@ If skipVolume Then
   outFile.Write blocks
   outFile.WriteLine "check:ref_close=skipped"
 Else
+  ' The documented STEP-import shape (LoadFile4: FileName, ArgString,
+  ' ImportData, Errors As Long OUT). The literal Nothing for the
+  ' Object-typed ImportData raised err 424 from VBScript, and the fourth
+  ' argument is a ByRef numeric OUTPUT - it must be a Long-coerced
+  ' variable (the RunMacro2 ByRef lesson), never a string. ONE import
+  ' attempt: a retry ladder could orphan an opened document whose handle
+  ' a failed attempt never returned.
   Err.Clear
-  Set refDoc = swApp.LoadFile4(stepPath, "r", Nothing, "")
-  If Err.Number <> 0 Or refDoc Is Nothing Then
-    refAcquireErr = "cannot load the STEP reference: " & Err.Description
+  Set importData = Nothing
+  Set importData = swApp.GetImportFileData(stepPath)
+  importErrNum = Err.Number
+  importErrDesc = Err.Description
+  If importErrNum <> 0 Then
+    refAcquireErr = "cannot load the STEP reference: GetImportFileData err " & NumStr(importErrNum) & ": " & importErrDesc
     docTypeText = "unreadable"
     solidsText = "missing or unreadable"
     sheetsText = "unreadable"
   Else
+    Err.Clear
+    apiErrCode = CLng(0)
+    Set refDoc = swApp.LoadFile4(stepPath, "r", importData, apiErrCode)
+    loadErrNum = Err.Number
+    loadErrDesc = Err.Description
+    If loadErrNum <> 0 Or refDoc Is Nothing Then
+      refAcquireErr = "cannot load the STEP reference: LoadFile4 err " & NumStr(loadErrNum) & " api-error " & NumStr(apiErrCode) & ": " & loadErrDesc
+      docTypeText = "unreadable"
+      solidsText = "missing or unreadable"
+      sheetsText = "unreadable"
+    Else
     Err.Clear
     refTitle = refDoc.GetTitle
     If Err.Number <> 0 Then refTitle = ""
@@ -261,9 +284,32 @@ Else
       End If
     End If
     If rebuiltText <> "" And refText <> "" And rebuiltAcquireErr = "" And refAcquireErr = "" Then
-      distText = NumStr(Sqr((rebuiltCx - refCx) ^ 2 + (rebuiltCy - refCy) ^ 2 + (rebuiltCz - refCz) ^ 2))
+      ' the distance computation is checked end to end: a failed read or
+      ' an unrepresentable value is named, never coerced
+      Err.Clear
+      On Error Resume Next
+      distSq = (rebuiltCx - refCx) ^ 2 + (rebuiltCy - refCy) ^ 2 + (rebuiltCz - refCz) ^ 2
+      distErr = Err.Number
+      If distErr <> 0 Then
+        distText = "missing or invalid: the squared distance raised err " & NumStr(distErr)
+        Err.Clear
+      ElseIf distSq <> distSq Or distSq < 0 Then
+        distText = "missing or invalid: the squared distance is not finite"
+      ElseIf distSq = 0 Then
+        distText = NumStr(0)
+      Else
+        dist = Sqr(distSq)
+        If Err.Number <> 0 Then
+          distText = "missing or invalid: the square root raised err " & NumStr(Err.Number)
+          Err.Clear
+        Else
+          distText = NumStr(dist)
+        End If
+      End If
+      On Error GoTo 0
     Else
       distText = "missing or unreadable"
+    End If
     End If
   End If
 
@@ -474,52 +520,6 @@ Function CountText(ByVal res, ByVal arrErr)
     Exit Function
   End If
   CountText = "unexpected return shape (vartype " & NumStr(VarType(res)) & ")"
-End Function
-
-' Typed centroid acquisition: the measured centerofmass array's shape and
-' every component are proven before any verdict uses them - a failed read
-' is named in the return text, never coerced to zero.
-Function CentroidText(ByVal mpObj, ByRef cx, ByRef cy, ByRef cz, ByVal what)
-  Dim arr, lo2, hi2
-  CentroidText = ""
-  cx = 0
-  cy = 0
-  cz = 0
-  Err.Clear
-  On Error Resume Next
-  arr = mpObj.centerofmass
-  If Err.Number <> 0 Then
-    CentroidText = "cannot read " & what & ": " & Err.Description
-    On Error GoTo 0
-    Exit Function
-  End If
-  If Not IsArray(arr) Then
-    CentroidText = what & " did not come back as an array (vartype " & NumStr(VarType(arr)) & ")"
-    On Error GoTo 0
-    Exit Function
-  End If
-  Err.Clear
-  lo2 = LBound(arr)
-  hi2 = UBound(arr)
-  If Err.Number <> 0 Then
-    CentroidText = what & " has unreadable bounds"
-    On Error GoTo 0
-    Exit Function
-  End If
-  If lo2 <> 0 Or hi2 <> 2 Then
-    CentroidText = what & " has an unexpected shape (bounds " & NumStr(lo2) & ".." & NumStr(hi2) & ")"
-    On Error GoTo 0
-    Exit Function
-  End If
-  If Not IsNumeric(arr(0)) Or Not IsNumeric(arr(1)) Or Not IsNumeric(arr(2)) Then
-    CentroidText = what & " has nonnumeric components"
-    On Error GoTo 0
-    Exit Function
-  End If
-  cx = arr(0)
-  cy = arr(1)
-  cz = arr(2)
-  On Error GoTo 0
 End Function
 
 ' Verified close of the independently owned STEP reference document: the

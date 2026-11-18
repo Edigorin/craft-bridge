@@ -526,3 +526,118 @@ End Function
 Function PlacementSkipLines()
   PlacementSkipLines = "check:placement=skipped" & vbCrLf
 End Function
+
+' Typed numeric acquisition for one mass-property array component. The
+' numeric variants convert through CDbl (no locale surface - the value is
+' already binary); string components MUST parse as strict period-decimal
+' (ParsePeriod - IsNumeric/CDbl are locale-sensitive and rejected the
+' checker's own period-decimal values on comma-decimal Windows). Anything
+' else is refused with a named reason and converted to nothing.
+Function ComponentNumber(ByVal comp, ByRef num, ByRef note)
+  Dim vt
+  ComponentNumber = False
+  num = 0
+  note = ""
+  If IsObject(comp) Then
+    note = "component is an object"
+    Exit Function
+  End If
+  vt = VarType(comp)
+  If vt = vbByte Or vt = vbInteger Or vt = vbLong Or vt = vbSingle Or vt = vbDouble Or vt = vbCurrency Or vt = vbDecimal Then
+    ' the value is already binary: a plain assignment carries it with no
+    ' locale surface (IsNumeric/CDbl are locale-poisoned and Val does not
+    ' exist in VBScript - both are pinned out of this module)
+    num = comp
+  ElseIf vt = vbString Then
+    If Not ParsePeriod(CStr(comp), num) Then
+      note = "string component is not period-decimal"
+      Exit Function
+    End If
+  Else
+    note = "unsupported component type"
+    Exit Function
+  End If
+  If num <> num Then
+    note = "component is not finite"
+    num = 0
+    Exit Function
+  End If
+  If Abs(num) > 1E+100 Then
+    note = "component is not finite"
+    num = 0
+    Exit Function
+  End If
+  ComponentNumber = True
+End Function
+
+' Centroid acquisition, fail closed: the function reports a named failure
+' unless every one of the three components validated, and the coordinates
+' are published only AFTER all three - a failed read can never leave
+' initialized zeros looking like a real centroid. Any array base is
+' accepted as long as exactly three elements are present (VBScript COM
+' marshalling can shift array bases).
+Function CentroidText(ByVal mpObj, ByRef cx, ByRef cy, ByRef cz, ByVal what)
+  Dim arr, lo2, hi2, k, comp, num, note, errNum, errDesc
+  CentroidText = what & " acquisition did not complete"
+  cx = 0
+  cy = 0
+  cz = 0
+  Err.Clear
+  On Error Resume Next
+  arr = mpObj.centerofmass
+  errNum = Err.Number
+  errDesc = Err.Description
+  If errNum <> 0 Then
+    CentroidText = "cannot read " & what & ": " & errDesc & " (err " & NumStr(errNum) & ")"
+    On Error GoTo 0
+    Exit Function
+  End If
+  If Not IsArray(arr) Then
+    CentroidText = what & " did not come back as an array (vartype " & NumStr(VarType(arr)) & ")"
+    On Error GoTo 0
+    Exit Function
+  End If
+  Err.Clear
+  lo2 = LBound(arr)
+  hi2 = UBound(arr)
+  If Err.Number <> 0 Then
+    CentroidText = what & " has unreadable bounds"
+    Err.Clear
+    On Error GoTo 0
+    Exit Function
+  End If
+  If hi2 - lo2 <> 2 Then
+    CentroidText = what & " has an unexpected shape (bounds " & NumStr(lo2) & ".." & NumStr(hi2) & ")"
+    On Error GoTo 0
+    Exit Function
+  End If
+  For k = 0 To 2
+    Err.Clear
+    If IsObject(arr(lo2 + k)) Then
+      CentroidText = what & " component " & NumStr(k) & " is an object"
+      On Error GoTo 0
+      Exit Function
+    End If
+    comp = arr(lo2 + k)
+    If Err.Number <> 0 Then
+      CentroidText = what & " component " & NumStr(k) & " could not be read"
+      Err.Clear
+      On Error GoTo 0
+      Exit Function
+    End If
+    If Not ComponentNumber(comp, num, note) Then
+      CentroidText = what & " component " & NumStr(k) & " is not numeric (vartype " & NumStr(VarType(comp)) & "): " & note
+      On Error GoTo 0
+      Exit Function
+    End If
+    If k = 0 Then
+      cx = num
+    ElseIf k = 1 Then
+      cy = num
+    Else
+      cz = num
+    End If
+  Next
+  On Error GoTo 0
+  CentroidText = ""
+End Function
