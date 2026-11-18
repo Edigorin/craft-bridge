@@ -1855,7 +1855,7 @@ fn exact_draw_switches_inference_off_and_restores_it_verified() {
         "DrawGeometry must bracket its drawing with the exact-draw helpers"
     );
     assert!(
-        region.contains("DrawFail:") && region.contains("eMsg = eMsg & \" | \" & infReason"),
+        region.contains("DrawFail:") && region.contains("cErrMsg = cErrMsg & \" | \" & infReason"),
         "the draw failure path must restore the preference and report"
     );
 }

@@ -2087,7 +2087,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
             2 * sk.lines.len() + j
         ));
     }
-    out.push_str("    swDoc.ClearSelection2 True\n    If Not EndExactDraw(infReason) Then Err.Raise vbObjectError + 562, \"DrawGeometry\", infReason\n    Exit Sub\nDrawFail:\n    ' Capture the error FIRST: the cleanup below resets Err.\n    Dim eNum As Long, eMsg As String\n    eNum = Err.Number\n    eMsg = Err.Description\n    On Error Resume Next\n    If Not EndExactDraw(infReason) Then eMsg = eMsg & \" | \" & infReason\n    On Error GoTo 0\n    Err.Raise eNum, \"DrawGeometry\", eMsg\nEnd Sub\n\n");
+    out.push_str("    swDoc.ClearSelection2 True\n    If Not EndExactDraw(infReason) Then Err.Raise vbObjectError + 562, \"DrawGeometry\", infReason\n    Exit Sub\nDrawFail:\n    ' Capture the error FIRST: the cleanup below resets Err.\n    ' (local names cErrNum/cErrMsg on purpose: the eNum/eMsg names\n    ' failed to compile in the SW VBA host - probe-prefvector bisect\n    ' 2026-11-18 - while these load green.)\n    Dim cErrNum As Long, cErrMsg As String\n    cErrNum = Err.Number\n    cErrMsg = Err.Description\n    On Error Resume Next\n    If Not EndExactDraw(infReason) Then cErrMsg = cErrMsg & \" | \" & infReason\n    On Error GoTo 0\n    Err.Raise cErrNum, \"DrawGeometry\", cErrMsg\nEnd Sub\n\n");
 
     // Relations
     out.push_str(&format!(

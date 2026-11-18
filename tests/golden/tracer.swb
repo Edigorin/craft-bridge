@@ -259,13 +259,16 @@ Sub DrawGeometry2()
     Exit Sub
 DrawFail:
     ' Capture the error FIRST: the cleanup below resets Err.
-    Dim eNum As Long, eMsg As String
-    eNum = Err.Number
-    eMsg = Err.Description
+    ' (local names cErrNum/cErrMsg on purpose: the eNum/eMsg names
+    ' failed to compile in the SW VBA host - probe-prefvector bisect
+    ' 2026-11-18 - while these load green.)
+    Dim cErrNum As Long, cErrMsg As String
+    cErrNum = Err.Number
+    cErrMsg = Err.Description
     On Error Resume Next
-    If Not EndExactDraw(infReason) Then eMsg = eMsg & " | " & infReason
+    If Not EndExactDraw(infReason) Then cErrMsg = cErrMsg & " | " & infReason
     On Error GoTo 0
-    Err.Raise eNum, "DrawGeometry", eMsg
+    Err.Raise cErrNum, "DrawGeometry", cErrMsg
 End Sub
 
 Function Relations2() As Boolean
