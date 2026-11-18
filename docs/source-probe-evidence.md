@@ -99,6 +99,28 @@ plane with `InsertRefPlane(8, distance_m, 0,0,0,0)`, rename it, bind its
 open sketches on the feature object - and the frame-map translation rule
 is confirmed for offset planes.
 
+## 2026-11-18 - probe-prefvector: preference-vector hygiene proven
+
+**Probe:** `corpus/compat-check/probe-prefvector.swb` (the generated
+exact-draw helpers verbatim + an 18-bit vector recorder; two byte-review
+rounds folded, final APPROVE), run through `tools/seat-smoke.ps1`.
+Summary ok. Records:
+- S-success: vector 111111111111111010 before = after (equal=1); L2 end
+  placed at .0116,.01,0 EXACTLY under BeginExactDraw/EndExactDraw.
+- F-drawfail: the deliberate vbObjectError+560 (-2147220944) captured,
+  restored through the DrawFail discipline, vector equal=1.
+The bit pattern independently confirms research 08's factory defaults:
+entries 15 (swSketchSnapsGrid) and 17 (swSketchSnapsAngle) read 0 while
+the other 16 read 1.
+
+**Compile lesson (filed with the Note collision):** the first two
+probe-prefvector variants failed to load (RunMacro failure, no report).
+A subtractive bisect (probe-snap v6 + the generated helpers = green)
+isolated the breaker to RunCaseFail's body; rewriting it with byte-
+proven constructs (the cErrNum/cErrMsg names, single-line gates, an
+expectedErr flag) loaded green. The exact offending construct was not
+pinned; the working form is kept.
+
 ## 2026-11-18 - probe-snap: CreateLine endpoint inference and the switch that stops it
 
 **Probe:** `corpus/compat-check/probe-snap.swb` (hand-written on the
