@@ -1617,26 +1617,58 @@ End Function\n\n",
     );
     out.push_str(
         "' Open a sketch on the NAMED plane this macro created and accept its\n\
-' offset frame. The plane feature object is selected by its captured name.\n\
-Function OpenSketchOnNamedPlane(ByVal idx As Long, ByVal planeName As String, ByVal which As String, ByVal distM As Double) As Boolean\n\
-    Dim feat As SldWorks.Feature\n\
+' offset frame. The LIVE captured feature object is preferred (the\n\
+' reviewed probe's proven selection form); the tree walk by name is only\n\
+' the fallback. EVERY exit records its named reason in gProbeLog - a\n\
+' silent exit left an earlier run diagnosing nothing.\n\
+Function OpenSketchOnNamedPlane(ByVal idx As Long, feat As SldWorks.Feature, ByVal planeName As String, ByVal which As String, ByVal distM As Double) As Boolean\n\
     Dim sk As Object\n\
     Dim uncertain As Boolean\n\
+    Dim found As SldWorks.Feature\n\
+    Dim ok As Boolean\n\
     OpenSketchOnNamedPlane = False\n\
-    If planeName = \"\" Then Exit Function\n\
-    Set feat = FindFeatureByName(planeName, uncertain)\n\
-    If feat Is Nothing Then Exit Function\n\
+    If planeName = \"\" Then\n\
+        gProbeLog = gProbeLog & \"unnamed plane step; \"\n\
+        Exit Function\n\
+    End If\n\
+    If feat Is Nothing Then\n\
+        Set found = FindFeatureByName(planeName, uncertain)\n\
+        If found Is Nothing Then\n\
+            gProbeLog = gProbeLog & planeName & \": the captured feature object is gone and the tree walk found no feature of that name; \"\n\
+            Exit Function\n\
+        End If\n\
+        Set feat = found\n\
+    End If\n\
     swDoc.ClearSelection2 True\n\
-    If Not feat.Select(False) Then Exit Function\n\
+    On Error Resume Next\n\
+    Err.Clear\n\
+    ok = feat.Select(False)\n\
+    If Err.Number <> 0 Or ok = False Then\n\
+        gProbeLog = gProbeLog & planeName & \": the plane feature would not select (err \" & Trim(Str(Err.Number)) & \"); \"\n\
+        On Error GoTo 0\n\
+        Exit Function\n\
+    End If\n\
+    Err.Clear\n\
     swSketchMgr.InsertSketch True\n\
+    If Err.Number <> 0 Then\n\
+        gProbeLog = gProbeLog & planeName & \": InsertSketch raised (err \" & Trim(Str(Err.Number)) & \"); \"\n\
+        On Error GoTo 0\n\
+        Exit Function\n\
+    End If\n\
     Set sk = swSketchMgr.ActiveSketch\n\
-    If sk Is Nothing Then Exit Function\n\
+    If Err.Number <> 0 Or sk Is Nothing Then\n\
+        gProbeLog = gProbeLog & planeName & \": no sketch opened on the selected plane (err \" & Trim(Str(Err.Number)) & \"); \"\n\
+        On Error GoTo 0\n\
+        Exit Function\n\
+    End If\n\
+    Err.Clear\n\
+    On Error GoTo 0\n\
     If Not AcceptAndPublishOffset(idx, which, distM, gProbeReason) Then\n\
         gProbeLog = gProbeLog & planeName & \": offset frame refused: \" & gProbeReason & \"; \"\n\
         Exit Function\n\
     End If\n\
     OpenSketchOnNamedPlane = True\n\
-End Function\n\n",
+End Function\n",
     );
     out
 }
@@ -1773,7 +1805,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
         crate::replay::PlaneBinding::Offset { distance } => (
             "    Dim st As String\n    Dim planeMsg As String\n".to_string(),
             format!(
-                "    st = BuildPlane{index}()\n    If st <> \"created\" Then gMsg = \"the inline offset plane could not be created: \" & gMsg: GoTo SketchFailed\n    planeMsg = gMsg\n    ok = OpenSketchOnNamedPlane({index}, planeName{index}, \"{which}\", {dist})\n    If ok = False Then gMsg = \"the sketch would not open on its offset plane \" & planeName{index} & \"; probed: \" & gProbeLog: GoTo SketchFailed\n",
+                "    st = BuildPlane{index}()\n    If st <> \"created\" Then gMsg = \"the inline offset plane could not be created: \" & gMsg: GoTo SketchFailed\n    planeMsg = gMsg\n    ok = OpenSketchOnNamedPlane({index}, planeFeat{index}, planeName{index}, \"{which}\", {dist})\n    If ok = False Then gMsg = \"the sketch would not open on its offset plane \" & planeName{index} & \"; probed: \" & gProbeLog: GoTo SketchFailed\n",
                 index = index,
                 which = plane_code(sk.plane),
                 dist = vba_num(distance.expect_si),
@@ -1782,7 +1814,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
         crate::replay::PlaneBinding::Constructed { step, expect_si } => (
             String::new(),
             format!(
-                "    ok = OpenSketchOnNamedPlane({index}, planeName{pstep}, \"{which}\", {dist})\n    If ok = False Then gMsg = \"the sketch would not open on the plane of construction step {pstep} (name=<\" & planeName{pstep} & \">); probed: \" & gProbeLog: GoTo SketchFailed\n",
+                "    ok = OpenSketchOnNamedPlane({index}, planeFeat{pstep}, planeName{pstep}, \"{which}\", {dist})\n    If ok = False Then gMsg = \"the sketch would not open on the plane of construction step {pstep} (name=<\" & planeName{pstep} & \">); probed: \" & gProbeLog: GoTo SketchFailed\n",
                 index = index,
                 pstep = step,
                 which = plane_code(sk.plane),

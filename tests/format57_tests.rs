@@ -1134,6 +1134,35 @@ fn offset_plane_emission_uses_the_probe_pinned_shapes() {
     // The probe-shaped capture: the reference-plane return and the tree
     // feature are separate objects.
     assert!(m.contains("Set refPlane = gFeatMgr.InsertRefPlane("));
+    // The open helper takes the LIVE captured feature object (the probe's
+    // proven selection form); every call site passes it, and every helper
+    // exit records its named reason in gProbeLog (silent exits once left
+    // a seat run diagnosing nothing).
+    assert!(m.contains(
+        "Function OpenSketchOnNamedPlane(ByVal idx As Long, feat As SldWorks.Feature"
+    ));
+    let mut call_sites = 0;
+    for line in m.lines() {
+        if line.contains("OpenSketchOnNamedPlane(") && !line.trim_start().starts_with("Function") {
+            assert!(
+                line.contains("planeFeat"),
+                "the open helper must be passed the stored feature object: {line}"
+            );
+            call_sites += 1;
+        }
+    }
+    assert!(call_sites >= 1, "at least one constructed/inline sketch opens on its plane");
+    let helper_body = {
+        let hs = m
+            .find("Function OpenSketchOnNamedPlane(")
+            .expect("the open helper exists");
+        let he = m[hs..].find("End Function").map(|e| hs + e).unwrap();
+        &m[hs..he]
+    };
+    assert!(
+        helper_body.matches("gProbeLog = gProbeLog &").count() >= 5,
+        "every open-helper exit must record a named reason"
+    );
     assert!(m.contains("Set feat = swDoc.Extension.GetLastFeatureAdded"));
     // Exactly one inline builder call in the inline sketch's BuildSketch,
     // and it runs before the Degrade label (creation happens once).
