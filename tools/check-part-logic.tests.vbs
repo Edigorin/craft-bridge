@@ -231,7 +231,7 @@ Set arrObj(1) = objHolder
 arrObj(2) = 3
 Set mpFake = FakeWith(arrObj)
 errText = CentroidText(mpFake, cxT, cyT, czT, "t")
-Check "centroid object component refused", (InStr(1, errText, "component 1 is an object") > 0 And cxT = 0), errText
+Check "centroid object component refused", (InStr(1, errText, "is an object") > 0 And InStr(1, errText, "Dictionary") > 0 And cxT = 0), errText
 
 Set mpFake = FakeWith(Array("1E300", 2, 3))
 errText = CentroidText(mpFake, cxT, cyT, czT, "t")
@@ -245,6 +245,20 @@ Check "component doubles convert", ComponentNumber(2.5, compNum, compNote) And c
 Check "component strings parse period", ComponentNumber("-0.25", compNum, compNote) And compNum = -0.25, compNote
 Check "component comma strings refused", (Not ComponentNumber("0,25", compNum, compNote)), compNote
 Check "component booleans refused", (Not ComponentNumber(True, compNum, compNote)), compNote
+
+Class DoubleBox
+  Public Value
+End Class
+Dim boxed
+Set boxed = New DoubleBox
+boxed.Value = 7.25
+errText = ""
+If ComponentNumber(boxed, compNum, compNote) Then
+  If compNum <> 7.25 Then errText = "wrong value " & compNum
+Else
+  errText = compNote
+End If
+Check "component wrapper default coerces", (errText = ""), errText
 
 If failures > 0 Then
   WScript.Echo failures & " test(s) failed"

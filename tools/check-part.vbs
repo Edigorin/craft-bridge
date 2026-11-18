@@ -42,7 +42,7 @@ Dim skipVolume, noSolid, minFeatures, volumeTol, volumeTolAbs, placementTol, ref
 Dim scan, scanFso
 Dim treeCount, featWalk
 Dim refDoc, refTitle, refText, refCx, refCy, refCz
-Dim importData, importErrNum, importErrDesc, apiErrCode, loadErrNum, loadErrDesc
+Dim importErrDesc
 Dim distSq, distErr, dist
 Dim docTypeText, solidsText, sheetsText, refAcquireErr
 Dim distText, blocks, dtRaw, refBodiesArr, refSheetsArr, refCloseLines
@@ -218,36 +218,26 @@ If skipVolume Then
   outFile.WriteLine "check:ref_close=skipped"
 Else
   ' The documented STEP-import shape (LoadFile4: FileName, ArgString,
-  ' ImportData, Errors As Long OUT). The literal Nothing for the
-  ' Object-typed ImportData raised err 424 from VBScript, and the fourth
-  ' argument is a ByRef numeric OUTPUT - it must be a Long-coerced
-  ' variable (the RunMacro2 ByRef lesson), never a string. ONE import
-  ' attempt: a retry ladder could orphan an opened document whose handle
-  ' a failed attempt never returned.
-  Err.Clear
-  Set importData = Nothing
-  Set importData = swApp.GetImportFileData(stepPath)
-  importErrNum = Err.Number
-  importErrDesc = Err.Description
-  If importErrNum <> 0 Then
-    refAcquireErr = "cannot load the STEP reference: GetImportFileData err " & NumStr(importErrNum) & ": " & importErrDesc
+  ' ImportData, Errors As Long OUT). This seat's VBScript cannot marshal
+  ' the ByRef Errors output (RunMacro2's ByRef Long raises Type mismatch
+  ' regardless of CLng), so ImportStepDoc walks the marshalling forms
+  ' ONCE each and reconciles the ownership snapshot between attempts: a
+  ' marshalling failure opens no document, but any unknown title stops
+  ' the ladder as ambiguous ownership.
+  If preErr <> 0 Then
+    refAcquireErr = "cannot load the STEP reference: the ownership enumeration failed (err " & NumStr(preErr) & ") - refusing import"
     docTypeText = "unreadable"
     solidsText = "missing or unreadable"
     sheetsText = "unreadable"
   Else
     Err.Clear
-    apiErrCode = CLng(0)
-    Set refDoc = swApp.LoadFile4(stepPath, "r", importData, apiErrCode)
-    loadErrNum = Err.Number
-    loadErrDesc = Err.Description
-    If loadErrNum <> 0 Or refDoc Is Nothing Then
-      refAcquireErr = "cannot load the STEP reference: LoadFile4 err " & NumStr(loadErrNum) & " api-error " & NumStr(apiErrCode) & ": " & loadErrDesc
+    Set refDoc = ImportStepDoc(swApp, stepPath, preTitles, importErrDesc)
+    If refDoc Is Nothing Then
+      refAcquireErr = "cannot load the STEP reference: " & importErrDesc
       docTypeText = "unreadable"
       solidsText = "missing or unreadable"
       sheetsText = "unreadable"
-    Else
-    Err.Clear
-    refTitle = refDoc.GetTitle
+
     If Err.Number <> 0 Then refTitle = ""
     Err.Clear
     dtRaw = refDoc.GetType
@@ -608,4 +598,117 @@ Function VerifiedCloseLines(ByVal app, ByVal doc, ByVal title)
   End If
   out = "check:ref_close=pass" & vbCrLf
   VerifiedCloseLines = out
+End Function
+
+' One LoadFile4 marshalling form, attempted once. The ByRef Errors output
+' is a known VBScript late-binding failure point on this seat (the
+' RunMacro2 ByRef Long precedent), so the form list covers the shapes
+' VBScript can pass; every outcome is captured as errNum/errDesc and a
+' silent Nothing return is a named error.
+Function TryLoadForm(ByVal app, ByVal stepPath, ByVal importData, ByVal formIndex, ByRef errNum, ByRef errDesc)
+  Dim outLong
+  Set TryLoadForm = Nothing
+  errNum = 0
+  errDesc = ""
+  On Error Resume Next
+  Err.Clear
+  Select Case formIndex
+    Case 1
+      outLong = CLng(0)
+      Set TryLoadForm = app.LoadFile4(stepPath, "r", importData, outLong)
+    Case 2
+      Set TryLoadForm = app.LoadFile4(stepPath, "r", importData, CLng(0))
+    Case 3
+      outLong = CLng(0)
+      Set TryLoadForm = app.LoadFile4(stepPath, "r", Nothing, outLong)
+    Case 4
+      Set TryLoadForm = app.LoadFile4(stepPath, "r", Nothing, CLng(0))
+  End Select
+  errNum = Err.Number
+  errDesc = Err.Description
+  Err.Clear
+  On Error GoTo 0
+  If errNum = 0 Then
+    If TryLoadForm Is Nothing Then
+      errNum = 424
+      errDesc = "LoadFile4 returned nothing"
+    End If
+  End If
+End Function
+
+' Ownership reconciliation between import attempts: every document must
+' carry a title from the pre-import snapshot. An unknown title means an
+' attempt may have opened a document without returning its handle - the
+' ladder stops and names it, and nothing is closed (the user owns what
+' cannot be attributed).
+Function OwnershipReconciled(ByVal app, ByVal preSnapshot, ByRef note)
+  Dim d2, t3, errN
+  OwnershipReconciled = False
+  note = ""
+  On Error Resume Next
+  Err.Clear
+  Set d2 = app.GetFirstDocument
+  errN = Err.Number
+  If errN <> 0 Then
+    note = "the ownership re-walk failed (err " & NumStr(errN) & ")"
+    Err.Clear
+    On Error GoTo 0
+    Exit Function
+  End If
+  Do While Not d2 Is Nothing
+    Err.Clear
+    t3 = d2.GetTitle
+    If Err.Number <> 0 Then
+      note = "a document title could not be read during reconciliation"
+      Err.Clear
+      On Error GoTo 0
+      Exit Function
+    End If
+    If InStr(1, preSnapshot, t3 & vbCrLf, vbBinaryCompare) = 0 Then
+      note = "a document appeared without a handle: <" & t3 & ">"
+      On Error GoTo 0
+      Exit Function
+    End If
+    Err.Clear
+    Set d2 = d2.GetNext
+    If Err.Number <> 0 Then
+      note = "the ownership re-walk failed mid-scan (err " & NumStr(Err.Number) & ")"
+      Err.Clear
+      On Error GoTo 0
+      Exit Function
+    End If
+  Loop
+  On Error GoTo 0
+  OwnershipReconciled = True
+End Function
+
+' STEP import through the marshalling forms above, reconciled between
+' attempts. The failure text names every attempt.
+Function ImportStepDoc(ByVal app, ByVal stepPath, ByVal preSnapshot, ByRef errText)
+  Dim importData, res, i, n, dsc, recon
+  Set ImportStepDoc = Nothing
+  errText = ""
+  Err.Clear
+  On Error Resume Next
+  Set importData = app.GetImportFileData(stepPath)
+  n = Err.Number
+  dsc = Err.Description
+  Err.Clear
+  On Error GoTo 0
+  If n <> 0 Then
+    errText = "GetImportFileData err " & NumStr(n) & ": " & dsc
+    Exit Function
+  End If
+  For i = 1 To 4
+    Set res = TryLoadForm(app, stepPath, importData, i, n, dsc)
+    If Not res Is Nothing Then
+      Set ImportStepDoc = res
+      Exit Function
+    End If
+    errText = errText & "form " & NumStr(i) & " err " & NumStr(n) & ": " & dsc & "; "
+    If Not OwnershipReconciled(app, preSnapshot, recon) Then
+      errText = errText & "ambiguous ownership after form " & NumStr(i) & ": " & recon
+      Exit Function
+    End If
+  Next
 End Function

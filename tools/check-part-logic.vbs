@@ -534,22 +534,47 @@ End Function
 ' checker's own period-decimal values on comma-decimal Windows). Anything
 ' else is refused with a named reason and converted to nothing.
 Function ComponentNumber(ByVal comp, ByRef num, ByRef note)
-  Dim vt
+  Dim vt, coerced
   ComponentNumber = False
   num = 0
   note = ""
+  ' The seat's COM marshalling delivers CenterOfMass components as
+  ' OBJECTS (D01 run 12: "component 0 is an object"). A wrapper carrying
+  ' a default numeric property coerces through a plain assignment; a
+  ' wrapper without one refuses named.
+  coerced = Empty
   If IsObject(comp) Then
-    note = "component is an object"
-    Exit Function
+    Err.Clear
+    On Error Resume Next
+    coerced = comp
+    If Err.Number <> 0 Then
+      ' no default property: an explicit Value member is the second and
+      ' last guarded attempt
+      Err.Clear
+      coerced = comp.Value
+    End If
+    If Err.Number <> 0 Then
+      note = "component is an object that does not coerce (typename " & TypeName(comp) & ")"
+      Err.Clear
+      On Error GoTo 0
+      Exit Function
+    End If
+    On Error GoTo 0
+    If IsObject(coerced) Then
+      note = "component is an object that does not coerce (typename " & TypeName(comp) & ")"
+      Exit Function
+    End If
+  Else
+    coerced = comp
   End If
-  vt = VarType(comp)
+  vt = VarType(coerced)
   If vt = vbByte Or vt = vbInteger Or vt = vbLong Or vt = vbSingle Or vt = vbDouble Or vt = vbCurrency Or vt = vbDecimal Then
     ' the value is already binary: a plain assignment carries it with no
     ' locale surface (IsNumeric/CDbl are locale-poisoned and Val does not
     ' exist in VBScript - both are pinned out of this module)
-    num = comp
+    num = coerced
   ElseIf vt = vbString Then
-    If Not ParsePeriod(CStr(comp), num) Then
+    If Not ParsePeriod(CStr(coerced), num) Then
       note = "string component is not period-decimal"
       Exit Function
     End If
@@ -615,11 +640,12 @@ Function CentroidText(ByVal mpObj, ByRef cx, ByRef cy, ByRef cz, ByVal what)
   For k = 0 To 2
     Err.Clear
     If IsObject(arr(lo2 + k)) Then
-      CentroidText = what & " component " & NumStr(k) & " is an object"
-      On Error GoTo 0
-      Exit Function
+      ' Set carries the object REFERENCE; a plain assignment would invoke
+      ' the default property (or raise) before the coercion gate sees it
+      Set comp = arr(lo2 + k)
+    Else
+      comp = arr(lo2 + k)
     End If
-    comp = arr(lo2 + k)
     If Err.Number <> 0 Then
       CentroidText = what & " component " & NumStr(k) & " could not be read"
       Err.Clear

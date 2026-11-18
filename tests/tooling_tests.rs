@@ -334,8 +334,17 @@ fn the_decision_mirror_is_pinned_to_the_vbs_logic() {
     // ByRef numeric error output (a literal Nothing raised err 424 from
     // VBScript and the fourth argument was wrongly a string).
     assert!(
-        CHECKER.contains("GetImportFileData") && CHECKER.contains("api-error "),
+        CHECKER.contains("GetImportFileData") && CHECKER.contains("TryLoadForm"),
         "the reference import lost its documented, diagnosed form"
+    );
+    // the marshalling ladder is ownership-reconciled between attempts
+    assert!(
+        CHECKER.contains("OwnershipReconciled") && CHECKER.contains("ambiguous ownership"),
+        "the import attempts lost their ownership reconciliation"
+    );
+    assert!(
+        LOGIC.contains("component is an object that does not coerce"),
+        "the object-coercion refusal lost its named reason"
     );
     assert!(
         !CHECKER.contains("Function CentroidText("),
