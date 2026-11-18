@@ -3,6 +3,7 @@
 //! `docs/replay-profile.md`.
 
 pub mod build;
+pub mod conic;
 pub mod error;
 pub mod inspect;
 pub mod limits;

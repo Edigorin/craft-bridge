@@ -195,7 +195,8 @@ solved value with the binding reported as a degrade trigger.
 | `radius` / `diameter` `{"c","value"(mm)}` | `AddDimension2` on the circle | pending |
 | `angle` `{"a","b","value"(rad)}` | `AddDimension2` on the two segments (radians) | pending |
 | any other relation type (`pattern_point`, `point_along`, `pierce`, `symmetric`, `arc_sweep`, …) | **degrade trigger**: recorded, never silently dropped | n/a |
-| any other entity (`arc`, `spline`, `ellipse`, `conic`) | **degrade trigger** for the tracer phase | n/a |
+| any other entity (`arc`, `spline`, `ellipse`) | **degrade trigger** for the tracer phase | n/a |
+| `conic` (`a`, `b`, `apex`, `rho`) | validated offline (src/conic.rs: exact rational/implicit math) then a **named stop**: "exact replay awaits the seat probe (research 09 P0)" - no emission form is proven exact (CreateConic's XApex semantics unverified; research 09 release gate) | n/a until the P0 probe |
 
 **Orientation (the frame contract):** SolidCraft is Z-up, SolidWorks is
 Y-up, and a seat's origin planes are not portable: one seat maps Front to

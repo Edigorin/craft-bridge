@@ -1377,3 +1377,232 @@ fn boundary_fallback_invalidates_plane_resolution_named() {
         steps[3].detail
     );
 }
+
+/// A minimal one-sketch solidcraft/57 design carrying one conic curve.
+fn conic_design(points: &str, conic: &str) -> String {
+    format!(
+        r#"{{
+  "format": "solidcraft/57",
+  "units": "mm",
+  "params": [{{ "name": "W", "expr": "50 mm", "unit": "mm" }}],
+  "features": [
+    {{
+      "id": 7,
+      "name": "s",
+      "suppressed": false,
+      "type": "sketch",
+      "plane": {{ "type": "origin", "name": "XY" }},
+      "sketch": {{
+        "points": [{points}],
+        "curves": [{conic}],
+        "constraints": [],
+        "counters": {{ "l": 0, "p": 3 }}
+      }}
+    }},
+    {{
+      "id": 8, "name": "e", "suppressed": false, "type": "extrude",
+      "sketch": 7, "op": "new",
+      "extent": {{ "type": "distance", "distance": "10 mm", "direction": "one" }}
+    }}
+  ]
+}}"#
+    )
+}
+
+const CONIC_PTS: &str = r#"{ "id": "p0", "pos": [0.0, 0.0] },
+        { "id": "q", "pos": [20.0, 8.0] },
+        { "id": "p2", "pos": [40.0, 0.0] }"#;
+const CONIC_OK: &str = r#"{ "id": "c1", "type": "conic", "a": 0, "b": 2, "apex": 1, "rho": 0.5 }"#;
+
+#[test]
+fn conic_validates_offline_and_stops_at_the_seat_gate() {
+    let steps = plan_of(&conic_design(CONIC_PTS, CONIC_OK));
+    // the parameter and then the sketch step; the sketch stops at the
+    // research 09 P0 seat gate as a per-step Unmappable stop
+    let sketch = &steps[1];
+    assert!(
+        matches!(sketch.work, Work::Unmappable),
+        "the conic sketch must stop as unmappable: {:?}",
+        sketch.work
+    );
+    for needle in [
+        "native conic",
+        "points a=0 apex=1 b=2",
+        "rho 0.5",
+        "class Parabola",
+        "construction false, reversed false",
+        "research 09 P0",
+        "no curve is emitted",
+    ] {
+        assert!(
+            sketch.detail.contains(needle),
+            "missing {needle}: {}",
+            sketch.detail
+        );
+    }
+    // ordinary downstream stopping: the extrude is not executed
+    assert!(
+        matches!(steps[2].work, Work::Unmappable | Work::Note)
+            || steps[2].status == PlanStatus::NotExecuted
+    );
+}
+
+#[test]
+fn conic_wrappers_travel_to_the_gate_message() {
+    let conic = r#"{ "id": "c1", "type": "conic", "a": 0, "b": 2, "apex": 1, "rho": 0.5, "construction": true, "reversed": true }"#;
+    let steps = plan_of(&conic_design(CONIC_PTS, conic));
+    assert!(
+        steps[1].detail.contains("construction true, reversed true"),
+        "{}",
+        steps[1].detail
+    );
+}
+
+#[test]
+fn malformed_conic_data_refuses_as_invalid_recipe() {
+    // malformed data stays a whole-plan refusal (the InvalidRecipe
+    // semantics) - distinct from the per-step seat-gate stop
+    for (conic, needle) in [
+        (
+            r#"{ "id": "c1", "type": "conic", "a": 0, "b": 2, "apex": 99, "rho": 0.5 }"#,
+            "references point 99 which does not exist",
+        ),
+        (
+            r#"{ "id": "c1", "type": "conic", "a": 0, "b": 2, "apex": 1 }"#,
+            "has no rho",
+        ),
+        (
+            r#"{ "id": "c1", "type": "conic", "a": 0, "b": 2, "apex": 1, "rho": 1.5 }"#,
+            "outside the open interval",
+        ),
+    ] {
+        let msg = plan_err(&conic_design(CONIC_PTS, conic));
+        assert!(msg.contains(needle), "{conic}: {msg}");
+    }
+    // a non-boolean wrapper is tolerated as absent (unwrap_or(false)) and
+    // still reaches the seat gate - it is not malformed data
+    let steps = plan_of(&conic_design(
+        CONIC_PTS,
+        r#"{ "id": "c1", "type": "conic", "a": 0, "b": 2, "apex": 1, "rho": 0.5, "construction": 3 }"#,
+    ));
+    assert!(
+        steps[1].detail.contains("research 09 P0"),
+        "{}",
+        steps[1].detail
+    );
+    // a collinear control triangle refuses named
+    let collinear = r#"{ "id": "p0", "pos": [0.0, 0.0] },
+        { "id": "q", "pos": [20.0, 0.0] },
+        { "id": "p2", "pos": [40.0, 0.0] }"#;
+    let msg = plan_err(&conic_design(collinear, CONIC_OK));
+    assert!(msg.contains("effectively collinear"), "{msg}");
+}
+
+#[test]
+fn conic_validation_uses_evaluated_coordinates() {
+    // expressions win over the stored pos (the source-engine rule):
+    // a collinear stored triangle that expressions move off the line
+    // passes validation and stops only at the seat gate
+    let pts_expr_ok = r#"{ "id": "p0", "pos": [0.0, 0.0] },
+        { "id": "q", "pos": [20.0, 0.0], "exprs": { "y": "8 mm" } },
+        { "id": "p2", "pos": [40.0, 0.0] }"#;
+    let steps = plan_of(&conic_design(pts_expr_ok, CONIC_OK));
+    assert!(
+        matches!(steps[1].work, Work::Unmappable) && steps[1].detail.contains("research 09 P0"),
+        "{}",
+        steps[1].detail
+    );
+    // and the reverse: a stored triangle expressions flatten refuses
+    let pts_expr_bad = r#"{ "id": "p0", "pos": [0.0, 0.0] },
+        { "id": "q", "pos": [20.0, 8.0], "exprs": { "y": "0 mm" } },
+        { "id": "p2", "pos": [40.0, 0.0] }"#;
+    let msg = plan_err(&conic_design(pts_expr_bad, CONIC_OK));
+    assert!(msg.contains("effectively collinear"), "{msg}");
+    // an unevaluable driver refuses named
+    let pts_bad_expr = r#"{ "id": "p0", "pos": [0.0, 0.0] },
+        { "id": "q", "pos": [20.0, 8.0], "exprs": { "y": "NoSuchParam" } },
+        { "id": "p2", "pos": [40.0, 0.0] }"#;
+    let msg = plan_err(&conic_design(pts_bad_expr, CONIC_OK));
+    assert!(msg.contains("cannot be evaluated at plan time"), "{msg}");
+}
+
+#[test]
+fn conic_conversion_is_pinned_to_metres() {
+    // a sub-floor chord in SOURCE millimetres (1e-13 mm) only refuses as
+    // coincident once the loader has converted mm -> m (the conic floor
+    // is 1e-15 m): this pins the unit boundary independently of the
+    // document units field
+    let tiny = r#"{ "id": "p0", "pos": [0.0, 0.0] },
+        { "id": "q", "pos": [20.0, 8.0] },
+        { "id": "p2", "pos": [0.0000000000001, 0.0] }"#;
+    let msg = plan_err(&conic_design(tiny, CONIC_OK));
+    assert!(msg.contains("the endpoints coincide"), "{msg}");
+}
+
+#[test]
+fn conic_stops_are_snapshot_survivable_and_emit_nothing() {
+    use craft_bridge::profile::SnapshotScope;
+    let design = conic_design(CONIC_PTS, CONIC_OK);
+    // ordinary planning: the sketch stops at the gate and the extrude
+    // downstream does not execute
+    let steps = plan_of(&design);
+    assert!(matches!(steps[1].work, Work::Unmappable));
+    assert_eq!(steps[2].status, PlanStatus::NotExecuted);
+    // a boundary snapshot at the stopped step lets planning continue -
+    // the conic refusal is a per-step stop, never a global one
+    let limits = Limits::default();
+    let value = recipe::validate(design.as_bytes(), &limits).unwrap();
+    let mut snaps = BTreeMap::new();
+    snaps.insert(1usize, SnapshotScope::Boundary);
+    let steps = replay::plan(&value, &limits, &snaps).unwrap();
+    assert!(matches!(steps[1].work, Work::Unmappable));
+    assert_eq!(
+        steps[2].status,
+        PlanStatus::FallbackPlanned,
+        "{:?}",
+        steps[2]
+    );
+    // the built macro carries NO conic or weighted-spline emission of any
+    // kind (the research 09 release gate: no form is seat-proven)
+    let dir = tempfile::tempdir().unwrap();
+    let recipe_path = dir.path().join("design.json");
+    let step_path = dir.path().join("part.step");
+    let artifact = dir.path().join("design.craftx");
+    let out: PathBuf = dir.path().join("design.swb");
+    fs::write(&recipe_path, &design).unwrap();
+    fs::write(&step_path, STEP_FIXTURE).unwrap();
+    pack::pack(
+        &PackOptions {
+            recipe: &recipe_path,
+            step: &step_path,
+            out: &artifact,
+            warnings: None,
+            name: None,
+            overwrite: false,
+            snapshots: Vec::new(),
+            final_snapshot: None,
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    build::build(
+        &BuildOptions {
+            artifact: &artifact,
+            out: &out,
+            plan: None,
+            plan_text: None,
+            overwrite: true,
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    let m = fs::read_to_string(&out).unwrap();
+    for forbidden in [
+        "CreateConic",
+        "CreateSpline",
+        "CreateSplinesByEqnParams",
+        "SplineParamData",
+    ] {
+        assert!(!m.contains(forbidden), "conic emission leaked: {forbidden}");
+    }
+}

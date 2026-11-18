@@ -1633,6 +1633,59 @@ fn parse_sketch(
                     construction,
                 });
             }
+            Some("conic") => {
+                // A native conic record (research 09): `a`/`b` name the
+                // endpoints, `apex` names the point indexed as the
+                // ENDPOINT-TANGENT INTERSECTION (not a curve point), and
+                // `rho` in (0,1) is the shoulder ratio. Validation runs
+                // on EVALUATED coordinates - an expression wins over the
+                // stored pos (the source-engine rule) - and an
+                // unevaluable driver refuses named. The path then stops
+                // at the research 09 P0 seat gate: no emission form is
+                // proven exact (CreateConic's XApex semantics are
+                // unverified), so no curve is emitted here.
+                let a = point_index("a")?;
+                let b = point_index("b")?;
+                let apex = point_index("apex")?;
+                let rho = c
+                    .get("rho")
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| Error::InvalidRecipe(format!("curve {i} has no rho")))?;
+                let eval_xy = |pi: usize| -> Result<(f64, f64)> {
+                    let mut xy = [points[pi][0], points[pi][1]];
+                    let ctx = expr::Context::for_unit("", design_factor, design_text);
+                    for axis in 0..2 {
+                        if let Some(text) = &point_exprs[pi][axis] {
+                            let node = expr::parse(text).map_err(|e| {
+                                Error::InvalidRecipe(format!(
+                                    "conic curve {i} point {pi}: coordinate expression cannot be evaluated at plan time ({e})"
+                                ))
+                            })?;
+                            let q = expr::eval(&node, &ctx, &env.lookup()).map_err(|e| {
+                                Error::InvalidRecipe(format!(
+                                    "conic curve {i} point {pi}: coordinate expression cannot be evaluated at plan time ({e})"
+                                ))
+                            })?;
+                            if q.dim != expr::Dim::Length {
+                                return Err(Error::InvalidRecipe(format!(
+                                    "conic curve {i} point {pi}: a coordinate expression is not a length"
+                                )));
+                            }
+                            xy[axis] = q.value * 1000.0;
+                        }
+                    }
+                    // the loader's native unit is mm; the conic module
+                    // works in metres (research 09 T4 rule 5)
+                    Ok((xy[0] / 1000.0, xy[1] / 1000.0))
+                };
+                let seg =
+                    crate::conic::ConicSeg::new(eval_xy(a)?, eval_xy(apex)?, eval_xy(b)?, rho)?;
+                let reversed = c.get("reversed").and_then(Value::as_bool).unwrap_or(false);
+                return Err(Error::Unsupported(format!(
+                    "sketch curve {i} is a native conic (points a={a} apex={apex} b={b}, rho {rho}, class {:?}, construction {construction}, reversed {reversed}): offline validation passed; exact replay awaits the seat probe (research 09 P0) and no curve is emitted",
+                    seg.class()
+                )));
+            }
             _ => {
                 return Err(Error::Unsupported(format!(
                     "sketch curve {i} is outside the tracer subset (line, circle)"
