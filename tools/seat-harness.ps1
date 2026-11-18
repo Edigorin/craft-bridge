@@ -8,11 +8,14 @@
 # values and mass properties against the STEP reference. Failures are recorded
 # and the corpus continues. Nothing outside the committed corpus ever runs.
 param(
-    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
+    [string]$RepoRoot,
     [string]$ReportDir = (Join-Path (Get-Location) "harness-report"),
     [switch]$AllowDegraded
 )
 $ErrorActionPreference = "Stop"
+# Resolved in the body: $PSScriptRoot is not bound inside param() default
+# expressions under powershell.exe -File.
+if (-not $RepoRoot) { $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path }
 . (Join-Path $PSScriptRoot "seat-run.ps1")
 $corpus = Join-Path $RepoRoot "corpus"
 New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null

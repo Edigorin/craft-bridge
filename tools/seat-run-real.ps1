@@ -46,9 +46,13 @@
 
 param(
     [Parameter(Mandatory = $true)][string]$Design,
-    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+    [string]$RepoRoot
 )
 $ErrorActionPreference = "Stop"
+# $PSScriptRoot is not bound inside param() default expressions when the
+# script runs under powershell.exe -File (the scheduled-task form), so the
+# default resolves here, in the body.
+if (-not $RepoRoot) { $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path }
 . (Join-Path $PSScriptRoot "seat-run.ps1")
 
 # Every tooling script this run executes - THIS RUNNER INCLUDED - must be
