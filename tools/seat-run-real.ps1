@@ -86,13 +86,33 @@ function Test-RealInputPath {
 
 # Real-part artifacts stay UNTRACKED (the hard rule): a file git knows is
 # refused, loudly.
+# A native command's stderr becomes ErrorRecords under
+# $ErrorActionPreference='Stop' EVEN when redirected to $null (PS 5.1),
+# and git's expected "pathspec did not match" for an untracked file goes
+# to stderr - so a plain call would abort the run. Invoke git with the
+# preference relaxed locally (restored on exit) and capture its output.
+function Invoke-QuietGit {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string[]]$GitArgs
+    )
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $out = @(& git -C $Root @GitArgs 2>$null)
+        return [pscustomobject]@{ Out = $out; Code = $LASTEXITCODE }
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+}
+
 function Test-RealUntracked {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
         [Parameter(Mandatory = $true)][string]$RelPath
     )
-    git -C $Root ls-files --error-unmatch -- $RelPath 2>$null | Out-Null
-    $code = $LASTEXITCODE
+    $r = Invoke-QuietGit -Root $Root -GitArgs @("ls-files", "--error-unmatch", "--", $RelPath)
+    $code = $r.Code
     if ($code -eq 0) {
         throw "refusing: $RelPath is a tracked file; real-part artifacts must stay untracked (AGENTS.md)"
     }
@@ -108,8 +128,9 @@ function Test-RealZoneUntracked {
         [Parameter(Mandatory = $true)][string]$Root,
         [Parameter(Mandatory = $true)][string]$RelDir
     )
-    $out = git -C $Root ls-files -- $RelDir 2>$null
-    $code = $LASTEXITCODE
+    $r = Invoke-QuietGit -Root $Root -GitArgs @("ls-files", "--", $RelDir)
+    $out = $r.Out
+    $code = $r.Code
     if ($code -ne 0) {
         throw "refusing: the untracked check for $RelDir could not be established (git exited $code)"
     }
