@@ -103,7 +103,7 @@ indices to `points` (never the string ids). `construction`, `centerline`
 and `infinite` curves all sit outside profile detection and replay as
 construction geometry. An `angle` constraint with `flip: true` selects
 the supplementary branch and degrades named (never a wrong angle). The
-`fix {p}` constraint is a point pin and replays as a real `sgFix`
+`fix {p}` constraint is a point pin and replays as a real `sgFIXED`
 relation on the point's endpoint (the sketch origin is fixed by
 construction; a free non-origin point has no entity to pin and degrades
 named). A constraint referencing a point no curve endpoint occupies
@@ -118,7 +118,7 @@ carry the sketch geometry. Precedence: the expression drives even when
 the point is `fixed` (the dimension both pins and parametrizes it). The
 drivers measure DELTAS from one pinned anchor: a curve endpoint the
 source pins (`fix` or `fixed` with no moving expression) that is held by
-a real `sgFix` relation, at the sketch origin when possible. The anchor's
+a real `sgFIXED` relation, at the sketch origin when possible. The anchor's
 fixed offset folds into the equation. No pinned anchor degrades the
 drivers named. A zero delta cannot carry a zero-length dimension: it is
 position-verified and recorded as a driver note. An

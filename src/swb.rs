@@ -1937,7 +1937,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
 
     // Relations
     out.push_str(&format!(
-        "Function Relations{index}() As Boolean\n    On Error GoTo RelFail\n    Const TOL As Double = 0.000001\n    Dim vA As Variant\n    Dim vB As Variant\n    Dim vC As Variant\n    Dim vD As Variant\n    Dim chk As Double\n"
+        "Function Relations{index}() As Boolean\n    On Error GoTo RelFail\n    Const TOL As Double = 0.000001\n    Dim vA As Variant\n    Dim vB As Variant\n    Dim vC As Variant\n    Dim vD As Variant\n    Dim chk As Double\n    Dim fixX As Double\n    Dim fixY As Double\n"
     ));
     for rel in &sk.relations {
         out.push_str(&emit_relation(index, rel));
@@ -2123,17 +2123,30 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
     };
     match *rel {
         RelationT::Fix(slot) => {
-            // A point pin (sgFix): the same anchoring vocabulary the
-            // primitives use for their literal placements. The evidence is
-            // behavioural like every relation - VerifySketchN reads every
-            // endpoint back against its planned position afterwards.
-            select_point(slot, false) + &apply("sgFix")
+            // A point pin (sgFIXED - research/outputs/04 official examples;
+            // the old sgFix spelling was a SILENT NO-OP per the seat table,
+            // docs/seat-acceptance.md 2026-11-16). The evidence is
+            // behavioural like every relation: the pin must not shift the
+            // point it pins, and VerifySketchN reads every endpoint back
+            // against its planned position after the later solves prove
+            // the pin held.
+            format!(
+                "    fixX = pt{index}({slot}).X\n    fixY = pt{index}({slot}).Y\n",
+                index = index,
+                slot = slot
+            ) + &select_point(slot, false)
+                + &apply("sgFIXED")
+                + &format!(
+                    "    If Abs(pt{index}({slot}).X - fixX) > TOL Or Abs(pt{index}({slot}).Y - fixY) > TOL Then gMsg = \"the fix pin {slot} moved the point it pinned\": GoTo RelFail\n",
+                    index = index,
+                    slot = slot
+                )
         }
         RelationT::PointsCoincident(a, b) => {
             let label = format!("points-coincident {a}-{b}");
             select_point(a, false)
                 + &select_point(b, true)
-                + &apply("sgCoincident")
+                + &apply("sgCOINCIDENT")
                 + &format!(
                     "    If Abs(pt{index}({a}).X - pt{index}({b}).X) > TOL Or Abs(pt{index}({a}).Y - pt{index}({b}).Y) > TOL Then gMsg = \"the {label} relation did not coincide the points\": GoTo RelFail\n"
                 )
@@ -2198,7 +2211,7 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
             let label = format!("lines-parallel {a}-{b}");
             select_line(a, false)
                 + &select_line(b, true)
-                + &apply("sgParallel")
+                + &apply("sgPARALLEL")
                 + &format!(
                     "    vA = sl{index}({a}).GetStartPoint\n    vB = sl{index}({a}).GetEndPoint\n    vC = sl{index}({b}).GetStartPoint\n    vD = sl{index}({b}).GetEndPoint\n    chk = (vB(0) - vA(0)) * (vD(1) - vC(1)) - (vB(1) - vA(1)) * (vD(0) - vC(0))\n    If Abs(chk) > TOL Then gMsg = \"the {label} relation did not parallel the lines\": GoTo RelFail\n"
                 )
@@ -2207,7 +2220,7 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
             let label = format!("lines-perpendicular {a}-{b}");
             select_line(a, false)
                 + &select_line(b, true)
-                + &apply("sgPerpendicular")
+                + &apply("sgPERPENDICULAR")
                 + &format!(
                     "    vA = sl{index}({a}).GetStartPoint\n    vB = sl{index}({a}).GetEndPoint\n    vC = sl{index}({b}).GetStartPoint\n    vD = sl{index}({b}).GetEndPoint\n    chk = (vB(0) - vA(0)) * (vD(0) - vC(0)) + (vB(1) - vA(1)) * (vD(1) - vC(1))\n    If Abs(chk) > TOL Then gMsg = \"the {label} relation did not square the lines\": GoTo RelFail\n"
                 )
@@ -2216,13 +2229,13 @@ fn emit_relation(index: usize, rel: &RelationT) -> String {
             // Tangency has no cheap solved-geometry predicate over two lines;
             // the selection checks and the coordinate verification are the
             // evidence here (documented limitation, docs/mapping.md).
-            select_line(a, false) + &select_line(b, true) + &apply("sgTangent")
+            select_line(a, false) + &select_line(b, true) + &apply("sgTANGENT")
         }
         RelationT::LinesEqual(a, b) => {
             let label = format!("lines-equal {a}-{b}");
             select_line(a, false)
                 + &select_line(b, true)
-                + &apply("sgEqual")
+                + &apply("sgSAMELENGTH")
                 + &format!(
                     "    vA = sl{index}({a}).GetStartPoint\n    vB = sl{index}({a}).GetEndPoint\n    vC = sl{index}({b}).GetStartPoint\n    vD = sl{index}({b}).GetEndPoint\n    chk = Sqr((vB(0) - vA(0)) ^ 2 + (vB(1) - vA(1)) ^ 2) - Sqr((vD(0) - vC(0)) ^ 2 + (vD(1) - vC(1)) ^ 2)\n    If Abs(chk) > TOL Then gMsg = \"the {label} relation did not equalize the lines\": GoTo RelFail\n"
                 )
@@ -2961,7 +2974,7 @@ fn emit_helper_axis(sidx: usize, axis: &AxisSel, locals: &mut String) -> String 
     out.push_str(
         "    If Not ax.Select(False) Then gMsg = \"the helper axis would not select for fixing\": GoTo ExFail\n",
     );
-    out.push_str("    swDoc.SketchAddConstraints \"sgFix\"\n    swDoc.ClearSelection2 True\n");
+    out.push_str("    swDoc.SketchAddConstraints \"sgFIXED\"\n    swDoc.ClearSelection2 True\n");
     out.push_str(&format!(
         "    SolveSketch skName{sidx}, skFeat{sidx}\n    vA = ax.GetStartPoint\n    vB = ax.GetEndPoint\n    If Abs(vA(0) - MapU({sidx}, {}, {})) > 0.000001 Then gMsg = \"the revolve helper axis start does not sit where the map put it\": GoTo ExFail\n    If Abs(vA(1) - MapV({sidx}, {}, {})) > 0.000001 Then gMsg = \"the revolve helper axis start does not sit where the map put it\": GoTo ExFail\n    If Abs(vA(2)) > 0.000001 Then gMsg = \"the revolve helper axis start is off the sketch plane\": GoTo ExFail\n    If Abs(vB(0) - MapU({sidx}, {}, {})) > 0.000001 Then gMsg = \"the revolve helper axis end does not sit where the map put it\": GoTo ExFail\n    If Abs(vB(1) - MapV({sidx}, {}, {})) > 0.000001 Then gMsg = \"the revolve helper axis end does not sit where the map put it\": GoTo ExFail\n    If Abs(vB(2)) > 0.000001 Then gMsg = \"the revolve helper axis end is off the sketch plane\": GoTo ExFail\n",
         vba_num(x1),
@@ -3096,13 +3109,13 @@ fn emit_prim_subs(index: usize, pr: &crate::replay::PrimStep) -> String {
                     "    If Not {handle}.Select(False) Then gMsg = \"{what} would not select\": GoTo ExFail\n    swDoc.SketchAddConstraints {name}\n    swDoc.ClearSelection2 True\n"
                 ));
             }
-            out.push_str("    Set pA = ln0.GetStartPoint2\n    If pA Is Nothing Then gMsg = \"the box corner handle is missing\": GoTo ExFail\n    If Not pA.Select(False) Then gMsg = \"the box corner anchor would not select\": GoTo ExFail\n    swDoc.SketchAddConstraints \"sgFix\"\n    swDoc.ClearSelection2 True\n");
+            out.push_str("    Set pA = ln0.GetStartPoint2\n    If pA Is Nothing Then gMsg = \"the box corner handle is missing\": GoTo ExFail\n    If Not pA.Select(False) Then gMsg = \"the box corner anchor would not select\": GoTo ExFail\n    swDoc.SketchAddConstraints \"sgFIXED\"\n    swDoc.ClearSelection2 True\n");
         }
         PrimKind::Cylinder => {
             // The centre anchor: placement is literal, so the fix keeps it
             // under parameter edits (same anchoring vocabulary and posture
             // as the revolve helper axis).
-            out.push_str("    Set pA = ci.GetCenterPoint2\n    If pA Is Nothing Then gMsg = \"the cylinder centre handle is missing\": GoTo ExFail\n    If Not pA.Select(False) Then gMsg = \"the cylinder centre anchor would not select\": GoTo ExFail\n    swDoc.SketchAddConstraints \"sgFix\"\n    swDoc.ClearSelection2 True\n");
+            out.push_str("    Set pA = ci.GetCenterPoint2\n    If pA Is Nothing Then gMsg = \"the cylinder centre handle is missing\": GoTo ExFail\n    If Not pA.Select(False) Then gMsg = \"the cylinder centre anchor would not select\": GoTo ExFail\n    swDoc.SketchAddConstraints \"sgFIXED\"\n    swDoc.ClearSelection2 True\n");
         }
     }
     match pr.kind {

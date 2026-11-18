@@ -248,27 +248,29 @@ Function Relations2() As Boolean
     Dim vC As Variant
     Dim vD As Variant
     Dim chk As Double
+    Dim fixX As Double
+    Dim fixY As Double
     If Not pt2(1).Select(False) Then gMsg = "the point slot 1 would not select": GoTo RelFail
     If Not pt2(2).Select(True) Then gMsg = "the point slot 2 would not select": GoTo RelFail
-    swDoc.SketchAddConstraints "sgCoincident"
+    swDoc.SketchAddConstraints "sgCOINCIDENT"
     swDoc.ClearSelection2 True
     SolveSketch skName2, skFeat2
     If Abs(pt2(1).X - pt2(2).X) > TOL Or Abs(pt2(1).Y - pt2(2).Y) > TOL Then gMsg = "the points-coincident 1-2 relation did not coincide the points": GoTo RelFail
     If Not pt2(3).Select(False) Then gMsg = "the point slot 3 would not select": GoTo RelFail
     If Not pt2(4).Select(True) Then gMsg = "the point slot 4 would not select": GoTo RelFail
-    swDoc.SketchAddConstraints "sgCoincident"
+    swDoc.SketchAddConstraints "sgCOINCIDENT"
     swDoc.ClearSelection2 True
     SolveSketch skName2, skFeat2
     If Abs(pt2(3).X - pt2(4).X) > TOL Or Abs(pt2(3).Y - pt2(4).Y) > TOL Then gMsg = "the points-coincident 3-4 relation did not coincide the points": GoTo RelFail
     If Not pt2(5).Select(False) Then gMsg = "the point slot 5 would not select": GoTo RelFail
     If Not pt2(6).Select(True) Then gMsg = "the point slot 6 would not select": GoTo RelFail
-    swDoc.SketchAddConstraints "sgCoincident"
+    swDoc.SketchAddConstraints "sgCOINCIDENT"
     swDoc.ClearSelection2 True
     SolveSketch skName2, skFeat2
     If Abs(pt2(5).X - pt2(6).X) > TOL Or Abs(pt2(5).Y - pt2(6).Y) > TOL Then gMsg = "the points-coincident 5-6 relation did not coincide the points": GoTo RelFail
     If Not pt2(0).Select(False) Then gMsg = "the point slot 0 would not select": GoTo RelFail
     If Not pt2(7).Select(True) Then gMsg = "the point slot 7 would not select": GoTo RelFail
-    swDoc.SketchAddConstraints "sgCoincident"
+    swDoc.SketchAddConstraints "sgCOINCIDENT"
     swDoc.ClearSelection2 True
     SolveSketch skName2, skFeat2
     If Abs(pt2(0).X - pt2(7).X) > TOL Or Abs(pt2(0).Y - pt2(7).Y) > TOL Then gMsg = "the points-coincident 0-7 relation did not coincide the points": GoTo RelFail

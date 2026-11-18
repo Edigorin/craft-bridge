@@ -66,7 +66,7 @@ is unconstrained - the truth table composes it.
 The generated box carries its **shape contract** explicitly - no automatic
 relation is assumed: `sgCOINCIDENT` closes the four corners, classified
 `sgHORIZONTAL2D`/`sgVERTICAL2D` relations (runtime `AxisClass`) pin
-rectangularity and the edge directions, and `sgFix` on the corner point
+rectangularity and the edge directions, and `sgFIXED` on the corner point
 anchors the literal placement (the cylinder centre is anchored the same
 way). Creation-time application is behaviourally indistinguishable from a
 pre-held predicate (the recorded limitation class); the parameter-edit
@@ -184,7 +184,7 @@ solved value with the binding reported as a degrade trigger.
 | `points[]`: `{"id", "pos": [u, v] (mm), "fixed"}` | entity endpoints drawn at the **mapped** `MapU(u/1000, v/1000), MapV(...), 0` (see Frame adaptation) | yes |
 | `curves[]` line: `{"id","type":"line","a","b","construction"}` (a/b: **indices into points[]**) | `SketchManager.CreateLine(x1,y1,0,x2,y2,0)` | yes |
 | `curves[]` circle: `{"id","type":"circle","c","r","construction"}` | `SketchManager.CreateCircleByRadius(cx,cy,0,r)` | yes |
-| constraint `coincident` `{"p","q"}` | select both `ISketchPoint`s → `SketchAddConstraints "sgCoincident"` | pending |
+| constraint `coincident` `{"p","q"}` | select both `ISketchPoint`s → `SketchAddConstraints "sgCOINCIDENT"` | pending |
 | `horizontal` / `vertical` `{"l"}` | **classified at runtime** against the sketch map: the SC axis lands on the sketch s or t axis and the constraint becomes `"sgHorizontal"` / `"sgVertical"` there; a non-permutation map omits it with a named reason | pending (checkpoint covers the classified form) |
 | `parallel` `{"a","b"}` | select both segments → `"sgParallel"` | pending |
 | `perpendicular` `{"a","b"}` | select both → `"sgPerpendicular"` | pending |

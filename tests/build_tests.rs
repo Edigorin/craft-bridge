@@ -278,7 +278,7 @@ fn revolve_axis_styles_and_full_turns_replay() {
         "the axis is not its sketch line"
     );
     assert!(
-        macro_text.contains("sgFix"),
+        macro_text.contains("sgFIXED"),
         "the helper axis is not anchored"
     );
     let outcome = case.build_to("rev2.swb", false).unwrap();
@@ -3726,12 +3726,12 @@ fn primitive_box_carries_its_shape_contract() {
         "the two v edges do not get the v relation"
     );
     assert!(
-        region.contains("\"sgFix\"") && region.contains("ln0.GetStartPoint2"),
+        region.contains("\"sgFIXED\"") && region.contains("ln0.GetStartPoint2"),
         "the literal corner is not anchored"
     );
     let cyl = builder_region(&text, "BuildPrim3");
     assert!(
-        cyl.contains("\"sgFix\"") && cyl.contains("ci.GetCenterPoint2"),
+        cyl.contains("\"sgFIXED\"") && cyl.contains("ci.GetCenterPoint2"),
         "the cylinder centre is not anchored"
     );
 }

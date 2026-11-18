@@ -954,7 +954,7 @@ fn constraints_on_unoccupied_points_degrade_instead_of_refusing() {
         "{:?}",
         sketch.dropped_constraints
     );
-    // The fix on a real endpoint becomes a real sgFix pin relation.
+    // The fix on a real endpoint becomes a real sgFIXED pin relation.
     assert!(
         sketch
             .relations
