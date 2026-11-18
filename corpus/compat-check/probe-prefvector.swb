@@ -261,6 +261,7 @@ End Sub
 ' (vbObjectError + 560), a verified restoration, two successful vector
 ' reads and exact equality. Anything else fails and stops.
 Sub RunCaseFail(ByVal stepIdx As Long, ByVal tag As String, ByVal planeFeat As Object)
+    Dim ok As Boolean
     Dim prev As Object
     Dim sk As Object
     Dim l1 As Object
@@ -269,8 +270,9 @@ Sub RunCaseFail(ByVal stepIdx As Long, ByVal tag As String, ByVal planeFeat As O
     Dim okBefore As Boolean
     Dim okAfter As Boolean
     Dim reason As String
-    Dim eNum As Long
-    Dim eMsg As String
+    Dim cErrNum As Long
+    Dim cErrMsg As String
+    Dim expectedErr As Boolean
     On Error GoTo DrawFail
 
     Set prev = swSketchMgr.ActiveSketch
@@ -291,24 +293,20 @@ Sub RunCaseFail(ByVal stepIdx As Long, ByVal tag As String, ByVal planeFeat As O
     Err.Raise vbObjectError + 560, "probe-prefvector", "deliberate draw failure"
 
 DrawFail:
-    ' the generated DrawGeometry failure path, verbatim in shape
-    eNum = Err.Number
-    eMsg = Err.Description
+    cErrNum = Err.Number
+    cErrMsg = Err.Description
     On Error Resume Next
-    If Not EndExactDraw(reason) Then eMsg = eMsg & " | restore refused: " & reason
+    If Not EndExactDraw(reason) Then cErrMsg = cErrMsg & " | restore refused: " & reason
     CloseSketchIfOpen
     On Error GoTo 0
-    If eNum <> vbObjectError + 560 Then
-        StopProbe stepIdx, tag, "unexpected error instead of the deliberate one: err " & Trim(Str(eNum)) & ": " & eMsg, beforeBits
-    End If
-    If InStr(1, eMsg, "restore refused", vbTextCompare) > 0 Then
-        StopProbe stepIdx, tag, "restoration refused after the deliberate failure: " & eMsg, beforeBits
-    End If
+    expectedErr = (cErrNum = (vbObjectError + 560))
+    If Not expectedErr Then StopProbe stepIdx, tag, "unexpected error instead of the deliberate one: err " & Trim(Str(cErrNum)) & ": " & cErrMsg, beforeBits
+    If InStr(1, cErrMsg, "restore refused", vbTextCompare) > 0 Then StopProbe stepIdx, tag, "restoration refused after the deliberate failure: " & cErrMsg, beforeBits
     afterBits = VectorText(okAfter)
     If Not okAfter Then StopProbe stepIdx, tag, "the preference vector could not be read after restoration", beforeBits
     If beforeBits <> afterBits Then StopProbe stepIdx, tag, "vector mismatch after the deliberate draw failure: before=" & beforeBits & " after=" & afterBits, beforeBits
     If Not swSketchMgr.ActiveSketch Is Nothing Then StopProbe stepIdx, tag, "the case sketch would not close", beforeBits
-    WriteStep stepIdx, "pref." & tag, "created", "restore-after-failure: deliberate err " & Trim(Str(eNum)) & " captured and restored; vector before=" & beforeBits & " after=" & afterBits & " equal=1"
+    WriteStep stepIdx, "pref." & tag, "created", "restore-after-failure: deliberate err " & Trim(Str(cErrNum)) & " captured and restored; vector before=" & beforeBits & " after=" & afterBits & " equal=1"
 End Sub
 
 ' ===== verbatim copies of the generated macros' exact-draw helpers =====
