@@ -1790,15 +1790,56 @@ fn exact_draw_switches_inference_off_and_restores_it_verified() {
         "the exact-draw helpers are missing"
     );
     assert!(
-        text.contains("swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swSketchInference)")
+        text.contains("Function SnapPrefId(")
             && text.contains(
                 "swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swSketchInference, False"
             ),
-        "the helpers must capture and switch the inference preference"
+        "the helpers must map and switch the inference preference"
+    );
+    // research 08's restoration rule: the WHOLE coupled vector is
+    // captured and restored (clearing 249 also clears Automatic
+    // Relations and the child snap options).
+    assert!(
+        text.contains("gSnapSaved(0 To 17) As Boolean") && text.contains("gSnapFlipped As Boolean"),
+        "the snap-vector module state is missing"
+    );
+    // research 08's conservative 18-entry set, every name confirmed
+    // present in the seat's swconst by reflection
+    for member in [
+        "swSketchInference",
+        "swSketchAutomaticRelations",
+        "swSketchInferFromModel",
+        "swSketchSnapsPoints",
+        "swSketchSnapsCenterPoints",
+        "swSketchSnapsMidPoints",
+        "swSketchSnapsQuadrantPoints",
+        "swSketchSnapsIntersections",
+        "swSketchSnapsNearest",
+        "swSketchSnapsTangent",
+        "swSketchSnapsPerpendicular",
+        "swSketchSnapsParallel",
+        "swSketchSnapsHVLines",
+        "swSketchSnapsHVPoints",
+        "swSketchSnapsLength",
+        "swSketchSnapsGrid",
+        "swSketchSnapToGridIfDisplayed",
+        "swSketchSnapsAngle",
+    ] {
+        assert!(text.contains(member), "the snap vector misses {member}");
+    }
+    assert!(
+        text.contains("swSketchAutomaticRelations and the swSketchSnaps"),
+        "manual recovery must name Automatic Relations"
     );
     assert!(
-        text.contains("restore it manually"),
+        text.contains("options manually"),
         "an unrecovered restore must name the manual-restore details"
+    );
+    // the Note class-name collision lesson: no generated identifier may
+    // be `note` (SolidWorks.Interop.sldworks.Note broke compilation).
+    assert!(
+        !text.contains("Dim note "),
+        "the identifier `note` shadows a SolidWorks type name"
     );
     // DrawGeometry brackets its drawing with the helpers and restores on
     // the failure path too.
