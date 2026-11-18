@@ -1,0 +1,965 @@
+' craft-bridge probe - probe-snap.swb (CreateLine endpoint inference)
+' Hand-written on the minimal.swb/probe-refplane.swb skeleton (helpers
+' reused verbatim; main replaced). Evidence question, all recorded:
+'   QS1: does ISketchManager.CreateLine move a new endpoint toward the
+'        MIDPOINT of an existing line (the u-alignment inference, ~0.6 mm
+'        zone) during macro creation, and which late-bound switch stops
+'        it: ISketch.AddToDB, ISketch.EnableSolving, or neither?
+' Cases (each in its own sketch, independently authored synthetic
+' geometry - NEVER client data):
+'   A baseline repro: L1 (0.004,-0.030)->(0.018,-0.014) (midpoint u
+'     0.011); L2 from L1's end to (0.0116, 0.010) - the target u sits
+'     0.0006 from the midpoint u, far from it in v. If L2's end lands at
+'     u=0.011 the inference reproduces.
+'   B same with skObj.AddToDB = True before drawing (False after).
+'   C same with skObj.EnableSolving = False before drawing (True after).
+'   D control: L2's target u far from every midpoint.
+' Both line ends are read through BOTH accessors (SketchPoint and the
+' Double() array) so the readings stay comparable with the emitter's.
+' Every case restores its switch on all exits (the original error is
+' preserved, cleanup errors recorded separately); a switch that cannot
+' be restored STOPS the probe (the next case would run in the wrong
+' mode); and no case may start while a sketch is still open.
+' Units: metres everywhere (the API convention).
+'
+' Report plumbing and the close discipline are the canary's, unchanged.
+
+Option Explicit
+
+Dim swApp As SldWorks.SldWorks
+Dim swDoc As SldWorks.ModelDoc2
+Dim swSketchMgr As SketchManager
+Dim reportPath As String
+Dim gProbeLog As String
+Dim gProbeReason As String
+Dim gMsg As String
+Dim gMap00 As Double
+Dim gMap01 As Double
+Dim gMap10 As Double
+Dim gMap11 As Double
+Dim gMapValid As Boolean
+Dim gMapSide As Long
+Dim gFrame(0 To 11) As Double
+Dim gDimToggle As Boolean
+Dim gDimToggleSaved As Boolean
+Dim skName As String
+
+Sub main()
+    Dim template As String
+    Dim closedOk As Boolean
+    Dim cleanupMode As String
+    Dim ok As Boolean
+    Dim feat As Object
+    Dim sk As Object
+    Dim topFeat As Object
+    Dim stepIdx As Long
+    stepIdx = -1
+    On Error GoTo Fail
+
+    ' ---- report setup (before any model mutation) ----
+    reportPath = ReportPathFromHost()
+    If reportPath = "" Then Err.Raise vbObjectError + 513, "probe-snap.swb", "no report path: CRAFT_BRIDGE_REPORT is unset and no path file exists in TEMP"
+    StartReport
+    WriteLine "{""type"":""header"",""macro"":""compat-check/probe-snap.swb"",""bridge_version"":""0.1.0""}"
+
+    ' ---- step 0: fresh part from the default template ----
+    stepIdx = 0
+    Set swApp = Application.SldWorks
+    gDimToggle = swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate)
+    gDimToggleSaved = True
+    swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, False
+    If swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate) Then Err.Raise vbObjectError + 528, "probe-snap.swb", "the input-dimension-value dialog could not be disabled"
+    template = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
+    If template = "" Then Err.Raise vbObjectError + 514, "probe-snap.swb", "no default part template is configured"
+    Set swDoc = swApp.NewDocument(template, 0, 0, 0)
+    If swDoc Is Nothing Then Err.Raise vbObjectError + 515, "probe-snap.swb", "NewDocument returned nothing"
+    Set swSketchMgr = swDoc.SketchManager
+    WriteStep stepIdx, "document.new", "created", "fresh part from the default template"
+
+    ' ---- step 1: identify the Top (XY) origin plane by frame probe ----
+    stepIdx = 1
+    Set topFeat = Nothing
+    Set feat = swDoc.FirstFeature
+    Do While Not feat Is Nothing
+        If InStr(1, feat.GetTypeName2(), "lane", vbTextCompare) > 0 Then
+            swDoc.ClearSelection2 True
+            ok = feat.Select(False)
+            If ok Then
+                swSketchMgr.InsertSketch True
+                Set sk = swSketchMgr.ActiveSketch
+                If Not sk Is Nothing Then
+                    If PlaneIsSource("XY") Then
+                        Set topFeat = feat
+                        swSketchMgr.InsertSketch True
+                        Exit Do
+                    End If
+                    swSketchMgr.InsertSketch True
+                End If
+            End If
+        End If
+        Set feat = feat.GetNextFeature
+    Loop
+    If topFeat Is Nothing Then Err.Raise vbObjectError + 516, "probe-snap.swb", "no origin plane carries the XY (Top) frame; tree scan saw: " & TreeSummary()
+    WriteStep stepIdx, "plane.identify", "created", "Top/XY origin plane found by frame probe: " & topFeat.Name
+
+    ' ---- the measurement cases ----
+    stepIdx = 2
+    RunCase stepIdx, "A-baseline", topFeat, "", 0.0116, 0.01
+    stepIdx = stepIdx + 1
+    RunCase stepIdx, "B-AddToDB", topFeat, "AddToDB", 0.0116, 0.01
+    stepIdx = stepIdx + 1
+    RunCase stepIdx, "C-EnableSolving", topFeat, "EnableSolving", 0.0116, 0.01
+    stepIdx = stepIdx + 1
+    RunCase stepIdx, "D-control", topFeat, "", 0.021, 0.01
+
+    ' ---- done ----
+    If gDimToggleSaved And Not swApp Is Nothing Then swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle
+    If gDimToggleSaved And Not swApp Is Nothing Then If swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate) <> gDimToggle Then WriteStep stepIdx, "toggle-restore", "failed", "the input-dimension-value preference did not restore"
+    cleanupMode = CloseMode()
+    If cleanupMode = "close" Then
+        CloseOwnedDoc closedOk
+        If closedOk Then
+            WriteLine "{""type"":""summary"",""status"":""ok""}"
+        Else
+            WriteStep stepIdx, "close", "failed", "the owned document could not be confirmed closed"
+            WriteLine "{""type"":""summary"",""status"":""failed""}"
+        End If
+    ElseIf cleanupMode = "keep" Then
+        WriteStep stepIdx, "owned-document", "kept-open", OwnedDocTitle()
+        WriteLine "{""type"":""summary"",""status"":""ok""}"
+    Else
+        WriteStep stepIdx, "close-mode", "failed", "the cleanup mode could not be established"
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
+    End If
+    Exit Sub
+
+Fail:
+    ' Capture the error FIRST: executing an On Error statement resets Err.
+    Dim errNum As Long, errMsg As String
+    errNum = Err.Number
+    errMsg = Err.Description
+    On Error Resume Next
+    If reportPath = "" Then reportPath = ReportPathFromHost()
+    If reportPath <> "" Then
+        WriteStep stepIdx, "macro", "failed", "err " & Trim(Str(errNum)) & ": " & errMsg
+    End If
+    If gDimToggleSaved And Not swApp Is Nothing Then swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swInputDimValOnCreate, gDimToggle
+    If gDimToggleSaved And Not swApp Is Nothing Then If swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swInputDimValOnCreate) <> gDimToggle Then WriteStep stepIdx, "toggle-restore", "failed", "the input-dimension-value preference did not restore"
+    cleanupMode = CloseMode()
+    If cleanupMode = "close" Then
+        CloseOwnedDoc closedOk
+    End If
+    If reportPath <> "" Then
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
+    End If
+End Sub
+
+' One case: open a fresh sketch on the probed plane, optionally flip a
+' late-bound switch, draw L1 then L2 (the trigger shape), read both
+' endpoints through both accessors, restore the switch. The switch is
+' late-bound through an Object so an absent member is catchable data.
+Sub RunCase(ByVal stepIdx As Long, ByVal tag As String, ByVal planeFeat As Object, ByVal switchMode As String, ByVal tx As Double, ByVal ty As Double)
+    Dim ok As Boolean
+    Dim sk As Object
+    Dim skObj As Object
+    Dim prev As Object
+    Dim l1 As Object
+    Dim l2 As Object
+    Dim pA As Object
+    Dim pB As Object
+    Dim arr As Variant
+    Dim arr1 As Variant
+    Dim switchErr As Long
+    Dim restoreErr As Long
+    Dim switchSet As Boolean
+    Dim msg As String
+    On Error GoTo CaseFail
+
+    ' fail closed: no case may start while a sketch is still open
+    Set prev = swSketchMgr.ActiveSketch
+    If Not prev Is Nothing Then Err.Raise vbObjectError + 570, "probe-snap.swb", tag & ": a sketch was still open at case start"
+
+    swDoc.ClearSelection2 True
+    If Not planeFeat.Select(False) Then Err.Raise vbObjectError + 570, "probe-snap.swb", tag & ": the plane would not select"
+    swSketchMgr.InsertSketch True
+    Set sk = swSketchMgr.ActiveSketch
+    If sk Is Nothing Then Err.Raise vbObjectError + 570, "probe-snap.swb", tag & ": no sketch opened"
+
+    ' flip the requested switch (late bound; an absent member is data)
+    msg = "switch="
+    If switchMode = "" Then
+        msg = msg & "none"
+    Else
+        msg = msg & switchMode
+    End If
+    If switchMode <> "" Then
+        Set skObj = sk
+        On Error Resume Next
+        Err.Clear
+        If switchMode = "AddToDB" Then
+            skObj.AddToDB = True
+        Else
+            skObj.EnableSolving = False
+        End If
+        switchErr = Err.Number
+        On Error GoTo CaseFail
+        msg = msg & " set err " & Trim(Str(switchErr))
+        If switchErr = 0 Then switchSet = True
+    End If
+
+    ' L1: (0.004,-0.030) -> (0.018,-0.014); midpoint u = 0.011
+    Set l1 = swSketchMgr.CreateLine(0.004, -0.03, 0#, 0.018, -0.014, 0#)
+    If l1 Is Nothing Then Err.Raise vbObjectError + 571, "probe-snap.swb", tag & ": L1 did not draw"
+    ' L2: from L1's end to the target (tx, ty)
+    Set l2 = swSketchMgr.CreateLine(0.018, -0.014, 0#, tx, ty, 0#)
+    If l2 Is Nothing Then Err.Raise vbObjectError + 571, "probe-snap.swb", tag & ": L2 did not draw"
+
+    ' restore the switch BEFORE reading (readings in normal mode); a
+    ' restore that fails stops the probe - the next case would run in
+    ' the wrong mode
+    If switchSet Then
+        On Error Resume Next
+        Err.Clear
+        If switchMode = "AddToDB" Then
+            skObj.AddToDB = False
+        Else
+            skObj.EnableSolving = True
+        End If
+        restoreErr = Err.Number
+        On Error GoTo CaseFail
+        msg = msg & ", restore err " & Trim(Str(restoreErr))
+        If restoreErr <> 0 Then
+            gMsg = tag & ": the switch could not be restored (err " & Trim(Str(restoreErr)) & ") - stopping, later cases would run in the wrong mode"
+            CloseSketchIfOpen
+            WriteStep stepIdx, "snap." & tag, "failed", msg & "; " & gMsg
+            Err.Raise vbObjectError + 578, "probe-snap.swb", gMsg
+        End If
+    End If
+
+    ' read both line ends through both accessors
+    Set pA = l1.GetEndPoint2
+    Set pB = l2.GetEndPoint2
+    arr1 = l1.GetEndPoint
+    arr = l2.GetEndPoint
+    msg = msg & "; L1 end point " & Vec3Text(pA.X, pA.Y, pA.Z) & " array " & Vec3Text(arr1(0), arr1(1), arr1(2)) & " (expected .018,-.014,0)"
+    msg = msg & "; L2 end point " & Vec3Text(pB.X, pB.Y, pB.Z) & " array " & Vec3Text(arr(0), arr(1), arr(2)) & " (expected " & Vec3Text(tx, ty, 0#) & ", midpoint u is .011)"
+    WriteStep stepIdx, "snap." & tag, "created", msg
+    CloseSketchIfOpen
+    Exit Sub
+
+CaseFail:
+    ' Capture the original error FIRST: the cleanup below resets Err.
+    Dim cErrNum As Long, cErrMsg As String
+    Dim cleanupNote As String
+    cErrNum = Err.Number
+    cErrMsg = Err.Description
+    cleanupNote = ""
+    On Error Resume Next
+    ' restore any switch this case flipped - on every exit
+    If switchSet Then
+        Err.Clear
+        If switchMode = "AddToDB" Then
+            skObj.AddToDB = False
+        Else
+            skObj.EnableSolving = True
+        End If
+        If Err.Number <> 0 Then cleanupNote = "; switch restore failed: err " & Trim(Str(Err.Number))
+    End If
+    Err.Clear
+    CloseSketchIfOpen
+    If Not swSketchMgr.ActiveSketch Is Nothing Then cleanupNote = cleanupNote & "; the sketch would not close"
+    ' Resume Next OFF before re-raising: main's Fail handler must see it
+    On Error GoTo 0
+    Err.Raise vbObjectError + 579, "probe-snap.swb", tag & ": err " & Trim(Str(cErrNum)) & ": " & cErrMsg & cleanupNote
+End Sub
+
+' Rebuild and stay in sketch edit (seat-proven 2026-11-16: EditRebuild3
+' EXITS sketch edit - sketch API calls then silently do nothing, and its
+' Boolean return is NOT a gate: it returns False in working flows). The
+' final state is verified; the refusal is raised only AFTER error handling
+' is restored, so it cannot be swallowed.
+Sub SolveSketch()
+    Dim sk As Object
+    swDoc.EditRebuild3
+    On Error Resume Next
+    Set sk = swSketchMgr.ActiveSketch
+    If sk Is Nothing Then
+        Err.Clear
+        swDoc.Extension.SelectByID2 skName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault
+        swSketchMgr.InsertSketch True
+        Set sk = swSketchMgr.ActiveSketch
+    End If
+    On Error GoTo 0
+    If sk Is Nothing Then Err.Raise vbObjectError + 529, "minimal.swb", "sketch edit could not be re-entered"
+End Sub
+
+' Frame adaptation map (owner decision 2026-11-13), single-sketch slot: the
+' probe publishes the map after its frame validation passes; MapU/MapV
+' express SC (u,v) in the sketch's own (s,t): s = u*gMap00 + v*gMap10,
+' t = u*gMap01 + v*gMap11.
+Function MapU(ByVal u As Double, ByVal v As Double) As Double
+MapU = u * gMap00 + v * gMap10
+End Function
+
+Function MapV(ByVal u As Double, ByVal v As Double) As Double
+MapV = u * gMap01 + v * gMap11
+End Function
+
+' Publish the map from the probed frame. Fail-closed and transactional:
+' validity is cleared first, every read and conversion is trapped, values
+' are computed into locals, and the map is stored only after the complete
+' validation passes - the pinned 16-entry ArrayData shape, finite entries,
+' scale ~ 1 (entry 12), unit axes, mutual orthogonality, and a
+' right-handed 3D frame (u x v = n). Tolerances: 1e-6.
+Function PublishMap(ByVal uPx As Double, ByVal uPy As Double, ByVal uPz As Double, ByVal vPx As Double, ByVal vPy As Double, ByVal vPz As Double, ByVal nPx As Double, ByVal nPy As Double, ByVal nPz As Double, ByRef reason As String) As Boolean
+Dim tr As Object
+Dim a As Variant
+Dim ux As Double
+Dim uy As Double
+Dim uz As Double
+Dim vx As Double
+Dim vy As Double
+Dim vz As Double
+Dim nx As Double
+Dim ny As Double
+Dim nz As Double
+Dim sc As Double
+Dim ub As Long
+Dim i As Long
+Dim x As Double
+Dim m00 As Double
+Dim m01 As Double
+Dim m10 As Double
+Dim m11 As Double
+Dim dot As Double
+Dim side As Long
+PublishMap = False
+reason = ""
+gMapValid = False
+On Error Resume Next
+Err.Clear
+Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
+If Err.Number <> 0 Then
+reason = "the transform could not be read: err " & Trim(Str(Err.Number))
+Exit Function
+End If
+If tr Is Nothing Then
+reason = "the transform is missing"
+Exit Function
+End If
+Err.Clear
+a = tr.ArrayData
+If Err.Number <> 0 Then
+reason = "ArrayData could not be read: err " & Trim(Str(Err.Number))
+Exit Function
+End If
+Err.Clear
+ub = UBound(a)
+If Err.Number <> 0 Then
+reason = "ArrayData is not an array: err " & Trim(Str(Err.Number))
+Exit Function
+End If
+If ub <> 15 Then
+reason = "ArrayData has " & Trim(Str(ub + 1)) & " entries; the pinned shape is 16"
+Exit Function
+End If
+For i = 0 To 15
+Err.Clear
+x = CDbl(a(i))
+If Err.Number <> 0 Then
+reason = "entry " & Trim(Str(i)) & " is not numeric: err " & Trim(Str(Err.Number))
+Exit Function
+End If
+If x <> x Then
+reason = "entry " & Trim(Str(i)) & " is not finite"
+Exit Function
+End If
+If Abs(x) > 1E+100 Then
+reason = "entry " & Trim(Str(i)) & " is not finite"
+Exit Function
+End If
+Next i
+' Arithmetic is trapped: an overflow must fail the publication, never skip
+' a check and reach the store below.
+On Error GoTo MapFail
+ux = a(0)
+uy = a(3)
+uz = a(6)
+vx = a(1)
+vy = a(4)
+vz = a(7)
+nx = a(2)
+ny = a(5)
+nz = a(8)
+sc = a(12)
+If Abs(sc - 1#) > 0.000001 Then
+reason = "scale is " & Trim(Str(sc)) & ", not 1"
+Exit Function
+End If
+If Abs(Sqr(ux * ux + uy * uy + uz * uz) - 1#) > 0.000001 Then reason = "u is not unit": Exit Function
+If Abs(Sqr(vx * vx + vy * vy + vz * vz) - 1#) > 0.000001 Then reason = "v is not unit": Exit Function
+If Abs(Sqr(nx * nx + ny * ny + nz * nz) - 1#) > 0.000001 Then reason = "n is not unit": Exit Function
+If Abs(ux * vx + uy * vy + uz * vz) > 0.000001 Then reason = "u and v are not orthogonal": Exit Function
+If Abs(ux * nx + uy * ny + uz * nz) > 0.000001 Then reason = "u and n are not orthogonal": Exit Function
+If Abs(vx * nx + vy * ny + vz * nz) > 0.000001 Then reason = "v and n are not orthogonal": Exit Function
+If Abs((uy * vz - uz * vy) - nx) > 0.000001 Then reason = "u x v does not equal n (x) - the 3D frame is not right-handed": Exit Function
+If Abs((uz * vx - ux * vz) - ny) > 0.000001 Then reason = "u x v does not equal n (y) - the 3D frame is not right-handed": Exit Function
+If Abs((ux * vy - uy * vx) - nz) > 0.000001 Then reason = "u x v does not equal n (z) - the 3D frame is not right-handed": Exit Function
+m00 = uPx * ux + uPy * uy + uPz * uz
+m10 = vPx * ux + vPy * uy + vPz * uz
+m01 = uPx * vx + uPy * vy + uPz * vz
+m11 = vPx * vx + vPy * vy + vPz * vz
+dot = nx * nPx + ny * nPy + nz * nPz
+If Abs(dot) < 0.999999 Then
+If Abs(dot) <= 0.000001 Then
+reason = "the normal is perpendicular to the source normal"
+Else
+reason = "the normal is only " & Trim(Str(dot)) & " parallel to the source normal"
+End If
+Exit Function
+End If
+side = 1
+If dot < 0 Then side = -1
+' Publish only now: nothing above has touched persistent state.
+gMap00 = m00
+gMap10 = m10
+gMap01 = m01
+gMap11 = m11
+gMapSide = side
+gFrame(0) = ux
+gFrame(1) = uy
+gFrame(2) = uz
+gFrame(3) = vx
+gFrame(4) = vy
+gFrame(5) = vz
+gFrame(6) = nx
+gFrame(7) = ny
+gFrame(8) = nz
+' The inverse origin: the model->sketch map is x_s = A.x_m + trans;
+' the sketch origin in model space is O = -(trans0*u' + trans1*v' +
+' trans2*n'). For origin planes trans = 0 and O = 0; for offset planes
+' the two quantities differ and SketchToModel needs O, never trans.
+gFrame(9) = -(a(9) * ux + a(10) * vx + a(11) * nx)
+gFrame(10) = -(a(9) * uy + a(10) * vy + a(11) * ny)
+gFrame(11) = -(a(9) * uz + a(10) * vz + a(11) * nz)
+gMapValid = True
+PublishMap = True
+Exit Function
+MapFail:
+reason = "the frame computation failed: err " & Trim(Str(Err.Number)) & ": " & Err.Description
+End Function
+
+' Accept the probed source plane and publish its adaptation map: the
+' probe-sketch translation must vanish and the normal must be parallel to
+' the source normal (either sign). Every read is trapped; any refusal
+' carries its reason.
+Function AcceptAndPublish(ByVal which As String, ByRef reason As String) As Boolean
+Dim tr As Object
+Dim a As Variant
+Dim uPx As Double
+Dim uPy As Double
+Dim uPz As Double
+Dim vPx As Double
+Dim vPy As Double
+Dim vPz As Double
+Dim nPx As Double
+Dim nPy As Double
+Dim nPz As Double
+On Error GoTo AccFail
+AcceptAndPublish = False
+reason = ""
+Select Case which
+Case "XY"
+uPx = 1#: uPy = 0#: uPz = 0#
+vPx = 0#: vPy = 1#: vPz = 0#
+nPx = 0#: nPy = 0#: nPz = 1#
+Case "XZ"
+uPx = 1#: uPy = 0#: uPz = 0#
+vPx = 0#: vPy = 0#: vPz = -1#
+nPx = 0#: nPy = 1#: nPz = 0#
+Case "YZ"
+uPx = 0#: uPy = 1#: uPz = 0#
+vPx = 0#: vPy = 0#: vPz = 1#
+nPx = 1#: nPy = 0#: nPz = 0#
+Case Else
+reason = "unknown source plane " & which
+Exit Function
+End Select
+Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
+If tr Is Nothing Then
+reason = "the transform is missing"
+Exit Function
+End If
+a = tr.ArrayData
+If Abs(a(9)) > 0.000001 Or Abs(a(10)) > 0.000001 Or Abs(a(11)) > 0.000001 Then
+reason = "the probe sketch origin is " & Vec3Text(a(9), a(10), a(11)) & ", not the model origin"
+Exit Function
+End If
+If Not PublishMap(uPx, uPy, uPz, vPx, vPy, vPz, nPx, nPy, nPz, reason) Then Exit Function
+AcceptAndPublish = True
+Exit Function
+AccFail:
+reason = "the frame read failed: err " & Trim(Str(Err.Number)) & ": " & Err.Description
+End Function
+
+' Invalidate the map (deletion or re-probe): nothing reads a map that is
+' not valid.
+Sub ClearMap()
+gMapValid = False
+gMapSide = 0
+End Sub
+
+' Runtime axis classification: the SC u direction maps to sketch (s,t) as
+' (gMap00, gMap01), the SC v direction as (gMap10, gMap11). For a signed
+' permutation each lands axis-aligned: 0 = s axis, 1 = t axis, -1 = the
+' map is not a permutation (the affected work degrades with a named
+' reason). AxisSign is the sign of the landed component.
+Function AxisClass(ByVal isHoriz As Boolean) As Long
+Dim c0 As Double
+Dim c1 As Double
+If isHoriz Then
+c0 = gMap00
+c1 = gMap01
+Else
+c0 = gMap10
+c1 = gMap11
+End If
+AxisClass = -1
+If Abs(Abs(c0) - 1#) <= 0.000001 And Abs(c1) <= 0.000001 Then AxisClass = 0
+If Abs(Abs(c1) - 1#) <= 0.000001 And Abs(c0) <= 0.000001 Then AxisClass = 1
+End Function
+
+Function AxisSign(ByVal isHoriz As Boolean, ByVal ax As Long) As Double
+Dim c As Double
+If isHoriz Then
+If ax = 0 Then c = gMap00 Else c = gMap01
+Else
+If ax = 0 Then c = gMap10 Else c = gMap11
+End If
+AxisSign = 1#
+If c < 0 Then AxisSign = -1#
+End Function
+
+' The dimension text position is MODEL space (Phase 0, owner-verified):
+' convert a sketch (s,t) position through the stored frame to (X,Y,Z).
+Function SketchToModelX(ByVal s As Double, ByVal t As Double) As Double
+SketchToModelX = gFrame(9) + s * gFrame(0) + t * gFrame(3)
+End Function
+
+Function SketchToModelY(ByVal s As Double, ByVal t As Double) As Double
+SketchToModelY = gFrame(10) + s * gFrame(1) + t * gFrame(4)
+End Function
+
+Function SketchToModelZ(ByVal s As Double, ByVal t As Double) As Double
+SketchToModelZ = gFrame(11) + s * gFrame(2) + t * gFrame(5)
+End Function
+
+' The acceptance predicate (frame adaptation): the probe sketch must sit on
+' the geometric source plane - translation at the model origin and the
+' normal parallel to the source normal (either sign: the same geometric
+' plane). Strict frame equality is no longer required (owner decision
+' 2026-11-13); the adaptation map published by AcceptAndPublish is what
+' makes that safe. Tolerance 1e-6.
+Function PlaneIsSource(ByVal which As String) As Boolean
+Dim tr As Object
+Dim a As Variant
+Dim nx As Double
+Dim ny As Double
+Dim nz As Double
+On Error Resume Next
+PlaneIsSource = False
+Err.Clear
+Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
+If Err.Number <> 0 Then Exit Function
+Err.Clear
+a = tr.ArrayData
+If Err.Number <> 0 Then Exit Function
+If Abs(a(9)) > 0.000001 Or Abs(a(10)) > 0.000001 Or Abs(a(11)) > 0.000001 Then Exit Function
+nx = a(2)
+ny = a(5)
+nz = a(8)
+Select Case which
+Case "XY"
+If Abs(Abs(nz) - 1#) > 0.000001 Then Exit Function
+Case "XZ"
+If Abs(Abs(ny) - 1#) > 0.000001 Then Exit Function
+Case "YZ"
+If Abs(Abs(nx) - 1#) > 0.000001 Then Exit Function
+Case Else
+Exit Function
+End Select
+PlaneIsSource = True
+End Function
+
+' Truncate the report so this run never inherits a previous run's lines.
+Sub StartReport()
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Output As #f
+    Close #f
+End Sub
+
+' One line, one fresh handle: open, print, close. Nothing to leak, nothing
+' to collide with.
+Sub WriteLine(ByVal text As String)
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Append As #f
+    Print #f, text
+    Close #f
+End Sub
+
+Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)
+    WriteLine "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
+End Sub
+
+    ' Close exactly the document this macro created - never any other - and
+' verify it by a live enumeration of open documents: before the close, the
+' title must identify exactly our object among open documents (an empty
+' title is refused); after it, no open document may answer to the title.
+' A failed query proves nothing and leaves the run failed. The owner rule:
+' runs leave no documents open.
+Sub CloseOwnedDoc(ByRef closedOk As Boolean)
+    Dim exact As String
+    Dim d As Object
+    Dim t2 As String
+    Dim cnt As Long
+    Dim isOurs As Boolean
+    On Error Resume Next
+    closedOk = False
+    If swDoc Is Nothing Then
+        closedOk = True
+        Exit Sub
+    End If
+    Err.Clear
+    exact = swDoc.GetTitle
+    If Err.Number <> 0 Then Exit Sub
+    If Trim(exact) = "" Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then
+            cnt = cnt + 1
+            If d Is swDoc Then isOurs = True
+        End If
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt <> 1 Or Not isOurs Then Exit Sub
+    Err.Clear
+    swApp.CloseDoc exact
+    If Err.Number <> 0 Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    cnt = 0
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then cnt = cnt + 1
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt = 0 Then closedOk = True
+End Sub
+
+Function CloseMode() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim ok As Boolean
+    Dim e3 As Long
+    CloseMode = "unknown"
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p = "" Then Exit Function
+    p = p & "\craft-bridge-report-path.txt"
+    Err.Clear
+    f = FreeFile
+    Open p For Input As #f
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    Line Input #f, oneLine
+    ok = (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    ok = ok And (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    e3 = Err.Number
+    Close #f
+    If Not ok Then Exit Function
+    If e3 = 0 Then
+    If Trim(oneLine) = "close-after-run" Then CloseMode = "close" Else CloseMode = "unknown"
+    ElseIf e3 = 62 And ok Then
+    CloseMode = "keep"
+    End If
+End Function
+
+Function OwnedDocTitle() As String
+    On Error Resume Next
+    OwnedDocTitle = ""
+    If swDoc Is Nothing Then Exit Function
+    OwnedDocTitle = "" & swDoc.GetTitle
+End Function
+
+' The report path travels in a one-line file under the TEMP directory that
+    ' the host rewrites before every run: preferred over CRAFT_BRIDGE_REPORT,
+    ' because the macro runs inside the SolidWorks process, which may be an
+    ' instance that started long ago with a stale environment. The environment
+    ' variable is only the fallback for when the path file is missing or blank.
+    Function ReportPathFromHost() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim got As Boolean
+    ReportPathFromHost = ""
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p <> "" Then
+    p = p & "\craft-bridge-report-path.txt"
+    Err.Clear
+    f = FreeFile
+    Open p For Input As #f
+    If Err.Number = 0 Then
+    Err.Clear
+    Line Input #f, oneLine
+    got = (Err.Number = 0)
+    Err.Clear
+    Close #f
+    If got Then
+    oneLine = Trim(oneLine)
+    If oneLine <> "" Then
+    ReportPathFromHost = oneLine
+    Exit Function
+    End If
+    End If
+    End If
+    Err.Clear
+    End If
+    ReportPathFromHost = Trim(Environ$("CRAFT_BRIDGE_REPORT"))
+    End Function
+
+' JSON string escaping. This is not VBA-literal escaping: it is only for the
+' report file. Generated code strings are escaped separately by the generator.
+Function JsonStr(ByVal s As String) As String
+    Dim t As String
+    t = Replace(s, "\", "\\")
+    t = Replace(t, """", "\""")
+    t = Replace(t, vbCrLf, "\n")
+    t = Replace(t, vbCr, "\n")
+    t = Replace(t, vbLf, "\n")
+    t = Replace(t, vbTab, "\t")
+    JsonStr = t
+End Function
+
+' The plane whose sketch frame exactly matches the SolidCraft frame for the
+' requested plane: axes, signs, and the sketch origin at the model origin.
+' Plane names and tree positions are per config (one seat maps Front to the
+' ZY plane), so no name or position is trusted; and verbatim (u, v) replay
+' only lands coordinates where they belong on the frame the recipe implies.
+' Anything else is refused and fails closed - coordinates are never silently
+' reinterpreted (docs/mapping.md, Orientation). The probe leaves the sketch
+' open on success. On failure the probe sketch is closed, deleted as one
+' owned feature, and the deletion is verified.
+Function OpenSketchOnPlane(ByVal which As String) As Boolean
+    Dim feat As SldWorks.Feature, skFeat As SldWorks.Feature, ok As Boolean
+    Set feat = swDoc.FirstFeature
+    Do While Not feat Is Nothing
+        If InStr(1, feat.GetTypeName2(), "lane", vbTextCompare) > 0 Then
+            ok = feat.Select(False)
+            If ok Then
+                swSketchMgr.InsertSketch True
+                Set skFeat = swSketchMgr.ActiveSketch
+                If skFeat Is Nothing Then
+                    gProbeLog = gProbeLog & feat.Name & ": no sketch opened; "
+                ElseIf PlaneIsSource(which) Then
+                    ClearMap
+                    If AcceptAndPublish(which, gProbeReason) Then
+                        OpenSketchOnPlane = True
+                        Exit Function
+                    End If
+                    gProbeLog = gProbeLog & feat.Name & ": map refused: " & gProbeReason & " strict-match=" & CStr(SketchFrameIs(which)) & "; "
+                    If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, "minimal.swb", "the refused probe sketch could not be confirmed deleted; probed: " & gProbeLog
+                Else
+                    gProbeLog = gProbeLog & feat.Name & ": " & FrameText() & " strict-match=" & CStr(SketchFrameIs(which)) & "; "
+                    If Not DiscardProbeSketch(skFeat) Then Err.Raise vbObjectError + 520, "minimal.swb", "the probe sketch could not be confirmed deleted; probed: " & gProbeLog
+                End If
+            End If
+        End If
+        Set feat = feat.GetNextFeature
+    Loop
+    OpenSketchOnPlane = False
+End Function
+
+' The sketch frame must equal the SolidCraft frame for the plane exactly:
+' u and v exactly as SolidCraft defines them for the plane (its plane.rs
+' 29-34): XZ has v = -Z, n = +Y. The sketch origin at the model origin. The model-to-sketch
+' transform is row-major with rows = model axes in sketch coordinates, so
+' the sketch axes in model coordinates are its columns - the inverse
+' transform of the sketch unit vectors: u = (a0, a3, a6),
+' v = (a1, a4, a7), n = (a2, a5, a8) - and the translation
+' (a9, a10, a11) is the model origin in sketch coordinates, which must
+' vanish. Pinned against non-symmetric frames in tests/build_tests.rs.
+Function SketchFrameIs(ByVal which As String) As Boolean
+    Dim tr As Variant, a As Variant, ok As Boolean
+    On Error Resume Next
+    Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
+    If Err.Number <> 0 Then Exit Function
+    a = tr.ArrayData
+    If Abs(a(9)) > 0.000001 Or Abs(a(10)) > 0.000001 Or Abs(a(11)) > 0.000001 Then Exit Function
+    Select Case which
+        Case "XY"
+            ok = VecIs(a(0), a(3), a(6), 1#, 0#, 0#) And VecIs(a(1), a(4), a(7), 0#, 1#, 0#) And VecIs(a(2), a(5), a(8), 0#, 0#, 1#)
+        Case "XZ"
+            ok = VecIs(a(0), a(3), a(6), 1#, 0#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, -1#) And VecIs(a(2), a(5), a(8), 0#, 1#, 0#)
+        Case "YZ"
+            ok = VecIs(a(0), a(3), a(6), 0#, 1#, 0#) And VecIs(a(1), a(4), a(7), 0#, 0#, 1#) And VecIs(a(2), a(5), a(8), 1#, 0#, 0#)
+    End Select
+    SketchFrameIs = ok
+End Function
+
+' Direction equality with sign, on normalized vectors: the transform may
+' carry a uniform scale, the axes must still be exactly the expected ones.
+Function VecIs(ByVal ax As Double, ByVal ay As Double, ByVal az As Double, ByVal bx As Double, ByVal by As Double, ByVal bz As Double) As Boolean
+    Dim L As Double
+    L = Sqr(ax * ax + ay * ay + az * az)
+    If Abs(L) < 0.000001 Then Exit Function
+    VecIs = Abs(ax / L - bx) < 0.000001 And Abs(ay / L - by) < 0.000001 And Abs(az / L - bz) < 0.000001
+End Function
+
+' The active sketch's frame as report text: the fail-closed messages name
+' exactly what each probed plane offered.
+Function FrameText() As String
+    Dim tr As Variant, a As Variant
+    On Error Resume Next
+    Set tr = swSketchMgr.ActiveSketch.ModelToSketchTransform
+    If Err.Number <> 0 Then FrameText = "(no frame)": Exit Function
+    a = tr.ArrayData
+    FrameText = "u=(" & Vec3Text(a(0), a(3), a(6)) & ") v=(" & Vec3Text(a(1), a(4), a(7)) & ") n=(" & Vec3Text(a(2), a(5), a(8)) & ") o=(" & Vec3Text(a(9), a(10), a(11)) & ")"
+End Function
+
+Function SafeSqr(ByVal x As Double) As Double
+    ' Empirical host quirk (probe-refplane 2026-11-17): Sqr raised
+    ' "Invalid procedure call or argument" on a zero argument in this
+    ' SolidWorks VBA host. Guard the domain explicitly everywhere.
+    If x <= 0 Then
+        SafeSqr = 0
+    Else
+        SafeSqr = Sqr(x)
+    End If
+End Function
+
+Function SafeNum(ByVal x As Double) As String
+    If x <> x Then SafeNum = "NaN": Exit Function
+    If Abs(x) > 1E+100 Then SafeNum = "INF": Exit Function
+    SafeNum = Trim(Str(x))
+End Function
+
+Function Vec3Text(ByVal x As Double, ByVal y As Double, ByVal z As Double) As String
+    Vec3Text = SafeNum(x) & "," & SafeNum(y) & "," & SafeNum(z)
+End Function
+
+' A live feature-tree lookup by name. Returns the feature when a complete
+' walk found it; returns Nothing with uncertain = False only when a
+' complete walk proves it absent; uncertain = True whenever the walk or
+' the name failed. Absence is never inferred from a failed query, and an
+' empty name is never sent to any API.
+Function FindFeatureByName(ByVal nm As String, ByRef uncertain As Boolean) As SldWorks.Feature
+    Dim feat As SldWorks.Feature, fn As String
+    Set FindFeatureByName = Nothing
+    uncertain = True
+    If nm = "" Then Exit Function
+    On Error Resume Next
+    Err.Clear
+    Set feat = swDoc.FirstFeature
+    Do While Not feat Is Nothing
+        If Err.Number <> 0 Then Exit Function
+        Err.Clear
+        fn = feat.Name
+        If Err.Number <> 0 Then Exit Function
+        If fn = nm Then
+            Set FindFeatureByName = feat
+            uncertain = False
+            Exit Function
+        End If
+        Err.Clear
+        Set feat = feat.GetNextFeature
+    Loop
+    If Err.Number = 0 Then uncertain = False
+End Function
+
+' Close the probe sketch and delete exactly the feature that was created
+' for it - never a blind EditDelete, never a stale-object test. The name
+' is captured while the object is alive and validated; the close is
+' confirmed; the delete runs from a clean selection of the one feature the
+' live tree returns; and the deletion is verified the same way. Closing an
+' empty sketch may already have removed it - that is a clean result. True
+' = the probe sketch is proven gone; every uncertain state fails closed.
+Function DiscardProbeSketch(ByVal skFeat As SldWorks.Feature) As Boolean
+    Dim nm As String, cur As Object, live As SldWorks.Feature
+    Dim uncertain As Boolean
+    DiscardProbeSketch = False
+    On Error Resume Next
+    Err.Clear
+    nm = skFeat.Name
+    If Err.Number <> 0 Then Exit Function
+    If nm = "" Then Exit Function
+    Err.Clear
+    Set cur = swSketchMgr.ActiveSketch
+    If Err.Number <> 0 Then Exit Function
+    If Not cur Is Nothing Then
+        Err.Clear
+        swSketchMgr.InsertSketch True
+        If Err.Number <> 0 Then Exit Function
+        Err.Clear
+        Set cur = swSketchMgr.ActiveSketch
+        If Err.Number <> 0 Then Exit Function
+        If Not cur Is Nothing Then Exit Function
+    End If
+    Set live = FindFeatureByName(nm, uncertain)
+    If live Is Nothing Then
+        DiscardProbeSketch = Not uncertain
+        Exit Function
+    End If
+    Err.Clear
+    swDoc.ClearSelection2 True
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    If Not live.Select(False) Then Exit Function
+    Err.Clear
+    swDoc.EditDelete
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    Set live = FindFeatureByName(nm, uncertain)
+    DiscardProbeSketch = (live Is Nothing) And (Not uncertain)
+End Function
+
+' Close the sketch only if one is actually open: InsertSketch toggles, so a
+' blind call would open a new sketch when none is active.
+Sub CloseSketchIfOpen()
+    Dim sk As Object
+    On Error Resume Next
+    Set sk = swSketchMgr.ActiveSketch
+    If Not sk Is Nothing Then swSketchMgr.InsertSketch True
+End Sub
+
+' The first feature type names in the tree: the report names what the scan
+' actually saw when plane selection fails.
+Function TreeSummary() As String
+    Dim feat As SldWorks.Feature, s As String, planes As String, i As Long
+    On Error Resume Next
+    Set feat = swDoc.FirstFeature
+    Do While Not feat Is Nothing And i < 300
+        If InStr(1, feat.GetTypeName2(), "lane", vbTextCompare) > 0 Then
+            planes = planes & feat.GetTypeName2() & "/" & feat.Name & " "
+        End If
+        If i < 10 Then s = s & feat.GetTypeName2() & " "
+        i = i + 1
+        Set feat = feat.GetNextFeature
+    Loop
+    TreeSummary = Trim(Str(i)) & " features; plane-like: [" & Trim(planes) & "]; first: " & s
+End Function
