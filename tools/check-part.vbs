@@ -237,8 +237,10 @@ Else
       docTypeText = "unreadable"
       solidsText = "missing or unreadable"
       sheetsText = "unreadable"
-
-    If Err.Number <> 0 Then refTitle = ""
+    Else
+      Err.Clear
+      refTitle = refDoc.GetTitle
+      If Err.Number <> 0 Then refTitle = ""
     Err.Clear
     dtRaw = refDoc.GetType
     If Err.Number = 0 Then

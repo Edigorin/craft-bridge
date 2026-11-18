@@ -603,7 +603,7 @@ End Function
 ' marshalling can shift array bases).
 Function CentroidText(ByVal mpObj, ByRef cx, ByRef cy, ByRef cz, ByVal what)
   Dim arr, lo2, hi2, k, comp, num, note, errNum, errDesc
-  Dim nx, ny, nz
+  Dim nx, ny, nz, readErr
   CentroidText = what & " acquisition did not complete"
   cx = 0
   cy = 0
@@ -638,16 +638,20 @@ Function CentroidText(ByVal mpObj, ByRef cx, ByRef cy, ByRef cz, ByVal what)
     Exit Function
   End If
   For k = 0 To 2
+    ' A plain assignment coerces a wrapper's DEFAULT property (the seat
+    ' delivers CenterOfMass components as objects); when it raises, Set
+    ' carries the object itself to ComponentNumber's coercion gate. Every
+    ' read failure names the element's vartype, typename and error.
     Err.Clear
-    If IsObject(arr(lo2 + k)) Then
-      ' Set carries the object REFERENCE; a plain assignment would invoke
-      ' the default property (or raise) before the coercion gate sees it
+    comp = arr(lo2 + k)
+    readErr = Err.Number
+    If readErr <> 0 Then
+      Err.Clear
       Set comp = arr(lo2 + k)
-    Else
-      comp = arr(lo2 + k)
+      readErr = Err.Number
     End If
-    If Err.Number <> 0 Then
-      CentroidText = what & " component " & NumStr(k) & " could not be read"
+    If readErr <> 0 Then
+      CentroidText = what & " component " & NumStr(k) & " could not be read (vartype " & NumStr(VarType(arr(lo2 + k))) & ", typename " & TypeName(arr(lo2 + k)) & ", err " & NumStr(readErr) & ")"
       Err.Clear
       On Error GoTo 0
       Exit Function
