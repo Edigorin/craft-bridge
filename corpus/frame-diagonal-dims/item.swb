@@ -152,7 +152,9 @@ Function BuildSketch1() As String
     Set skFeat1 = FindFeatureByName(skName1, uncertain)
     If skFeat1 Is Nothing Then gMsg = "the sketch feature object could not be captured for later selection: name=<" & skName1 & ">, tree scan saw: " & TreeSummary(): GoTo SketchFailed
     DrawGeometry1
+    If Not VerifySketch1() Then gMsg = "post-draw geometry check: " & gMsg: GoTo Degrade
     If Not Relations1() Then GoTo Degrade
+    If Not VerifySketch1() Then gMsg = "post-relations geometry check: " & gMsg: GoTo Degrade
     If Not Dims1() Then GoTo Degrade
     If Not VerifySketch1() Then GoTo Degrade
     swSketchMgr.InsertSketch True
@@ -174,6 +176,7 @@ Degrade:
 ' reacquired; its refusal fails the sketch with the named reason.
     If Not CleanSketch1() Then GoTo SketchFailed
     DrawGeometry1
+    If Not VerifySketch1() Then gMsg = "post-draw geometry check after recreate: " & gMsg & " (degrade cause: " & gCause & ")": GoTo SketchFailed
     If Not Dims1() Then GoTo SketchFailed
     If Not VerifySketch1() Then gMsg = "the recreated geometry differs from the drawn coordinates: " & gMsg & " (degrade cause: " & gCause & ")": GoTo SketchFailed
     swSketchMgr.InsertSketch True
@@ -589,37 +592,37 @@ Function VerifySketch1() As Boolean
     Dim cph As Object
     On Error GoTo VerifyFail
     v = sl1(0).GetStartPoint
-    If Abs(v(0) - MapU(1, 0.0, 0.0)) > TOL Then gMsg = "verify: line 0 start u reads " & Trim(Str(v(0))) & ", expected " & Trim(Str(MapU(1, 0.0, 0.0))) & " (source 0.0,0.0)": GoTo VerifyFail
-    If Abs(v(1) - MapV(1, 0.0, 0.0)) > TOL Then gMsg = "verify: line 0 start v reads " & Trim(Str(v(1))) & ", expected " & Trim(Str(MapV(1, 0.0, 0.0))) & " (source 0.0,0.0)": GoTo VerifyFail
-    If Abs(v(2)) > TOL Then gMsg = "verify: line 0 start z reads " & Trim(Str(v(2))) & ", expected 0": GoTo VerifyFail
+    If Abs(v(0) - MapU(1, 0.0, 0.0)) > TOL Then gMsg = "verify: line 0 start u reads " & Trim(Str(v(0))) & ", point reads " & Trim(Str(pt1(0).X)) & ", expected " & Trim(Str(MapU(1, 0.0, 0.0))) & " (source 0.0,0.0)": GoTo VerifyFail
+    If Abs(v(1) - MapV(1, 0.0, 0.0)) > TOL Then gMsg = "verify: line 0 start v reads " & Trim(Str(v(1))) & ", point reads " & Trim(Str(pt1(0).Y)) & ", expected " & Trim(Str(MapV(1, 0.0, 0.0))) & " (source 0.0,0.0)": GoTo VerifyFail
+    If Abs(v(2)) > TOL Then gMsg = "verify: line 0 start z reads " & Trim(Str(v(2))) & ", point reads " & Trim(Str(pt1(0).Z)) & ", expected 0": GoTo VerifyFail
     v = sl1(0).GetEndPoint
-    If Abs(v(0) - MapU(1, 0.026, 0.017)) > TOL Then gMsg = "verify: line 0 end u reads " & Trim(Str(v(0))) & ", expected " & Trim(Str(MapU(1, 0.026, 0.017))) & " (source 0.026,0.017)": GoTo VerifyFail
-    If Abs(v(1) - MapV(1, 0.026, 0.017)) > TOL Then gMsg = "verify: line 0 end v reads " & Trim(Str(v(1))) & ", expected " & Trim(Str(MapV(1, 0.026, 0.017))) & " (source 0.026,0.017)": GoTo VerifyFail
-    If Abs(v(2)) > TOL Then gMsg = "verify: line 0 end z reads " & Trim(Str(v(2))) & ", expected 0": GoTo VerifyFail
+    If Abs(v(0) - MapU(1, 0.026, 0.017)) > TOL Then gMsg = "verify: line 0 end u reads " & Trim(Str(v(0))) & ", point reads " & Trim(Str(pt1(1).X)) & ", expected " & Trim(Str(MapU(1, 0.026, 0.017))) & " (source 0.026,0.017)": GoTo VerifyFail
+    If Abs(v(1) - MapV(1, 0.026, 0.017)) > TOL Then gMsg = "verify: line 0 end v reads " & Trim(Str(v(1))) & ", point reads " & Trim(Str(pt1(1).Y)) & ", expected " & Trim(Str(MapV(1, 0.026, 0.017))) & " (source 0.026,0.017)": GoTo VerifyFail
+    If Abs(v(2)) > TOL Then gMsg = "verify: line 0 end z reads " & Trim(Str(v(2))) & ", point reads " & Trim(Str(pt1(1).Z)) & ", expected 0": GoTo VerifyFail
     v = sl1(1).GetStartPoint
-    If Abs(v(0) - MapU(1, 0.026, 0.017)) > TOL Then gMsg = "verify: line 1 start u reads " & Trim(Str(v(0))) & ", expected " & Trim(Str(MapU(1, 0.026, 0.017))) & " (source 0.026,0.017)": GoTo VerifyFail
-    If Abs(v(1) - MapV(1, 0.026, 0.017)) > TOL Then gMsg = "verify: line 1 start v reads " & Trim(Str(v(1))) & ", expected " & Trim(Str(MapV(1, 0.026, 0.017))) & " (source 0.026,0.017)": GoTo VerifyFail
-    If Abs(v(2)) > TOL Then gMsg = "verify: line 1 start z reads " & Trim(Str(v(2))) & ", expected 0": GoTo VerifyFail
+    If Abs(v(0) - MapU(1, 0.026, 0.017)) > TOL Then gMsg = "verify: line 1 start u reads " & Trim(Str(v(0))) & ", point reads " & Trim(Str(pt1(1).X)) & ", expected " & Trim(Str(MapU(1, 0.026, 0.017))) & " (source 0.026,0.017)": GoTo VerifyFail
+    If Abs(v(1) - MapV(1, 0.026, 0.017)) > TOL Then gMsg = "verify: line 1 start v reads " & Trim(Str(v(1))) & ", point reads " & Trim(Str(pt1(1).Y)) & ", expected " & Trim(Str(MapV(1, 0.026, 0.017))) & " (source 0.026,0.017)": GoTo VerifyFail
+    If Abs(v(2)) > TOL Then gMsg = "verify: line 1 start z reads " & Trim(Str(v(2))) & ", point reads " & Trim(Str(pt1(1).Z)) & ", expected 0": GoTo VerifyFail
     v = sl1(1).GetEndPoint
-    If Abs(v(0) - MapU(1, 0.043, 0.017)) > TOL Then gMsg = "verify: line 1 end u reads " & Trim(Str(v(0))) & ", expected " & Trim(Str(MapU(1, 0.043, 0.017))) & " (source 0.043,0.017)": GoTo VerifyFail
-    If Abs(v(1) - MapV(1, 0.043, 0.017)) > TOL Then gMsg = "verify: line 1 end v reads " & Trim(Str(v(1))) & ", expected " & Trim(Str(MapV(1, 0.043, 0.017))) & " (source 0.043,0.017)": GoTo VerifyFail
-    If Abs(v(2)) > TOL Then gMsg = "verify: line 1 end z reads " & Trim(Str(v(2))) & ", expected 0": GoTo VerifyFail
+    If Abs(v(0) - MapU(1, 0.043, 0.017)) > TOL Then gMsg = "verify: line 1 end u reads " & Trim(Str(v(0))) & ", point reads " & Trim(Str(pt1(2).X)) & ", expected " & Trim(Str(MapU(1, 0.043, 0.017))) & " (source 0.043,0.017)": GoTo VerifyFail
+    If Abs(v(1) - MapV(1, 0.043, 0.017)) > TOL Then gMsg = "verify: line 1 end v reads " & Trim(Str(v(1))) & ", point reads " & Trim(Str(pt1(2).Y)) & ", expected " & Trim(Str(MapV(1, 0.043, 0.017))) & " (source 0.043,0.017)": GoTo VerifyFail
+    If Abs(v(2)) > TOL Then gMsg = "verify: line 1 end z reads " & Trim(Str(v(2))) & ", point reads " & Trim(Str(pt1(2).Z)) & ", expected 0": GoTo VerifyFail
     v = sl1(2).GetStartPoint
-    If Abs(v(0) - MapU(1, 0.043, 0.017)) > TOL Then gMsg = "verify: line 2 start u reads " & Trim(Str(v(0))) & ", expected " & Trim(Str(MapU(1, 0.043, 0.017))) & " (source 0.043,0.017)": GoTo VerifyFail
-    If Abs(v(1) - MapV(1, 0.043, 0.017)) > TOL Then gMsg = "verify: line 2 start v reads " & Trim(Str(v(1))) & ", expected " & Trim(Str(MapV(1, 0.043, 0.017))) & " (source 0.043,0.017)": GoTo VerifyFail
-    If Abs(v(2)) > TOL Then gMsg = "verify: line 2 start z reads " & Trim(Str(v(2))) & ", expected 0": GoTo VerifyFail
+    If Abs(v(0) - MapU(1, 0.043, 0.017)) > TOL Then gMsg = "verify: line 2 start u reads " & Trim(Str(v(0))) & ", point reads " & Trim(Str(pt1(2).X)) & ", expected " & Trim(Str(MapU(1, 0.043, 0.017))) & " (source 0.043,0.017)": GoTo VerifyFail
+    If Abs(v(1) - MapV(1, 0.043, 0.017)) > TOL Then gMsg = "verify: line 2 start v reads " & Trim(Str(v(1))) & ", point reads " & Trim(Str(pt1(2).Y)) & ", expected " & Trim(Str(MapV(1, 0.043, 0.017))) & " (source 0.043,0.017)": GoTo VerifyFail
+    If Abs(v(2)) > TOL Then gMsg = "verify: line 2 start z reads " & Trim(Str(v(2))) & ", point reads " & Trim(Str(pt1(2).Z)) & ", expected 0": GoTo VerifyFail
     v = sl1(2).GetEndPoint
-    If Abs(v(0) - MapU(1, 0.043, 0.0)) > TOL Then gMsg = "verify: line 2 end u reads " & Trim(Str(v(0))) & ", expected " & Trim(Str(MapU(1, 0.043, 0.0))) & " (source 0.043,0.0)": GoTo VerifyFail
-    If Abs(v(1) - MapV(1, 0.043, 0.0)) > TOL Then gMsg = "verify: line 2 end v reads " & Trim(Str(v(1))) & ", expected " & Trim(Str(MapV(1, 0.043, 0.0))) & " (source 0.043,0.0)": GoTo VerifyFail
-    If Abs(v(2)) > TOL Then gMsg = "verify: line 2 end z reads " & Trim(Str(v(2))) & ", expected 0": GoTo VerifyFail
+    If Abs(v(0) - MapU(1, 0.043, 0.0)) > TOL Then gMsg = "verify: line 2 end u reads " & Trim(Str(v(0))) & ", point reads " & Trim(Str(pt1(3).X)) & ", expected " & Trim(Str(MapU(1, 0.043, 0.0))) & " (source 0.043,0.0)": GoTo VerifyFail
+    If Abs(v(1) - MapV(1, 0.043, 0.0)) > TOL Then gMsg = "verify: line 2 end v reads " & Trim(Str(v(1))) & ", point reads " & Trim(Str(pt1(3).Y)) & ", expected " & Trim(Str(MapV(1, 0.043, 0.0))) & " (source 0.043,0.0)": GoTo VerifyFail
+    If Abs(v(2)) > TOL Then gMsg = "verify: line 2 end z reads " & Trim(Str(v(2))) & ", point reads " & Trim(Str(pt1(3).Z)) & ", expected 0": GoTo VerifyFail
     v = sl1(3).GetStartPoint
-    If Abs(v(0) - MapU(1, 0.043, 0.0)) > TOL Then gMsg = "verify: line 3 start u reads " & Trim(Str(v(0))) & ", expected " & Trim(Str(MapU(1, 0.043, 0.0))) & " (source 0.043,0.0)": GoTo VerifyFail
-    If Abs(v(1) - MapV(1, 0.043, 0.0)) > TOL Then gMsg = "verify: line 3 start v reads " & Trim(Str(v(1))) & ", expected " & Trim(Str(MapV(1, 0.043, 0.0))) & " (source 0.043,0.0)": GoTo VerifyFail
-    If Abs(v(2)) > TOL Then gMsg = "verify: line 3 start z reads " & Trim(Str(v(2))) & ", expected 0": GoTo VerifyFail
+    If Abs(v(0) - MapU(1, 0.043, 0.0)) > TOL Then gMsg = "verify: line 3 start u reads " & Trim(Str(v(0))) & ", point reads " & Trim(Str(pt1(3).X)) & ", expected " & Trim(Str(MapU(1, 0.043, 0.0))) & " (source 0.043,0.0)": GoTo VerifyFail
+    If Abs(v(1) - MapV(1, 0.043, 0.0)) > TOL Then gMsg = "verify: line 3 start v reads " & Trim(Str(v(1))) & ", point reads " & Trim(Str(pt1(3).Y)) & ", expected " & Trim(Str(MapV(1, 0.043, 0.0))) & " (source 0.043,0.0)": GoTo VerifyFail
+    If Abs(v(2)) > TOL Then gMsg = "verify: line 3 start z reads " & Trim(Str(v(2))) & ", point reads " & Trim(Str(pt1(3).Z)) & ", expected 0": GoTo VerifyFail
     v = sl1(3).GetEndPoint
-    If Abs(v(0) - MapU(1, 0.0, 0.0)) > TOL Then gMsg = "verify: line 3 end u reads " & Trim(Str(v(0))) & ", expected " & Trim(Str(MapU(1, 0.0, 0.0))) & " (source 0.0,0.0)": GoTo VerifyFail
-    If Abs(v(1) - MapV(1, 0.0, 0.0)) > TOL Then gMsg = "verify: line 3 end v reads " & Trim(Str(v(1))) & ", expected " & Trim(Str(MapV(1, 0.0, 0.0))) & " (source 0.0,0.0)": GoTo VerifyFail
-    If Abs(v(2)) > TOL Then gMsg = "verify: line 3 end z reads " & Trim(Str(v(2))) & ", expected 0": GoTo VerifyFail
+    If Abs(v(0) - MapU(1, 0.0, 0.0)) > TOL Then gMsg = "verify: line 3 end u reads " & Trim(Str(v(0))) & ", point reads " & Trim(Str(pt1(0).X)) & ", expected " & Trim(Str(MapU(1, 0.0, 0.0))) & " (source 0.0,0.0)": GoTo VerifyFail
+    If Abs(v(1) - MapV(1, 0.0, 0.0)) > TOL Then gMsg = "verify: line 3 end v reads " & Trim(Str(v(1))) & ", point reads " & Trim(Str(pt1(0).Y)) & ", expected " & Trim(Str(MapV(1, 0.0, 0.0))) & " (source 0.0,0.0)": GoTo VerifyFail
+    If Abs(v(2)) > TOL Then gMsg = "verify: line 3 end z reads " & Trim(Str(v(2))) & ", point reads " & Trim(Str(pt1(0).Z)) & ", expected 0": GoTo VerifyFail
     VerifySketch1 = True
     Exit Function
 VerifyFail:

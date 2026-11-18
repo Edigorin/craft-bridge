@@ -1831,7 +1831,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     ));
     out.push_str(&format!("    DrawGeometry{index}\n"));
     out.push_str(&format!(
-        "    If Not Relations{index}() Then GoTo Degrade\n    If Not Dims{index}() Then GoTo Degrade\n    If Not VerifySketch{index}() Then GoTo Degrade\n"
+        "    If Not VerifySketch{index}() Then gMsg = \"post-draw geometry check: \" & gMsg: GoTo Degrade\n    If Not Relations{index}() Then GoTo Degrade\n    If Not VerifySketch{index}() Then gMsg = \"post-relations geometry check: \" & gMsg: GoTo Degrade\n    If Not Dims{index}() Then GoTo Degrade\n    If Not VerifySketch{index}() Then GoTo Degrade\n"
     ));
     out.push_str("    swSketchMgr.InsertSketch True\n");
     out.push_str(&format!(
@@ -1857,7 +1857,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
              ' reacquired; its refusal fails the sketch with the named reason.\n",
     );
     out.push_str(&format!(
-        "    If Not CleanSketch{index}() Then GoTo SketchFailed\n    DrawGeometry{index}\n    If Not Dims{index}() Then GoTo SketchFailed\n    If Not VerifySketch{index}() Then gMsg = \"the recreated geometry differs from the drawn coordinates: \" & gMsg & \" (degrade cause: \" & gCause & \")\": GoTo SketchFailed\n"
+        "    If Not CleanSketch{index}() Then GoTo SketchFailed\n    DrawGeometry{index}\n    If Not VerifySketch{index}() Then gMsg = \"post-draw geometry check after recreate: \" & gMsg & \" (degrade cause: \" & gCause & \")\": GoTo SketchFailed\n    If Not Dims{index}() Then GoTo SketchFailed\n    If Not VerifySketch{index}() Then gMsg = \"the recreated geometry differs from the drawn coordinates: \" & gMsg & \" (degrade cause: \" & gCause & \")\": GoTo SketchFailed\n"
     ));
     out.push_str("    swSketchMgr.InsertSketch True\n");
     out.push_str(&format!(
@@ -1981,11 +1981,13 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
             } else {
                 "end"
             };
+            let pslot = if getter == "GetStartPoint" { l.a } else { l.b };
             out.push_str(&format!(
-                "    v = sl{index}({i}).{getter}\n    If Abs(v(0) - MapU({index}, {u}, {vv})) > TOL Then gMsg = \"verify: line {i} {end_txt} u reads \" & Trim(Str(v(0))) & \", expected \" & Trim(Str(MapU({index}, {u}, {vv}))) & \" (source {u},{vv})\": GoTo VerifyFail\n    If Abs(v(1) - MapV({index}, {u}, {vv})) > TOL Then gMsg = \"verify: line {i} {end_txt} v reads \" & Trim(Str(v(1))) & \", expected \" & Trim(Str(MapV({index}, {u}, {vv}))) & \" (source {u},{vv})\": GoTo VerifyFail\n    If Abs(v(2)) > TOL Then gMsg = \"verify: line {i} {end_txt} z reads \" & Trim(Str(v(2))) & \", expected 0\": GoTo VerifyFail\n",
+                "    v = sl{index}({i}).{getter}\n    If Abs(v(0) - MapU({index}, {u}, {vv})) > TOL Then gMsg = \"verify: line {i} {end_txt} u reads \" & Trim(Str(v(0))) & \", point reads \" & Trim(Str(pt{index}({pslot}).X)) & \", expected \" & Trim(Str(MapU({index}, {u}, {vv}))) & \" (source {u},{vv})\": GoTo VerifyFail\n    If Abs(v(1) - MapV({index}, {u}, {vv})) > TOL Then gMsg = \"verify: line {i} {end_txt} v reads \" & Trim(Str(v(1))) & \", point reads \" & Trim(Str(pt{index}({pslot}).Y)) & \", expected \" & Trim(Str(MapV({index}, {u}, {vv}))) & \" (source {u},{vv})\": GoTo VerifyFail\n    If Abs(v(2)) > TOL Then gMsg = \"verify: line {i} {end_txt} z reads \" & Trim(Str(v(2))) & \", point reads \" & Trim(Str(pt{index}({pslot}).Z)) & \", expected 0\": GoTo VerifyFail\n",
                 getter = getter,
                 index = index,
                 i = i,
+                pslot = pslot,
                 end_txt = end_txt,
                 u = vba_num(mm(p[0])),
                 vv = vba_num(mm(p[1])),
