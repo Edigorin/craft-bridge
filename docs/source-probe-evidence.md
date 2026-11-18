@@ -99,6 +99,38 @@ plane with `InsertRefPlane(8, distance_m, 0,0,0,0)`, rename it, bind its
 open sketches on the feature object - and the frame-map translation rule
 is confirmed for offset planes.
 
+## 2026-11-18 - probe-snap: CreateLine endpoint inference and the switch that stops it
+
+**Probe:** `corpus/compat-check/probe-snap.swb` (hand-written on the
+minimal/probe-refplane skeleton; five byte-review rounds folded, final
+APPROVE), run through `tools/seat-smoke.ps1` (swf 34.3.2). Summary ok,
+six cases, all toggles captured pre-state and restored verified.
+
+**QS1 established:**
+- **The inference reproduces exactly**: a macro `CreateLine` endpoint
+  whose target u sits ~0.6 mm from an existing line's midpoint u is
+  PLACED AT THE MIDPOINT U (v untouched). Both accessors agree
+  (SketchPoint and the Double() arrays). Control (target far from every
+  midpoint) places exactly.
+- **`swUserPreferenceToggle_e.swSketchInference` (249) OFF during
+  drawing stops the snap**: every endpoint lands exactly. This is the
+  fix the emitter uses (capture pre-state, switch off, readback-enforced,
+  draw, restore verified on every exit).
+- `swSketchSnapsMidPoints` (268) OFF alone does NOT stop it (the snap
+  persists) - the master inference switch is required.
+- `ISketch.AddToDB` and `ISketch.EnableSolving` are **absent** on this
+  host (late-bound err 438, recorded as data; the enum values came from
+  the seat's `SolidWorks.Interop.swconst.dll` by reflection).
+- `ISldWorks.SetUserPreferenceToggle` returns **VOID** (reflection on the
+  interop): a setter result cannot be captured - the enforced readback IS
+  the setter verification. (v5 of the probe failed to compile on exactly
+  this.)
+
+**Not established / open:** the trigger threshold's exact value (~0.6 mm
+observed); whether other inference kinds (nearest/tangent/intersection)
+snap API-created endpoints similarly; whether the documented surface has
+a per-call suspension (research brief 08).
+
 ## 2026-11-18 - probe-dimkind: dimension-kind creation is pinned
 
 **Probe:** `corpus/compat-check/probe-dimkind.swb` (hand-written on the
