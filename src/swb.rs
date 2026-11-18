@@ -1661,6 +1661,10 @@ fn emit_plane_creation(index: usize, pl: &crate::replay::PlaneStep) -> String {
         Some(d) => (rhs_vba(d), vba_num(d.expect_si), d.slot as i64),
         None => ("\"\"".to_string(), "0#".to_string(), -1),
     };
+    // vb_lit returns a QUOTED VBA literal; message strings embed the raw
+    // generated name (our own ASCII, safe as string content).
+    let pname = vb_lit(&pl.name);
+    let name_txt = pl.name.clone();
     format!(
         "' Plane step {index}: create the offset plane at signed distance\n\
 ' along the {which} source normal and bind its distance dimension - the\n\
@@ -1668,6 +1672,7 @@ fn emit_plane_creation(index: usize, pl: &crate::replay::PlaneStep) -> String {
 Function BuildPlane{index}() As String\n\
     On Error GoTo PlaneFail\n\
     Dim ok As Boolean\n\
+    Dim refPlane As Object\n\
     Dim feat As SldWorks.Feature\n\
     Dim rp As Object\n\
     Dim tr As Object\n\
@@ -1679,13 +1684,17 @@ Function BuildPlane{index}() As String\n\
     gMsg = \"\"\n\
     ok = SelectPlaneOriginByFrame(\"{which}\")\n\
     If ok = False Then gMsg = \"no origin plane carries the {which} frame for the offset base; probed: \" & gProbeLog & \"; tree scan saw: \" & TreeSummary(): GoTo PlaneFail\n\
-    Set feat = gFeatMgr.InsertRefPlane(8, {dist}, 0#, 0#, 0#, 0#)\n\
-    If feat Is Nothing Then gMsg = \"InsertRefPlane(8, {dist}, 0, 0, 0, 0) returned nothing\": GoTo PlaneFail\n\
+    Set refPlane = gFeatMgr.InsertRefPlane(8, {dist}, 0#, 0#, 0#, 0#)\n\
+    If refPlane Is Nothing Then gMsg = \"InsertRefPlane(8, {dist}, 0, 0, 0, 0) returned nothing\": GoTo PlaneFail\n\
     swDoc.EditRebuild3\n\
-    feat.Name = \"{pname}\"\n\
-    If feat.Name <> \"{pname}\" Then gMsg = \"the plane feature would not take the name {pname} (reads \" & feat.Name & \")\": GoTo PlaneFail\n\
+    ' The returned object is the reference plane; the FEATURE comes from\n\
+    ' the tree (the reviewed probe's separation - never assume identity).\n\
+    Set feat = swDoc.Extension.GetLastFeatureAdded\n\
+    If feat Is Nothing Then gMsg = \"GetLastFeatureAdded returned nothing after InsertRefPlane\": GoTo PlaneFail\n\
+    feat.Name = {pname}\n\
+    If feat.Name <> {pname} Then gMsg = \"the plane feature would not take the name {name_txt} (reads \" & feat.Name & \"\")\": GoTo PlaneFail\n\
     Set rp = Nothing\n\
-    Set rp = feat.GetSpecificFeature2\n\
+    Set rp = refPlane\n\
     If rp Is Nothing Then gMsg = \"the created plane has no reference-plane face\": GoTo PlaneFail\n\
     Set tr = rp.Transform\n\
     If tr Is Nothing Then gMsg = \"the created plane has no transform\": GoTo PlaneFail\n\
@@ -1702,20 +1711,22 @@ Function BuildPlane{index}() As String\n\
     If dd Is Nothing Then gMsg = \"the offset plane carries no display dimension to drive\": GoTo PlaneFail\n\
     Set dm = dd.GetDimension2(0)\n\
     If dm Is Nothing Then gMsg = \"the offset dimension has no core dimension\": GoTo PlaneFail\n\
-    If Not AddDimEquation(dm, {rhs}, {expect}, {slot}, 1#, \"{pname}\", 1#) Then GoTo PlaneFail\n\
+    If Not AddDimEquation(dm, {rhs}, {expect}, {slot}, 1#, {pname}, 1#) Then GoTo PlaneFail\n\
     Set planeFeat{index} = feat\n\
-    planeName{index} = \"{pname}\"\n\
+    planeName{index} = {pname}\n\
     BuildPlane{index} = \"created\"\n\
-    gMsg = \"offset plane {pname} created at \" & Vec3Text(ox, oy, oz) & \"; dimension \" & dm.Name & \" bound and verified\"\n\
+    gMsg = \"offset plane {name_txt} created at \" & Vec3Text(ox, oy, oz) & \"; dimension \" & dm.Name & \" bound and verified\"\n\
     Exit Function\n\
 PlaneFail:\n\
+    If Err.Number <> 0 Then gMsg = \"err \" & Trim(Str(Err.Number)) & \": \" & Err.Description\n\
     BuildPlane{index} = \"failed\"\n\
 End Function\n\n",
         index = index,
         which = which,
         dist = dist,
         nx = nx, ny = ny, nz = nz,
-        pname = vb_lit(&pl.name),
+        name_txt = name_txt,
+        pname = pname,
         rhs = rhs,
         expect = expect,
         slot = slot,
@@ -1820,9 +1831,17 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     out.push_str(&format!(
         "    If Not NoSketchIsOpen() Then gMsg = \"the sketch context did not close\": GoTo SketchFailed\n    If Not VerifySketch{index}() Then gMsg = \"closed-context verification failed after recreation\": GoTo SketchFailed\n"
     ));
-    out.push_str(&format!(
-        "    gMsg = \"rebuilt as geometry plus driving dimensions\"\n    If gOmit <> \"\" Then gMsg = gMsg & \" | omitted: \" & gOmit\n    BuildSketch{index} = \"degraded\"\n    Exit Function\n\n"
-    ));
+    // The degraded-success message keeps the plane evidence too (plan
+    // review: success must not overwrite what the plane step proved).
+    let degrade_msg = match &sk.plane_binding {
+        crate::replay::PlaneBinding::Offset { .. } => format!(
+            "    gMsg = \"rebuilt as geometry plus driving dimensions\" & \" | plane: \" & planeMsg\n    If gOmit <> \"\" Then gMsg = gMsg & \" | omitted: \" & gOmit\n    BuildSketch{index} = \"degraded\"\n    Exit Function\n\n"
+        ),
+        _ => format!(
+            "    gMsg = \"rebuilt as geometry plus driving dimensions\"\n    If gOmit <> \"\" Then gMsg = gMsg & \" | omitted: \" & gOmit\n    BuildSketch{index} = \"degraded\"\n    Exit Function\n\n"
+        ),
+    };
+    out.push_str(&degrade_msg);
     out.push_str("SketchFailed:\n    On Error Resume Next\n    CloseSketchIfOpen\n");
     out.push_str(&format!(
         "    BuildSketch{index} = \"failed\"\n    Exit Function\n\nHardFail:\n    ' Capture the error FIRST: executing an On Error statement resets Err.\n    Dim errNum As Long, errMsg As String\n    errNum = Err.Number\n    errMsg = Err.Description\n    On Error Resume Next\n    CloseSketchIfOpen\n    gMsg = \"err \" & Trim(Str(errNum)) & \": \" & errMsg\n    BuildSketch{index} = \"failed\"\nEnd Function\n\n"

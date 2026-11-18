@@ -254,6 +254,15 @@ fn plane_distance_binding(
         // A zero offset IS the base plane: no creation, no equation.
         return Ok(PlaneBinding::Origin);
     }
+    if q.value.abs() <= 1e-6 {
+        // The placement verification cannot establish the side below its
+        // 1e-6 m tolerance (a mirrored tiny offset would pass it): refuse
+        // the ambiguity rather than promise a side.
+        return Err(Error::Unsupported(format!(
+            "the offset distance {distance} evaluates to {} m, at or below the 1e-6 m placement-verification tolerance: the plane side cannot be established; refusing an ambiguous offset",
+            q.value
+        )));
+    }
     if q.value < 0.0 {
         return Err(Error::Unsupported(format!(
             "the offset distance {distance} evaluates to {} m: a negative offset selects the unprobed side of the base plane; refusing until the flip probe pins the side",
@@ -909,6 +918,20 @@ fn plan57(
         }
         let stop_here = matches!(planned.work, Work::Unmappable)
             && snapshots.get(&index) != Some(&crate::profile::SnapshotScope::Boundary);
+        // A boundary fallback runs DeleteCreated at runtime: every plane
+        // created so far is deleted and its binding cleared. Later
+        // construction references must refuse named, never resolve to a
+        // plane the runtime has removed.
+        if matches!(planned.work, Work::Unmappable) && !stop_here {
+            for (pid, _, _, _) in planned_planes.drain(..) {
+                plane_unavailable.push((
+                    pid,
+                    format!(
+                        "the plane was deleted by the boundary snapshot fallback at step {index}"
+                    ),
+                ));
+            }
+        }
         steps.push(planned);
         if stop_here {
             stopped = true;
@@ -1434,7 +1457,22 @@ fn parse_sketch(
             (base, binding)
         }
         (Some("construction"), _) => {
-            let fid = plane_v.get("feature").and_then(Value::as_u64).unwrap_or(0);
+            // The reference id must be well-formed: a malformed id never
+            // silently becomes feature 0 (a legal source id).
+            let fid = match plane_v.get("feature") {
+                Some(Value::Number(n)) => match n.as_u64() {
+                    Some(v) => v,
+                    None => return Err(Error::Unsupported(
+                        "the construction reference feature id is not a non-negative whole number"
+                            .to_string(),
+                    )),
+                },
+                _ => {
+                    return Err(Error::Unsupported(
+                        "the construction reference has no feature id".to_string(),
+                    ))
+                }
+            };
             match resolve_construction_plane(plane_resolver, fid) {
                 Ok((step, base, expect_si)) => {
                     if expect_si.abs() < 1e-12 {

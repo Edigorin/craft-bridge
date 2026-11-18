@@ -338,6 +338,16 @@ fn offset_planes_plan_with_bound_distance_equations() {
         _ => panic!(),
     };
     assert_eq!(sketch.plane_binding, replay::PlaneBinding::Origin);
+    // A tiny positive offset cannot establish its side (below the
+    // placement tolerance): named stop.
+    let tiny = r#"{ "type": "offset", "base": { "type": "origin", "name": "XY" }, "distance": "0.0000005 m" }"#;
+    let steps = plan_of(&sketch_design(7, tiny, points));
+    assert!(matches!(steps[1].work, Work::Unmappable));
+    assert!(
+        steps[1].detail.contains("ambiguous offset"),
+        "{}",
+        steps[1].detail
+    );
     // A negative offset selects the unprobed side: named stop.
     let neg = r#"{ "type": "offset", "base": { "type": "origin", "name": "XY" }, "distance": "0 mm - W" }"#;
     let steps = plan_of(&sketch_design(7, neg, points));
@@ -401,14 +411,30 @@ fn construction_plane_references_refuse_named_per_case() {
         { "id": "p1", "pos": [50.0, 0.0], "fixed": true },
         { "id": "p2", "pos": [12.0, 30.0], "fixed": true }"#;
     let sketch = |plane: &str| sketch_design(7, plane, points);
-    // Wrong type: the referenced feature is not a construction_plane.
-    let steps = plan_of(&sketch(r#"{ "type": "construction", "feature": 3 }"#));
+    // Wrong type: the referenced id EXISTS but is the helper's own sketch
+    // (id 7), not a construction_plane.
+    let steps = plan_of(&sketch(r#"{ "type": "construction", "feature": 7 }"#));
     assert!(matches!(steps[1].work, Work::Unmappable));
     assert!(
         steps[1].detail.contains("not a construction_plane step"),
         "{}",
         steps[1].detail
     );
+    // Malformed reference ids refuse named - never a silent feature 0.
+    for bad in [
+        r#"{ "type": "construction" }"#,
+        r#"{ "type": "construction", "feature": "40" }"#,
+        r#"{ "type": "construction", "feature": -3 }"#,
+        r#"{ "type": "construction", "feature": 2.5 }"#,
+    ] {
+        let steps = plan_of(&sketch(bad));
+        assert!(matches!(steps[1].work, Work::Unmappable), "{bad}");
+        assert!(
+            steps[1].detail.contains("feature id"),
+            "{bad}: {}",
+            steps[1].detail
+        );
+    }
     // Absent feature.
     let steps = plan_of(&sketch(r#"{ "type": "construction", "feature": 999 }"#));
     assert!(matches!(steps[1].work, Work::Unmappable));
@@ -1073,33 +1099,83 @@ fn offset_plane_emission_uses_the_probe_pinned_shapes() {
     assert!(m.contains("AcceptAndPublishOffset("));
     // Componentwise signed placement check.
     assert!(m.contains("refusing a mirrored or tangential placement"));
-    // Restoration re-accepts with the offset twin (never AcceptAndPublish).
-    assert!(m.contains("could not be re-accepted after recreation: "));
-    let clean_idx = m.find("Function CleanSketch").expect("CleanSketch exists");
-    let clean_end = m[clean_idx..]
+    // Exact generated-statement pins (the double-quoting blocker): the
+    // name literal is a single VBA literal, never doubled.
+    assert!(
+        m.contains("feat.Name = \"CB_Plane_1\""),
+        "the rename statement must carry one VBA literal"
+    );
+    assert!(
+        !m.contains("feat.Name = \"\""),
+        "no statement may carry a doubled name literal"
+    );
+    // The probe-shaped capture: the reference-plane return and the tree
+    // feature are separate objects.
+    assert!(m.contains("Set refPlane = gFeatMgr.InsertRefPlane("));
+    assert!(m.contains("Set feat = swDoc.Extension.GetLastFeatureAdded"));
+    // Exactly one inline builder call in the inline sketch's BuildSketch,
+    // and it runs before the Degrade label (creation happens once).
+    let bs_idx = m
+        .find("Function BuildSketch3()")
+        .expect("inline sketch sub");
+    let bs_end = m[bs_idx..]
         .find("End Function")
-        .map(|e| clean_idx + e)
+        .map(|e| bs_idx + e)
         .unwrap();
-    let clean_body = &m[clean_idx..clean_end];
-    assert!(
-        clean_body.contains("AcceptAndPublishOffset("),
-        "the restoration path must use the offset acceptance: {clean_body}"
+    let bs_body = &m[bs_idx..bs_end];
+    assert_eq!(
+        bs_body.matches("st = BuildPlane3()").count(),
+        1,
+        "the inline plane is created exactly once per build"
     );
+    let call_pos = bs_body.find("st = BuildPlane3()").unwrap();
+    let degrade_pos = bs_body.find("Degrade:").expect("degrade label exists");
     assert!(
-        !clean_body.contains("AcceptAndPublish(5, ")
-            && !clean_body.contains("AcceptAndPublish(6, "),
-        "the restoration must not use the origin-only acceptance for offset sketches"
+        call_pos < degrade_pos,
+        "plane creation must precede the degrade path"
     );
-    // The fallback lifecycle deletes owned planes and clears their bindings.
+    // Restoration: every CleanSketch re-accepts with the offset twin and
+    // no CleanSketch recreates a plane or its equation.
+    let mut search = 0usize;
+    let mut cleans = 0;
+    while let Some(c) = m[search..].find("Function CleanSketch") {
+        let start = search + c;
+        let end = m[start..].find("End Function").map(|e| start + e).unwrap();
+        let body = &m[start..end];
+        assert!(
+            body.contains("AcceptAndPublishOffset("),
+            "restoration must use the offset acceptance: {body}"
+        );
+        assert!(
+            !body.contains("BuildPlane"),
+            "restoration must not recreate the plane: {body}"
+        );
+        assert!(
+            !body.contains("AddDimEquation"),
+            "restoration must not re-add the offset equation: {body}"
+        );
+        cleans += 1;
+        search = end;
+    }
+    assert_eq!(
+        cleans, 2,
+        "both offset-bound sketches have restoration paths"
+    );
+    // Deletion order: the inline sketch's sketch deletion precedes its
+    // plane deletion (the plane is owned by the sketch).
     let del_idx = m.find("Sub DeleteCreated()").expect("DeleteCreated exists");
     let del_end = m[del_idx..].find("End Sub").map(|e| del_idx + e).unwrap();
     let del_body = &m[del_idx..del_end];
+    let sketch_del = del_body
+        .find("skName3")
+        .expect("the inline sketch is deleted");
+    let plane_del = del_body.find("planeName3").expect("its plane is deleted");
     assert!(
-        del_body.contains("planeName"),
-        "planes must be deleted in fallback"
+        sketch_del < plane_del,
+        "the sketch must be deleted before its owned plane"
     );
     assert!(
-        del_body.contains("planeFeat"),
+        del_body.contains("planeName"),
         "plane bindings must be cleared"
     );
     // Registry sizing covers the plane equations (slots 0 and 1 here).
@@ -1110,6 +1186,140 @@ fn offset_plane_emission_uses_the_probe_pinned_shapes() {
     // The plane evidence reaches the runtime report (never overwritten).
     assert!(
         m.contains(" | plane: "),
-        "the sketch success message must carry the plane evidence"
+        "the sketch messages must carry the plane evidence"
+    );
+}
+
+#[test]
+fn shared_planes_and_multiple_inline_planes_plan_and_emit_distinctly() {
+    // Two sketches share ONE construction plane (one plane step, one
+    // builder); a third sketch owns its own inline plane. The macro must
+    // contain exactly two BuildPlane functions.
+    let tri = r#""points": [{"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+                {"id": "p1", "pos": [50.0, 0.0], "fixed": true},
+                {"id": "p2", "pos": [12.0, 30.0], "fixed": true}],
+            "curves": [
+              {"id": "l1", "type": "line", "a": 0, "b": 1},
+              {"id": "l2", "type": "line", "a": 1, "b": 2},
+              {"id": "l3", "type": "line", "a": 2, "b": 0}],
+            "constraints": [], "counters": {"l": 3, "p": 3}"#;
+    let design = format!(
+        r#"{{"format": "solidcraft/57", "units": "mm",
+        "params": [{{ "name": "W", "expr": "50 mm", "unit": "mm" }}],
+        "features": [
+          {{"id": 40, "name": "P", "suppressed": false, "type": "construction_plane",
+           "plane": {{"type": "offset", "base": {{"type": "origin", "name": "XY"}}, "distance": "W"}}}},
+          {{"id": 41, "name": "S1", "suppressed": false, "type": "sketch",
+           "plane": {{"type": "construction", "feature": 40}},
+           "sketch": {{{tri}}}}},
+          {{"id": 42, "name": "S2", "suppressed": false, "type": "sketch",
+           "plane": {{"type": "construction", "feature": 40}},
+           "sketch": {{{tri}}}}},
+          {{"id": 43, "name": "S3", "suppressed": false, "type": "sketch",
+           "plane": {{"type": "offset", "base": {{"type": "origin", "name": "XY"}}, "distance": "12"}},
+           "sketch": {{{tri}}}}}
+        ]}}"#
+    );
+    let steps = plan_of(&design);
+    let plane_idx = steps
+        .iter()
+        .find(|s| matches!(s.work, Work::OffsetPlane(_)))
+        .map(|s| s.index)
+        .expect("one plane step");
+    for i in [2usize, 3] {
+        match &steps[i].work {
+            Work::Sketch(sk) => assert_eq!(
+                sk.plane_binding,
+                replay::PlaneBinding::Constructed {
+                    step: plane_idx,
+                    expect_si: 0.05
+                },
+                "sketch {i} must share the one plane step"
+            ),
+            other => panic!("sketch expected: {other:?}"),
+        }
+    }
+    match &steps[4].work {
+        Work::Sketch(sk) => assert!(matches!(
+            sk.plane_binding,
+            replay::PlaneBinding::Offset { .. }
+        )),
+        other => panic!("sketch expected: {other:?}"),
+    }
+    // Emission: one builder for the plane step, one for the inline plane.
+    let dir = tempfile::tempdir().unwrap();
+    let recipe_path = dir.path().join("design.json");
+    let step_path = dir.path().join("part.step");
+    let artifact = dir.path().join("design.craftx");
+    let out: PathBuf = dir.path().join("design.swb");
+    fs::write(&recipe_path, &design).unwrap();
+    fs::write(&step_path, STEP_FIXTURE).unwrap();
+    pack::pack(
+        &PackOptions {
+            recipe: &recipe_path,
+            step: &step_path,
+            out: &artifact,
+            warnings: None,
+            name: None,
+            overwrite: false,
+            snapshots: Vec::new(),
+            final_snapshot: None,
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    build::build(
+        &BuildOptions {
+            artifact: &artifact,
+            out: &out,
+            plan: None,
+            plan_text: None,
+            overwrite: true,
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    let m = fs::read_to_string(&out).unwrap();
+    let builders = m.matches("Function BuildPlane").count();
+    assert_eq!(
+        builders, 2,
+        "one builder per owned plane, shared planes count once"
+    );
+}
+
+#[test]
+fn boundary_fallback_invalidates_plane_resolution_named() {
+    // plane step -> boundary-snapshot-covered unmappable step -> a sketch
+    // referencing the plane. The fallback deletes every created plane at
+    // runtime, so the planner must refuse the reference named.
+    let design = r#"{"format": "solidcraft/57", "units": "mm",
+        "params": [{ "name": "W", "expr": "50 mm", "unit": "mm" }],
+        "features": [
+          {"id": 40, "name": "P", "suppressed": false, "type": "construction_plane",
+           "plane": {"type": "offset", "base": {"type": "origin", "name": "XY"}, "distance": "W"}},
+          {"id": 41, "name": "Boom", "suppressed": false, "type": "teleport"},
+          {"id": 42, "name": "S", "suppressed": false, "type": "sketch",
+           "plane": {"type": "construction", "feature": 40},
+           "sketch": {"points": [{"id": "origin", "pos": [0.0, 0.0], "fixed": true}],
+             "curves": [], "constraints": [], "counters": {"l": 0, "p": 1}}}
+        ]}"#;
+    let limits = Limits::default();
+    let value = recipe::validate(design.as_bytes(), &limits).unwrap();
+    let mut snaps = BTreeMap::new();
+    // dense indices: 0 = the W parameter, 1 = the plane step, 2 = the
+    // unmappable step (the boundary covers it), 3 = the referencing sketch.
+    snaps.insert(2usize, craft_bridge::profile::SnapshotScope::Boundary);
+    let steps = replay::plan(&value, &limits, &snaps).unwrap();
+    assert!(matches!(steps[2].work, Work::Unmappable));
+    // Without a boundary the sketch would stop after the unmappable step
+    // anyway; WITH the boundary it plans further and must refuse the
+    // plane reference named (the fallback deleted the plane at runtime).
+    assert_eq!(steps[3].status, PlanStatus::FallbackPlanned);
+    assert!(
+        steps[3]
+            .detail
+            .contains("deleted by the boundary snapshot fallback"),
+        "{}",
+        steps[3].detail
     );
 }
