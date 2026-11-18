@@ -99,6 +99,65 @@ plane with `InsertRefPlane(8, distance_m, 0,0,0,0)`, rename it, bind its
 open sketches on the feature object - and the frame-map translation rule
 is confirmed for offset planes.
 
+## 2026-11-18 - probe-dimkind: dimension-kind creation is pinned
+
+**Probe:** `corpus/compat-check/probe-dimkind.swb` (hand-written on the
+minimal.swb/probe-refplane.swb skeleton; plan review APPROVE WITH CHANGES
+folded, byte review APPROVE), run through `tools/seat-smoke.ps1` on the
+seat (swf 34.3.2). Report: 17 steps, all created, summary ok. Geometry is
+independently authored synthetic data (13x8 mm and 8x13 mm diagonals,
+axis-pure controls) - never client geometry.
+
+**QD1 established:**
+- `AddDimension2` with two live sketch point handles selected creates an
+  **ALIGNED** dimension for a diagonal pair at EVERY witness placement the
+  emitter's heuristic family can produce (midpoint-over/below/above,
+  side-left/right): five placements, five aligned dimensions (value
+  15.264 mm = sqrt(13^2+8^2) mm exactly). **The witness placement never
+  determines the dimension kind.**
+- `AddHorizontalDimension2` / `AddVerticalDimension2` exist and are
+  **deterministic**: horizontal always measures the sketch-u projection,
+  vertical the sketch-v projection - across swapped slopes (13x8 and
+  8x13), reversed point-selection order, and axis-pure controls. For an
+  axis-pure pair the opposite-axis member returns Nothing with err 0 (a
+  zero-extent axis dimension does not exist); that is data, not a failure.
+- **Parameter-change acceptance (the emitter's value-edit contract)
+  holds** for the explicit members: driving the value by +0.002 moved
+  exactly the measured projection and restored exactly, leaving the
+  perpendicular projection unchanged. The aligned dimension at the old
+  heuristic moved BOTH axes proportionally (13->14.703, 8->9.048 mm for a
+  +2 mm drive along the line) - the reason an aligned dim must never
+  drive a coordinate driver.
+- Both explicit members were invoked late-bound through an `Object`
+  alias; the members are present in the type library at runtime (err 0).
+
+**Emitter contract pinned from the evidence (src/swb.rs):** the
+classified-axis (DistanceX/DistanceY) arm dispatches creation on the
+RUNTIME axis class (`AxisClass`) - class 0 -> AddHorizontalDimension2,
+class 1 -> AddVerticalDimension2 - through the late-bound `docO` alias,
+never on the declared kind and never on the witness placement. Every
+fail-closed guard is unchanged: the classified-axis projection check, the
+wrong-axis-kind check, the projection-magnitudes-coincide refusal, the
+sign/value checks and the value-edit carried-the-geometry checks. All
+other dimension arms (Distance, Length, Radius, Diameter, Angle) keep the
+AddDimension2 creation byte for byte (tests/build_tests.rs
+`non_classified_axis_dims_keep_the_add_dimension2_creation`;
+tracer_macro_is_pinned unchanged).
+
+**Integration case (emitter output on the seat):**
+`corpus/frame-diagonal-dims/` - a generated macro whose two driver dims
+span a diagonal pair and one axis-pure control (chained parameter
+equation included). Seat evidence is its runtime report under
+tools/seat-smoke.ps1.
+
+**Not established / open:** the seat evidence shows occasional
+no-movement on the probe's immediate value-edit re-read (b-e and most
+fv attempts recorded no geometry movement although the value edit
+itself did not raise). The emitter's value-edit checks may therefore
+occasionally fail closed on solver timing; if a run trips on "the value
+edit did not carry the ... geometry", that is the next probe question
+(rebuild-before-reread vs immediate read).
+
 ## 2026-11-17 - `fixed: true` + `exprs` is creatable through the MCP
 
 Source-confirmed earlier (nested-schema research [S38]); the design

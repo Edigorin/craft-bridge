@@ -1,0 +1,19 @@
+sha256=b6e275e049639c3ba0d31ecd7dfe0cbf0bb913e0d1c9ca7863103a3f11ce598d
+min_features=4
+volume_compare=skip
+solid=none
+# reference.step is a placeholder body: mass comparison activates when
+# real SolidCraft exports replace it (see docs/seat-acceptance.md).
+# EMITTER-INTEGRATION CASE for the classified-axis creation form (probe
+# evidence docs/source-probe-evidence.md 2026-11-18): the k1/k2 driver pair
+# is DIAGONAL (26x17 mm, independently authored synthetic geometry), so
+# each classified-axis dimension must be created by the explicit
+# AddHorizontalDimension2 / AddVerticalDimension2 member dispatched from
+# the runtime axis class - the witness placement never determines the kind
+# (AddDimension2 returned ALIGNED at every placement the probe tried). k3
+# is the axis-pure control. The fail-closed kind and value-edit guards are
+# unchanged and active.
+# SEAT CHECK: the runtime report must show the sketch step created with
+# both diagonal driver dimensions verified (their value-edit checks
+# passing), never a 'landed on the wrong axis kind' or 'measures ... but
+# the classified-axis displacement is ...' refusal.

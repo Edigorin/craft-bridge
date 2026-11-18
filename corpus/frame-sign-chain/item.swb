@@ -372,6 +372,7 @@ Function Dims1() As Boolean
     Dim nby As Double
     Dim chk As Double
     Dim chk2 As Double
+    Dim docO As Object
     ' dimension: DistanceX 0-1
     dimScale = 1#
     ax = pt1(0).X
@@ -400,7 +401,12 @@ Function Dims1() As Boolean
     mx = SketchToModelX(1, sT, tT)
     my = SketchToModelY(1, sT, tT)
     mz = SketchToModelZ(1, sT, tT)
-    Set dd = swDoc.AddDimension2(mx, my, mz)
+    Set docO = swDoc
+    If axClass = 0 Then
+    Set dd = docO.AddHorizontalDimension2(mx, my, mz)
+    Else
+    Set dd = docO.AddVerticalDimension2(mx, my, mz)
+    End If
     If dd Is Nothing Then gMsg = "the DistanceX 0-1 dimension did not appear": GoTo DimFail
     Set dm = dd.GetDimension2(0)
     If dm Is Nothing Then gMsg = "the DistanceX 0-1 dimension has no core dimension": GoTo DimFail
@@ -476,7 +482,12 @@ Function Dims1() As Boolean
     mx = SketchToModelX(1, sT, tT)
     my = SketchToModelY(1, sT, tT)
     mz = SketchToModelZ(1, sT, tT)
-    Set dd = swDoc.AddDimension2(mx, my, mz)
+    Set docO = swDoc
+    If axClass = 0 Then
+    Set dd = docO.AddHorizontalDimension2(mx, my, mz)
+    Else
+    Set dd = docO.AddVerticalDimension2(mx, my, mz)
+    End If
     If dd Is Nothing Then gMsg = "the DistanceY 0-5 dimension did not appear": GoTo DimFail
     Set dm = dd.GetDimension2(0)
     If dm Is Nothing Then gMsg = "the DistanceY 0-5 dimension has no core dimension": GoTo DimFail

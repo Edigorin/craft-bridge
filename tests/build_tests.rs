@@ -1740,6 +1740,57 @@ fn dims_verify_kind_and_resolve_signs_in_the_equation() {
 }
 
 #[test]
+fn non_classified_axis_dims_keep_the_add_dimension2_creation() {
+    // The probe-pinned creation change touches ONLY the classified-axis
+    // (DistanceX/DistanceY) arm. Distance, Length, Radius, Diameter and
+    // Angle keep the exact AddDimension2 creation and never see the
+    // late-bound alias. (tracer_macro_is_pinned adds byte-evidence: the
+    // tracer golden did not move.)
+    let distance = TRACER.replace(
+        "{ \"id\": \"k5\", \"l\": 0, \"param\": \"d1\", \"type\": \"length\", \"value\": 40.0 }",
+        "{ \"id\": \"k5\", \"p\": 0, \"q\": 1, \"param\": \"d1\", \"type\": \"distance\", \"value\": 40.0 }",
+    );
+    let angle = TRACER.replace(
+        "{ \"id\": \"k5\", \"l\": 0, \"param\": \"d1\", \"type\": \"length\", \"value\": 40.0 }",
+        "{ \"id\": \"k5\", \"a\": 0, \"b\": 1, \"param\": \"d1\", \"type\": \"angle\", \"value\": 1.2 }",
+    );
+    // The circle-bearing fixture with its classified-axis constraints
+    // rewritten to the aligned kind: radius and diameter arms then run on
+    // a recipe that owns no classified-axis dim at all.
+    let circles = include_str!("fixtures/frame-sign-chain.json")
+        .replace("distance_x", "distance")
+        .replace("distance_y", "distance");
+    let diameter = circles.replace("\"type\": \"radius\"", "\"type\": \"diameter\"");
+    for (name, recipe) in [
+        ("length", TRACER.to_string()),
+        ("distance", distance),
+        ("angle", angle),
+        ("radius", circles),
+        ("diameter", diameter),
+    ] {
+        let case = Case::new(&recipe);
+        case.build_to("arm.swb", false).unwrap();
+        let text = fs::read_to_string(case.dir.path().join("arm.swb")).unwrap();
+        assert!(
+            !text.contains("docO"),
+            "{name}: the non-classified arm must not carry the late-bound alias"
+        );
+        assert!(
+            !text.contains("AddHorizontalDimension2") && !text.contains("AddVerticalDimension2"),
+            "{name}: the non-classified arm must not use the explicit members"
+        );
+        let dims = text.matches("' dimension: ").count();
+        assert!(dims > 0, "{name}: the fixture produced no dimension");
+        assert_eq!(
+            text.matches("Set dd = swDoc.AddDimension2(mx, my, mz)")
+                .count(),
+            dims,
+            "{name}: every dimension must keep the AddDimension2 creation"
+        );
+    }
+}
+
+#[test]
 fn plane_name_for_keeps_its_own_capture_only() {
     // [F6]: PlaneNameFor probes must not disturb persistent sketch state -
     // no map publication inside it, ever.

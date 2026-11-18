@@ -1,0 +1,152 @@
+{
+  "about": {
+    "design": "Frame Diagonal Dims",
+    "format": "solidcraft/53",
+    "replay": "craft-bridge build",
+    "version": "0.40.0-rc.4"
+  },
+  "commands": [
+    {
+      "command": "document.units",
+      "params": {
+        "units": "mm"
+      }
+    },
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "id": 1,
+          "name": "DiagonalDims",
+          "plane": {
+            "name": "XY",
+            "type": "origin"
+          },
+          "suppressed": false,
+          "type": "sketch",
+          "sketch": {
+            "points": [
+              {
+                "fixed": true,
+                "id": "origin",
+                "pos": [
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "id": "p1",
+                "pos": [
+                  26.0,
+                  17.0
+                ]
+              },
+              {
+                "id": "p2",
+                "pos": [
+                  43.0,
+                  17.0
+                ]
+              },
+              {
+                "id": "p3",
+                "pos": [
+                  43.0,
+                  0.0
+                ]
+              }
+            ],
+            "curves": [
+              {
+                "a": 0,
+                "b": 1,
+                "construction": false,
+                "id": "l0",
+                "type": "line"
+              },
+              {
+                "a": 1,
+                "b": 2,
+                "construction": false,
+                "id": "l1",
+                "type": "line"
+              },
+              {
+                "a": 2,
+                "b": 3,
+                "construction": false,
+                "id": "l2",
+                "type": "line"
+              },
+              {
+                "a": 3,
+                "b": 0,
+                "construction": false,
+                "id": "l3",
+                "type": "line"
+              }
+            ],
+            "constraints": [
+              {
+                "id": "k1",
+                "p": 0,
+                "q": 1,
+                "param": "diag_dx",
+                "type": "distance_x",
+                "value": 26.0
+              },
+              {
+                "id": "k2",
+                "p": 0,
+                "q": 1,
+                "param": "diag_dy",
+                "type": "distance_y",
+                "value": 17.0
+              },
+              {
+                "id": "k3",
+                "p": 0,
+                "q": 3,
+                "param": "base_w",
+                "type": "distance_x",
+                "value": 43.0
+              },
+              {
+                "id": "k4",
+                "l": 1,
+                "type": "horizontal"
+              },
+              {
+                "id": "k5",
+                "l": 2,
+                "type": "vertical"
+              }
+            ],
+            "counters": {
+              "k": 5,
+              "l": 4,
+              "p": 4
+            }
+          }
+        },
+        "params": [
+          {
+            "expression": "26 mm",
+            "name": "diag_dx",
+            "unit": "mm"
+          },
+          {
+            "expression": "diag_dx - 9 mm",
+            "name": "diag_dy",
+            "unit": "mm"
+          },
+          {
+            "expression": "43 mm",
+            "name": "base_w",
+            "unit": "mm"
+          }
+        ]
+      }
+    }
+  ]
+}

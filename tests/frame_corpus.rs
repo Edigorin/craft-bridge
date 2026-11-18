@@ -20,12 +20,14 @@ use craft_bridge::zipio;
 const SIGN_CHAIN: &str = include_str!("fixtures/frame-sign-chain.json");
 const TWO_MAPS: &str = include_str!("fixtures/frame-two-maps.json");
 const OMISSION: &str = include_str!("fixtures/frame-omission.json");
+const DIAGONAL: &str = include_str!("fixtures/frame-diagonal-dims.json");
 const STEP_FIXTURE: &str = include_str!("fixtures/part.step");
 
-const ITEMS: [(&str, &str); 3] = [
+const ITEMS: [(&str, &str); 4] = [
     ("frame-sign-chain", SIGN_CHAIN),
     ("frame-two-maps", TWO_MAPS),
     ("frame-omission", OMISSION),
+    ("frame-diagonal-dims", DIAGONAL),
 ];
 
 struct Case {
@@ -1144,5 +1146,57 @@ fn every_committed_macro_passes_the_scans() {
         assert_no_executable_residue(text, name);
         assert_state_declared(text, name);
         assert_locals_declared(text, name);
+    }
+}
+
+#[test]
+fn diagonal_driver_dims_dispatch_the_explicit_members_and_keep_the_guards() {
+    // Emitter-integration case for the classified-axis creation form (probe
+    // evidence: probe-dimkind, seat 34.3.2, 2026-11-18 - placement never
+    // determines the kind; the explicit members do). The fixture carries
+    // two driver dims across a DIAGONAL pair and one axis-pure control;
+    // every classified-axis dim dispatches on the runtime axis class and
+    // every fail-closed guard stays in place.
+    let text = Case::new(DIAGONAL).build_to("diag.swb");
+    // Three classified-axis dimensions: each dispatch block selects the
+    // explicit member per axis class through the late-bound Object.
+    assert_eq!(
+        text.matches("Set docO = swDoc").count(),
+        3,
+        "every classified-axis dim must own one dispatch block"
+    );
+    assert_eq!(
+        text.matches("Dim docO As Object").count(),
+        1,
+        "the dims sub must declare its late-bound alias exactly once"
+    );
+    assert_eq!(text.matches("AddHorizontalDimension2").count(), 3);
+    assert_eq!(text.matches("AddVerticalDimension2").count(), 3);
+    // The exact dispatch block: class 0 horizontal, class 1 vertical -
+    // a reversed branch must not pass (count assertions alone would).
+    let dispatch = "    Set docO = swDoc\n    If axClass = 0 Then\n    Set dd = docO.AddHorizontalDimension2(mx, my, mz)\n    Else\n    Set dd = docO.AddVerticalDimension2(mx, my, mz)\n    End If\n";
+    assert_eq!(
+        text.matches(dispatch).count(),
+        3,
+        "every classified-axis dim must carry the exact class-dispatch block"
+    );
+    // This fixture owns ONLY classified-axis dims: the shared creation
+    // form must not appear at all here.
+    assert_eq!(
+        text.matches("Set dd = swDoc.AddDimension2(mx, my, mz)")
+            .count(),
+        0,
+        "classified-axis dims must not fall back to AddDimension2"
+    );
+    // Every fail-closed guard survives byte-semantics.
+    for guard in [
+        "the classified-axis displacement is",
+        "landed on the wrong axis kind",
+        "the projection magnitudes coincide; the kind cannot be established",
+        "the value edit did not carry the",
+        "the value edit moved the perpendicular axis",
+        "non-permutation map",
+    ] {
+        assert!(text.contains(guard), "lost guard: {guard}");
     }
 }

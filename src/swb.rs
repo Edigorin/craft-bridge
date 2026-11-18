@@ -1950,6 +1950,13 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     out.push_str(&format!(
         "Function Dims{index}() As Boolean\n    On Error GoTo DimFail\n    Const TOL As Double = 0.000001\n    gMsg = \"\"\n    Dim dd As SldWorks.DisplayDimension\n    Dim dm As SldWorks.Dimension\n    Dim ax As Double\n    Dim ay As Double\n    Dim bx As Double\n    Dim by As Double\n    Dim ds As Double\n    Dim dt As Double\n    Dim proj As Double\n    Dim other As Double\n    Dim created As Double\n    Dim signVal As Double\n    Dim sT As Double\n    Dim tT As Double\n    Dim mx As Double\n    Dim my As Double\n    Dim mz As Double\n    Dim axClass As Long\n    Dim dimScale As Double\n    Dim v As Variant\n    Dim v2 As Variant\n    Dim nax As Double\n    Dim nay As Double\n    Dim nbx As Double\n    Dim nby As Double\n    Dim chk As Double\n    Dim chk2 As Double\n"
     ));
+    if sk
+        .dimensions
+        .iter()
+        .any(|d| matches!(d.kind, DimKind::DistanceX | DimKind::DistanceY))
+    {
+        out.push_str("    Dim docO As Object\n");
+    }
     for (di, dim) in sk.dimensions.iter().enumerate() {
         out.push_str(&emit_dimension(index, dim, sk, equation_for(sk, di)));
     }
@@ -2254,6 +2261,9 @@ fn emit_dimension(
     let select;
     let placement;
     let mut kindcheck = String::new();
+    // The creation call is kind-owned: everything but the classified-axis
+    // driver dims keeps the AddDimension2 form byte for byte.
+    let mut create = "    Set dd = swDoc.AddDimension2(mx, my, mz)\n".to_string();
     match dim.kind {
         DimKind::Length => {
             let (a, b) = (2 * dim.a, 2 * dim.a + 1);
@@ -2319,11 +2329,23 @@ fn emit_dimension(
             );
             match dim.kind {
                 DimKind::DistanceX | DimKind::DistanceY => {
-                    // The placed side decides the dimension kind: offset the
-                    // text perpendicular to the classified axis so the kind
-                    // measures that axis. Sign handling is below, in the
-                    // equation RHS and the expected value.
+                    // Placement is only the ANNOTATION position (the text
+                    // sits perpendicular to the classified axis); it never
+                    // decides the dimension kind - the explicit member
+                    // dispatch below does. Sign handling is in the equation
+                    // RHS and the expected value.
                     placement = "    If axClass = 0 Then\n    proj = ds\n    other = dt\n    sT = (ax + bx) / 2#\n    tT = ay - 0.01\n    Else\n    proj = dt\n    other = ds\n    sT = ax + 0.01\n    tT = (ay + by) / 2#\n    End If\n".to_string();
+                    // probe-dimkind (seat evidence 2026-11-18): witness
+                    // placement NEVER determines the kind - AddDimension2
+                    // returned ALIGNED for diagonal pairs at every placement
+                    // tried, while the explicit members were deterministic
+                    // across swapped slopes, reversed selection order and
+                    // axis-pure pairs. Creation dispatches on the RUNTIME
+                    // axis class (never on the declared kind) through a
+                    // late-bound Object - the probe's proven form, so an
+                    // absent member raises catchably instead of failing to
+                    // compile.
+                    create = "    Set docO = swDoc\n    If axClass = 0 Then\n    Set dd = docO.AddHorizontalDimension2(mx, my, mz)\n    Else\n    Set dd = docO.AddVerticalDimension2(mx, my, mz)\n    End If\n".to_string();
                 }
                 _ => {
                     placement = "    sT = (ax + bx) / 2# + 0.01\n    tT = (ay + by) / 2# + 0.01\n"
@@ -2350,7 +2372,8 @@ fn emit_dimension(
     // parameter edits keep tracking (never only the initial SystemValue).
     let mut tail = String::new();
     tail.push_str(&format!(
-        "    mx = SketchToModelX({index}, sT, tT)\n    my = SketchToModelY({index}, sT, tT)\n    mz = SketchToModelZ({index}, sT, tT)\n    Set dd = swDoc.AddDimension2(mx, my, mz)\n    If dd Is Nothing Then gMsg = \"the {label} dimension did not appear\": GoTo DimFail\n    Set dm = dd.GetDimension2(0)\n    If dm Is Nothing Then gMsg = \"the {label} dimension has no core dimension\": GoTo DimFail\n    created = dm.SystemValue\n"
+        "    mx = SketchToModelX({index}, sT, tT)\n    my = SketchToModelY({index}, sT, tT)\n    mz = SketchToModelZ({index}, sT, tT)\n{create}    If dd Is Nothing Then gMsg = \"the {label} dimension did not appear\": GoTo DimFail\n    Set dm = dd.GetDimension2(0)\n    If dm Is Nothing Then gMsg = \"the {label} dimension has no core dimension\": GoTo DimFail\n    created = dm.SystemValue\n",
+        create = create
     ));
     tail.push_str(&kindcheck);
     tail.push_str(&format!(

@@ -1138,9 +1138,9 @@ fn offset_plane_emission_uses_the_probe_pinned_shapes() {
     // proven selection form); every call site passes it, and every helper
     // exit records its named reason in gProbeLog (silent exits once left
     // a seat run diagnosing nothing).
-    assert!(m.contains(
-        "Function OpenSketchOnNamedPlane(ByVal idx As Long, feat As SldWorks.Feature"
-    ));
+    assert!(
+        m.contains("Function OpenSketchOnNamedPlane(ByVal idx As Long, feat As SldWorks.Feature")
+    );
     let mut call_sites = 0;
     for line in m.lines() {
         if line.contains("OpenSketchOnNamedPlane(") && !line.trim_start().starts_with("Function") {
@@ -1151,7 +1151,10 @@ fn offset_plane_emission_uses_the_probe_pinned_shapes() {
             call_sites += 1;
         }
     }
-    assert!(call_sites >= 1, "at least one constructed/inline sketch opens on its plane");
+    assert!(
+        call_sites >= 1,
+        "at least one constructed/inline sketch opens on its plane"
+    );
     let helper_body = {
         let hs = m
             .find("Function OpenSketchOnNamedPlane(")
