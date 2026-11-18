@@ -147,8 +147,10 @@ tracer_macro_is_pinned unchanged).
 **Integration case (emitter output on the seat):**
 `corpus/frame-diagonal-dims/` - a generated macro whose two driver dims
 span a diagonal pair and one axis-pure control (chained parameter
-equation included). Seat evidence is its runtime report under
-tools/seat-smoke.ps1.
+equation included). **Seat-verified 2026-11-18** (task craft-diag-dims,
+seat-smoke, committed hash b6e275e0...): "6 relations and 3 dimensions
+replayed", summary ok - all three classified-axis dimensions created
+through the explicit members and every kind/value-edit guard passed.
 
 **Not established / open:** the seat evidence shows occasional
 no-movement on the probe's immediate value-edit re-read (b-e and most
