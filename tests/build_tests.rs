@@ -1776,6 +1776,46 @@ fn verify_refusals_are_named_and_the_degrade_tail_keeps_the_cause() {
 }
 
 #[test]
+fn exact_draw_switches_inference_off_and_restores_it_verified() {
+    // probe-snap seat evidence (2026-11-18): macro line creation runs the
+    // sketcher's inference and MOVES new endpoints (midpoint u-alignment);
+    // swSketchInference OFF during drawing places them exactly. The
+    // application-wide preference is captured first and restored verified
+    // on every exit - including the draw failures.
+    let case = Case::new(TRACER);
+    case.build_to("exact.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("exact.swb")).unwrap();
+    assert!(
+        text.contains("Function BeginExactDraw(") && text.contains("Function EndExactDraw("),
+        "the exact-draw helpers are missing"
+    );
+    assert!(
+        text.contains("swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swSketchInference)")
+            && text.contains(
+                "swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swSketchInference, False"
+            ),
+        "the helpers must capture and switch the inference preference"
+    );
+    assert!(
+        text.contains("restore it manually"),
+        "an unrecovered restore must name the manual-restore details"
+    );
+    // DrawGeometry brackets its drawing with the helpers and restores on
+    // the failure path too.
+    let i = text.find("Sub DrawGeometry").expect("no DrawGeometry");
+    let j = text[i..].find("End Sub").unwrap() + i;
+    let region = &text[i..j];
+    assert!(
+        region.contains("If Not BeginExactDraw(") && region.contains("If Not EndExactDraw("),
+        "DrawGeometry must bracket its drawing with the exact-draw helpers"
+    );
+    assert!(
+        region.contains("DrawFail:") && region.contains("eMsg = eMsg & \" | \" & infReason"),
+        "the draw failure path must restore the preference and report"
+    );
+}
+
+#[test]
 fn non_classified_axis_dims_keep_the_add_dimension2_creation() {
     // The probe-pinned creation change touches ONLY the classified-axis
     // (DistanceX/DistanceY) arm. Distance, Length, Radius, Diameter and

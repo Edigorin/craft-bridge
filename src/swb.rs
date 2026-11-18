@@ -1215,6 +1215,75 @@ On Error GoTo 0
 If sk Is Nothing Then Err.Raise vbObjectError + 529, \"craft-bridge\", \"sketch edit could not be re-entered for \" & nm
 End Sub
 
+' Exact-draw discipline (probe-snap seat evidence 2026-11-18): macro
+' line creation runs the sketcher's inference, which moves a new
+' endpoint onto an existing line's midpoint u (~0.6 mm zone) - the
+' v coordinate untouched. swSketchInference OFF during drawing places
+' every endpoint exactly (case F); swSketchSnapsMidPoints alone does NOT
+' (case E). The preference is application-wide: captured first, restored
+' and verified on every exit. SetUserPreferenceToggle returns VOID - the
+' enforced readback IS the setter verification.
+Function BeginExactDraw(ByRef preState As Boolean, ByRef flipped As Boolean, ByRef reason As String) As Boolean
+    Dim errNum As Long
+    Dim rb As Boolean
+    Dim note As String
+    BeginExactDraw = False
+    flipped = False
+    reason = \"\"
+    On Error Resume Next
+    Err.Clear
+    preState = swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swSketchInference)
+    errNum = Err.Number
+    On Error GoTo 0
+    If errNum <> 0 Then
+        reason = \"the swSketchInference pre-state could not be read (err \" & Trim(Str(errNum)) & \") - nothing was changed\"
+        Exit Function
+    End If
+    flipped = True
+    On Error Resume Next
+    Err.Clear
+    swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swSketchInference, False
+    errNum = Err.Number
+    If errNum = 0 Then
+        Err.Clear
+        rb = swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swSketchInference)
+        If Err.Number <> 0 Then errNum = Err.Number
+    End If
+    On Error GoTo 0
+    If errNum <> 0 Or rb <> False Then
+        reason = \"swSketchInference did not switch off (err \" & Trim(Str(errNum)) & \", readback \" & Trim(Str(Abs(rb))) & \")\"
+        If Not EndExactDraw(flipped, preState, note) Then reason = reason & \" | \" & note
+        Exit Function
+    End If
+    BeginExactDraw = True
+End Function
+
+Function EndExactDraw(ByVal flipped As Boolean, ByVal preState As Boolean, ByRef reason As String) As Boolean
+    Dim errNum As Long
+    Dim rb As Boolean
+    EndExactDraw = False
+    reason = \"\"
+    If Not flipped Then
+        EndExactDraw = True
+        Exit Function
+    End If
+    On Error Resume Next
+    Err.Clear
+    swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swSketchInference, preState
+    errNum = Err.Number
+    If errNum = 0 Then
+        Err.Clear
+        rb = swApp.GetUserPreferenceToggle(swUserPreferenceToggle_e.swSketchInference)
+        If Err.Number <> 0 Then errNum = Err.Number
+    End If
+    On Error GoTo 0
+    If errNum <> 0 Or rb <> preState Then
+        reason = \"swSketchInference could not be restored (saved state \" & Trim(Str(Abs(preState))) & \", err \" & Trim(Str(errNum)) & \", readback \" & Trim(Str(Abs(rb))) & \") - restore it manually\"
+        Exit Function
+    End If
+    EndExactDraw = True
+End Function
+
 ' The closed-context half of verification (F7): after closing, no sketch
 ' may be active. The geometry readback runs in both contexts - the seat
 ' pinned handle readback as identical in active and closed contexts.
@@ -1881,7 +1950,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
 
     // DrawGeometry
     out.push_str(&format!(
-        "Sub DrawGeometry{index}()\n    Const TOL As Double = 0.000001\n"
+        "Sub DrawGeometry{index}()\n    Const TOL As Double = 0.000001\n    Dim infPre As Boolean\n    Dim infFlip As Boolean\n    Dim infReason As String\n    On Error GoTo DrawFail\n    If Not BeginExactDraw(infPre, infFlip, infReason) Then Err.Raise vbObjectError + 561, \"DrawGeometry\", \"drawing cannot be exact: \" & infReason\n"
     ));
     // Coordinates go through the sketch's own adaptation map (frame
     // adaptation): SC (u,v) -> (s,t) at runtime. Point handles use the
@@ -1950,7 +2019,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
             2 * sk.lines.len() + j
         ));
     }
-    out.push_str("    swDoc.ClearSelection2 True\nEnd Sub\n\n");
+    out.push_str("    swDoc.ClearSelection2 True\n    If Not EndExactDraw(infFlip, infPre, infReason) Then Err.Raise vbObjectError + 562, \"DrawGeometry\", infReason\n    Exit Sub\nDrawFail:\n    ' Capture the error FIRST: the cleanup below resets Err.\n    Dim eNum As Long, eMsg As String\n    eNum = Err.Number\n    eMsg = Err.Description\n    On Error Resume Next\n    If Not EndExactDraw(infFlip, infPre, infReason) Then eMsg = eMsg & \" | \" & infReason\n    On Error GoTo 0\n    Err.Raise eNum, \"DrawGeometry\", eMsg\nEnd Sub\n\n");
 
     // Relations
     out.push_str(&format!(
