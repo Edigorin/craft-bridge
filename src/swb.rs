@@ -1981,9 +1981,16 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
             } else {
                 "end"
             };
-            let pslot = if getter == "GetStartPoint" { l.a } else { l.b };
+            // The endpoint REGISTRY slot for this endpoint (2 per line:
+            // start = 2i, end = 2i+1) - the SketchPoint handle is the
+            // accessor the rest of the macro reads.
+            let pslot = if getter == "GetStartPoint" {
+                2 * i
+            } else {
+                2 * i + 1
+            };
             out.push_str(&format!(
-                "    v = sl{index}({i}).{getter}\n    If Abs(v(0) - MapU({index}, {u}, {vv})) > TOL Then gMsg = \"verify: line {i} {end_txt} u reads \" & Trim(Str(v(0))) & \", point reads \" & Trim(Str(pt{index}({pslot}).X)) & \", expected \" & Trim(Str(MapU({index}, {u}, {vv}))) & \" (source {u},{vv})\": GoTo VerifyFail\n    If Abs(v(1) - MapV({index}, {u}, {vv})) > TOL Then gMsg = \"verify: line {i} {end_txt} v reads \" & Trim(Str(v(1))) & \", point reads \" & Trim(Str(pt{index}({pslot}).Y)) & \", expected \" & Trim(Str(MapV({index}, {u}, {vv}))) & \" (source {u},{vv})\": GoTo VerifyFail\n    If Abs(v(2)) > TOL Then gMsg = \"verify: line {i} {end_txt} z reads \" & Trim(Str(v(2))) & \", point reads \" & Trim(Str(pt{index}({pslot}).Z)) & \", expected 0\": GoTo VerifyFail\n",
+                "    v = sl{index}({i}).{getter}\n    If Abs(v(0) - MapU({index}, {u}, {vv})) > TOL Or Abs(v(1) - MapV({index}, {u}, {vv})) > TOL Or Abs(v(2)) > TOL Then gMsg = \"verify: line {i} {end_txt}: array \" & Vec3Text(v(0), v(1), v(2)) & \", point \" & Vec3Text(pt{index}({pslot}).X, pt{index}({pslot}).Y, pt{index}({pslot}).Z) & \", expected \" & Vec3Text(MapU({index}, {u}, {vv}), MapV({index}, {u}, {vv}), 0#) & \" (source {u},{vv})\": GoTo VerifyFail\n",
                 getter = getter,
                 index = index,
                 i = i,

@@ -1,4 +1,4 @@
-sha256=627969ba7bc3bc6e492f3bcdf12a89fa1588e8539d0e7e7db7dc5b4278018aa2
+sha256=a7d365bbf94a20bcef1dc1b8d3c0462e5bd2a9b2436b4cab9146ab1421d0201e
 min_features=4
 volume_compare=skip
 solid=none
