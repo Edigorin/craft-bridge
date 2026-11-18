@@ -27,7 +27,12 @@ models (replay, not translation). This file is the hard rules; the program spec 
   macro sha256; every run pins source, macro, reference and tooling shas in an
   untracked manifest; the synthetic committed-corpus runner and its review
   requirements stay unchanged. Tests use independently authored synthetic
-  fixtures - never copied client geometry.
+  fixtures - never copied client geometry. **Approval delegation (owner
+  2026-11-18):** the owner delegates the approval act itself ("always approve
+  for me"): the agent records the approved macro sha256 in the manifest and
+  proceeds without asking per hash. The pinning discipline is unchanged - every
+  approved hash is still recorded, and any macro change still lands as a new
+  approved hash in the manifest.
 - **Hostile input.** Artifacts are untrusted: safe extraction (no path traversal),
   size caps, VBA string-literal escaping in generated macros, recipe entries
   translated only from a known command allowlist (unknown entries become fallback
