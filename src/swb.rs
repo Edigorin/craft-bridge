@@ -1692,7 +1692,7 @@ Function BuildPlane{index}() As String\n\
     Set feat = swDoc.Extension.GetLastFeatureAdded\n\
     If feat Is Nothing Then gMsg = \"GetLastFeatureAdded returned nothing after InsertRefPlane\": GoTo PlaneFail\n\
     feat.Name = {pname}\n\
-    If feat.Name <> {pname} Then gMsg = \"the plane feature would not take the name {name_txt} (reads \" & feat.Name & \"\")\": GoTo PlaneFail\n\
+    If feat.Name <> {pname} Then gMsg = \"the plane feature would not take the name {name_txt} (reads \" & feat.Name & \")\": GoTo PlaneFail\n\
     Set rp = Nothing\n\
     Set rp = refPlane\n\
     If rp Is Nothing Then gMsg = \"the created plane has no reference-plane face\": GoTo PlaneFail\n\

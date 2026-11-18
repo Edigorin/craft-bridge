@@ -1109,6 +1109,28 @@ fn offset_plane_emission_uses_the_probe_pinned_shapes() {
         !m.contains("feat.Name = \"\""),
         "no statement may carry a doubled name literal"
     );
+    // The exact rename-check statement: the failure message closes its
+    // paren INSIDE the string (a seat run died on this line: an unbalanced
+    // paren/quote pair is a VBA compile error and the whole macro refuses
+    // to load).
+    assert!(
+        m.contains("If feat.Name <> \"CB_Plane_1\" Then gMsg = \"the plane feature would not take the name CB_Plane_1 (reads \" & feat.Name & \")\": GoTo PlaneFail"),
+        "the rename check must carry the balanced message statement"
+    );
+    // Every generated non-comment line has balanced VBA string quotes -
+    // the scan that would have caught that compile error in CI.
+    for (ln, line) in m.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('\'') {
+            continue;
+        }
+        assert!(
+            line.matches('"').count() % 2 == 0,
+            "line {} carries an odd quote count (unbalanced VBA string): {}",
+            ln + 1,
+            line
+        );
+    }
     // The probe-shaped capture: the reference-plane return and the tree
     // feature are separate objects.
     assert!(m.contains("Set refPlane = gFeatMgr.InsertRefPlane("));
