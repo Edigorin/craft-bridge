@@ -1835,7 +1835,7 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     ));
     out.push_str("    swSketchMgr.InsertSketch True\n");
     out.push_str(&format!(
-        "    If Not NoSketchIsOpen() Then gMsg = \"the sketch context did not close\": GoTo SketchFailed\n    If Not VerifySketch{index}() Then gMsg = \"closed-context verification failed: the solved geometry differs after closing\": GoTo SketchFailed\n"
+        "    If Not NoSketchIsOpen() Then gMsg = \"the sketch context did not close\": GoTo SketchFailed\n    If Not VerifySketch{index}() Then gMsg = \"closed-context verification failed: the solved geometry differs after closing: \" & gMsg: GoTo SketchFailed\n"
     ));
     let success_msg = match &sk.plane_binding {
         crate::replay::PlaneBinding::Offset { .. } => {
@@ -1857,11 +1857,11 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
              ' reacquired; its refusal fails the sketch with the named reason.\n",
     );
     out.push_str(&format!(
-        "    If Not CleanSketch{index}() Then GoTo SketchFailed\n    DrawGeometry{index}\n    If Not Dims{index}() Then GoTo SketchFailed\n    If Not VerifySketch{index}() Then GoTo SketchFailed\n"
+        "    If Not CleanSketch{index}() Then GoTo SketchFailed\n    DrawGeometry{index}\n    If Not Dims{index}() Then GoTo SketchFailed\n    If Not VerifySketch{index}() Then gMsg = \"the recreated geometry differs from the drawn coordinates: \" & gMsg & \" (degrade cause: \" & gCause & \")\": GoTo SketchFailed\n"
     ));
     out.push_str("    swSketchMgr.InsertSketch True\n");
     out.push_str(&format!(
-        "    If Not NoSketchIsOpen() Then gMsg = \"the sketch context did not close\": GoTo SketchFailed\n    If Not VerifySketch{index}() Then gMsg = \"closed-context verification failed after recreation\": GoTo SketchFailed\n"
+        "    If Not NoSketchIsOpen() Then gMsg = \"the sketch context did not close\": GoTo SketchFailed\n    If Not VerifySketch{index}() Then gMsg = \"closed-context verification failed after recreation: \" & gMsg & \" (degrade cause: \" & gCause & \")\": GoTo SketchFailed\n"
     ));
     // The degraded-success message keeps the plane evidence too (plan
     // review: success must not overwrite what the plane step proved).
@@ -1976,10 +1976,17 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
             ("GetStartPoint", sk.points[l.a]),
             ("GetEndPoint", sk.points[l.b]),
         ] {
+            let end_txt = if getter == "GetStartPoint" {
+                "start"
+            } else {
+                "end"
+            };
             out.push_str(&format!(
-                "    v = sl{index}({i}).{getter}\n    If Abs(v(0) - MapU({index}, {u}, {vv})) > TOL Then GoTo VerifyFail\n    If Abs(v(1) - MapV({index}, {u}, {vv})) > TOL Then GoTo VerifyFail\n    If Abs(v(2)) > TOL Then GoTo VerifyFail\n",
+                "    v = sl{index}({i}).{getter}\n    If Abs(v(0) - MapU({index}, {u}, {vv})) > TOL Then gMsg = \"verify: line {i} {end_txt} u reads \" & Trim(Str(v(0))) & \", expected \" & Trim(Str(MapU({index}, {u}, {vv}))) & \" (source {u},{vv})\": GoTo VerifyFail\n    If Abs(v(1) - MapV({index}, {u}, {vv})) > TOL Then gMsg = \"verify: line {i} {end_txt} v reads \" & Trim(Str(v(1))) & \", expected \" & Trim(Str(MapV({index}, {u}, {vv}))) & \" (source {u},{vv})\": GoTo VerifyFail\n    If Abs(v(2)) > TOL Then gMsg = \"verify: line {i} {end_txt} z reads \" & Trim(Str(v(2))) & \", expected 0\": GoTo VerifyFail\n",
                 getter = getter,
                 index = index,
+                i = i,
+                end_txt = end_txt,
                 u = vba_num(mm(p[0])),
                 vv = vba_num(mm(p[1])),
             ));
@@ -1991,18 +1998,21 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
         // endpoint accessor does not establish centre coordinates): a fresh
         // handle, all three components checked.
         out.push_str(&format!(
-            "    Set cph = ci{index}({j}).GetCenterPoint2\n    If cph Is Nothing Then GoTo VerifyFail\n    If Abs(cph.X - MapU({index}, {u}, {vv})) > TOL Then GoTo VerifyFail\n    If Abs(cph.Y - MapV({index}, {u}, {vv})) > TOL Then GoTo VerifyFail\n    If Abs(cph.Z) > TOL Then GoTo VerifyFail\n",
+            "    Set cph = ci{index}({j}).GetCenterPoint2\n    If cph Is Nothing Then gMsg = \"verify: circle {j} centre handle is missing\": GoTo VerifyFail\n    If Abs(cph.X - MapU({index}, {u}, {vv})) > TOL Then gMsg = \"verify: circle {j} centre u reads \" & Trim(Str(cph.X)) & \", expected \" & Trim(Str(MapU({index}, {u}, {vv}))) & \" (source {u},{vv})\": GoTo VerifyFail\n    If Abs(cph.Y - MapV({index}, {u}, {vv})) > TOL Then gMsg = \"verify: circle {j} centre v reads \" & Trim(Str(cph.Y)) & \", expected \" & Trim(Str(MapV({index}, {u}, {vv}))) & \" (source {u},{vv})\": GoTo VerifyFail\n    If Abs(cph.Z) > TOL Then gMsg = \"verify: circle {j} centre z reads \" & Trim(Str(cph.Z)) & \", expected 0\": GoTo VerifyFail\n",
             index = index,
+            j = j,
             u = vba_num(mm(ctr[0])),
             vv = vba_num(mm(ctr[1])),
         ));
         out.push_str(&format!(
-            "    If Abs(ci{index}({j}).GetRadius - {}) > TOL Then GoTo VerifyFail\n",
-            vba_num(mm(c.r))
+            "    If Abs(ci{index}({j}).GetRadius - {r}) > TOL Then gMsg = \"verify: circle {j} radius reads \" & Trim(Str(ci{index}({j}).GetRadius)) & \", expected {r}\": GoTo VerifyFail\n",
+            index = index,
+            j = j,
+            r = vba_num(mm(c.r))
         ));
     }
     out.push_str(&format!(
-        "    VerifySketch{index} = True\n    Exit Function\nVerifyFail:\n    VerifySketch{index} = False\nEnd Function\n\n"
+        "    VerifySketch{index} = True\n    Exit Function\nVerifyFail:\n    If Err.Number <> 0 Then gMsg = \"verify raised: err \" & Trim(Str(Err.Number)) & \": \" & Err.Description\n    If gMsg = \"\" Then gMsg = \"geometry verification failed (unnamed)\"\n    VerifySketch{index} = False\nEnd Function\n\n"
     ));
 
     // CleanSketch: verified deletion-and-recreation (folded design 35f04a3f

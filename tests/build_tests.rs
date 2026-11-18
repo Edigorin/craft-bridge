@@ -1740,6 +1740,40 @@ fn dims_verify_kind_and_resolve_signs_in_the_equation() {
 }
 
 #[test]
+fn verify_refusals_are_named_and_the_degrade_tail_keeps_the_cause() {
+    // A seat run failed with an EMPTY message once: VerifySketch's refusals
+    // were silent and the degrade path wiped the trigger's message on a
+    // successful recreation. Every verify mismatch now names reads vs
+    // expected (with source coordinates), errors are named, and the
+    // degrade tail carries the original cause.
+    let case = Case::new(TRACER);
+    case.build_to("verify.swb", false).unwrap();
+    let text = fs::read_to_string(case.dir.path().join("verify.swb")).unwrap();
+    assert!(
+        text.contains("verify: line 0 start u reads "),
+        "point mismatches are not named"
+    );
+    assert!(
+        text.contains("verify raised: err "),
+        "verify errors are not named"
+    );
+    assert!(
+        text.contains("geometry verification failed (unnamed)"),
+        "the verify fail-tail lost its last-resort name"
+    );
+    assert!(
+        text.contains("(degrade cause: "),
+        "the degrade tail does not keep the trigger's message"
+    );
+    assert!(
+        text.contains(
+            "closed-context verification failed: the solved geometry differs after closing: "
+        ),
+        "the closed-context caller drops the named detail"
+    );
+}
+
+#[test]
 fn non_classified_axis_dims_keep_the_add_dimension2_creation() {
     // The probe-pinned creation change touches ONLY the classified-axis
     // (DistanceX/DistanceY) arm. Distance, Length, Radius, Diameter and
