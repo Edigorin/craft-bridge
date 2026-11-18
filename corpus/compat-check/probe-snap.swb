@@ -185,8 +185,6 @@ Sub RunCase(ByVal stepIdx As Long, ByVal tag As String, ByVal planeFeat As Objec
     Dim restoreErr As Long
     Dim switchSet As Boolean
     Dim memberAbsent As Boolean
-    Dim setOk As Boolean
-    Dim okRestore As Boolean
     Dim preState As Boolean
     Dim wantState As Boolean
     Dim readState As Boolean
@@ -223,7 +221,6 @@ Sub RunCase(ByVal stepIdx As Long, ByVal tag As String, ByVal planeFeat As Objec
     If switchMode <> "" Then
         On Error Resume Next
         Err.Clear
-        setOk = True
         memberAbsent = False
         Select Case switchMode
             Case "AddToDB"
@@ -265,7 +262,11 @@ Sub RunCase(ByVal stepIdx As Long, ByVal tag As String, ByVal planeFeat As Objec
                     wantState = preState
                     switchSet = True
                     Err.Clear
-                    setOk = swApp.SetUserPreferenceToggle(swUserPreferenceToggle_e.swSketchSnapsMidPoints, False)
+                    ' SetUserPreferenceToggle returns VOID (reflection-
+                    ' verified on the seat's swconst/sldworks interop): its
+                    ' result cannot be captured - the enforced readback
+                    ' below IS the setter verification
+                    swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swSketchSnapsMidPoints, False
                     setErr = Err.Number
                 End If
             Case "NoInference"
@@ -277,13 +278,13 @@ Sub RunCase(ByVal stepIdx As Long, ByVal tag As String, ByVal planeFeat As Objec
                     wantState = preState
                     switchSet = True
                     Err.Clear
-                    setOk = swApp.SetUserPreferenceToggle(swUserPreferenceToggle_e.swSketchInference, False)
+                    swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swSketchInference, False
                     setErr = Err.Number
                 End If
         End Select
         ' enforce: the requested state must be readable before drawing
         readBack = Not readState
-        If setErr = 0 And setOk Then
+        If setErr = 0 Then
             Err.Clear
             Select Case switchMode
                 Case "AddToDB"
@@ -302,7 +303,7 @@ Sub RunCase(ByVal stepIdx As Long, ByVal tag As String, ByVal planeFeat As Objec
         If memberAbsent Then
             msg = msg & " unsupported member (probe err " & Trim(Str(setErr)) & ") - recorded as data, not flipped"
         Else
-            msg = msg & " set err " & Trim(Str(setErr)) & " setOk " & Trim(Str(Abs(setOk))) & " readback " & Trim(Str(Abs(readBack))) & " requested " & Trim(Str(Abs(readState)))
+            msg = msg & " set err " & Trim(Str(setErr)) & " readback " & Trim(Str(Abs(readBack))) & " requested " & Trim(Str(Abs(readState)))
             If switchMode = "NoMidSnap" Or switchMode = "NoInference" Then
                 msg = msg & " pre " & Trim(Str(Abs(preState)))
             End If
@@ -313,14 +314,14 @@ Sub RunCase(ByVal stepIdx As Long, ByVal tag As String, ByVal planeFeat As Objec
     ' produce a valid measurement: restore (verified), report the case
     ' failed, and let the remaining cases run
     If (Not memberAbsent) And switchMode <> "" Then
-        If setErr <> 0 Or Not setOk Or readBack <> readState Then
+        If setErr <> 0 Or readBack <> readState Then
             ' the switch is not active - restore it with the SAME gate as
             ' the normal path: an unrecovered restoration stops the probe
             If switchSet Then
-                RestoreSwitch switchMode, skObj, wantState, restoreErr, okRestore, rb2
-                msg = msg & " | NOT ACTIVE - restored err " & Trim(Str(restoreErr)) & " setOk " & Trim(Str(Abs(okRestore))) & " readback " & Trim(Str(Abs(rb2))) & " saved " & Trim(Str(Abs(wantState)))
-                If restoreErr <> 0 Or Not okRestore Or rb2 <> wantState Then
-                    gMsg = tag & ": " & switchId & " could not be restored (saved state " & Trim(Str(Abs(wantState))) & ", err " & Trim(Str(restoreErr)) & ", setOk " & Trim(Str(Abs(okRestore))) & ", readback " & Trim(Str(Abs(rb2))) & ") - stopping; restore it manually"
+                RestoreSwitch switchMode, skObj, wantState, restoreErr, rb2
+                msg = msg & " | NOT ACTIVE - restored err " & Trim(Str(restoreErr)) & " readback " & Trim(Str(Abs(rb2))) & " saved " & Trim(Str(Abs(wantState)))
+                If restoreErr <> 0 Or rb2 <> wantState Then
+                    gMsg = tag & ": " & switchId & " could not be restored (saved state " & Trim(Str(Abs(wantState))) & ", err " & Trim(Str(restoreErr)) & ", readback " & Trim(Str(Abs(rb2))) & ") - stopping; restore it manually"
                     CloseSketchIfOpen
                     WriteStep stepIdx, "snap." & tag, "failed", msg & "; " & gMsg
                     Err.Raise vbObjectError + 578, "probe-snap.swb", gMsg
@@ -346,10 +347,10 @@ Sub RunCase(ByVal stepIdx As Long, ByVal tag As String, ByVal planeFeat As Objec
     ' restore that fails or does not verify stops the probe - the next
     ' case would run in the wrong mode
     If switchSet Then
-        RestoreSwitch switchMode, skObj, wantState, restoreErr, okRestore, rb2
-        msg = msg & ", restore err " & Trim(Str(restoreErr)) & " setOk " & Trim(Str(Abs(okRestore))) & " readback " & Trim(Str(Abs(rb2))) & " saved " & Trim(Str(Abs(wantState)))
-        If restoreErr <> 0 Or Not okRestore Or rb2 <> wantState Then
-            gMsg = tag & ": " & switchId & " could not be restored (saved state " & Trim(Str(Abs(wantState))) & ", err " & Trim(Str(restoreErr)) & ", setOk " & Trim(Str(Abs(okRestore))) & ", readback " & Trim(Str(Abs(rb2))) & ") - stopping; restore it manually"
+        RestoreSwitch switchMode, skObj, wantState, restoreErr, rb2
+        msg = msg & ", restore err " & Trim(Str(restoreErr)) & " readback " & Trim(Str(Abs(rb2))) & " saved " & Trim(Str(Abs(wantState)))
+        If restoreErr <> 0 Or rb2 <> wantState Then
+            gMsg = tag & ": " & switchId & " could not be restored (saved state " & Trim(Str(Abs(wantState))) & ", err " & Trim(Str(restoreErr)) & ", readback " & Trim(Str(Abs(rb2))) & ") - stopping; restore it manually"
             CloseSketchIfOpen
             WriteStep stepIdx, "snap." & tag, "failed", msg & "; " & gMsg
             Err.Raise vbObjectError + 578, "probe-snap.swb", gMsg
@@ -376,9 +377,9 @@ CaseFail:
     cleanupNote = ""
     ' restore any switch this case flipped - on every exit
     If switchSet Then
-        RestoreSwitch switchMode, skObj, wantState, restoreErr, okRestore, rb2
-        If restoreErr <> 0 Or Not okRestore Or rb2 <> wantState Then
-            cleanupNote = "; " & switchId & " restore failed: saved state " & Trim(Str(Abs(wantState))) & ", err " & Trim(Str(restoreErr)) & ", setOk " & Trim(Str(Abs(okRestore))) & ", readback " & Trim(Str(Abs(rb2))) & " - restore it manually"
+        RestoreSwitch switchMode, skObj, wantState, restoreErr, rb2
+        If restoreErr <> 0 Or rb2 <> wantState Then
+            cleanupNote = "; " & switchId & " restore failed: saved state " & Trim(Str(Abs(wantState))) & ", err " & Trim(Str(restoreErr)) & ", readback " & Trim(Str(Abs(rb2))) & " - restore it manually"
         End If
     End If
     On Error Resume Next
@@ -391,22 +392,23 @@ CaseFail:
 End Sub
 
 ' Restore one switch to its saved/expected state and verify the result.
-' Errors never raise: the caller inspects restoreErr, okRestore (the
-' setter's return value) and rb2 (the read-back state against the saved
+' Errors never raise: the caller inspects restoreErr (the setter has
+' the error code) and rb2 (the read-back state against the saved
 ' state) and decides.
-Sub RestoreSwitch(ByVal switchMode As String, ByVal skObj As Object, ByVal wantState As Boolean, ByRef restoreErr As Long, ByRef okRestore As Boolean, ByRef rb2 As Boolean)
+Sub RestoreSwitch(ByVal switchMode As String, ByVal skObj As Object, ByVal wantState As Boolean, ByRef restoreErr As Long, ByRef rb2 As Boolean)
+    ' SetUserPreferenceToggle returns VOID: restoration is verified by
+    ' the error code and the read-back state alone.
     On Error Resume Next
     Err.Clear
-    okRestore = True
     Select Case switchMode
         Case "AddToDB"
             skObj.AddToDB = False
         Case "EnableSolving"
             skObj.EnableSolving = True
         Case "NoMidSnap"
-            okRestore = swApp.SetUserPreferenceToggle(swUserPreferenceToggle_e.swSketchSnapsMidPoints, wantState)
+            swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swSketchSnapsMidPoints, wantState
         Case "NoInference"
-            okRestore = swApp.SetUserPreferenceToggle(swUserPreferenceToggle_e.swSketchInference, wantState)
+            swApp.SetUserPreferenceToggle swUserPreferenceToggle_e.swSketchInference, wantState
     End Select
     restoreErr = Err.Number
     rb2 = Not wantState
