@@ -1844,6 +1844,10 @@ fn exact_draw_switches_inference_off_and_restores_it_verified() {
     assert!(
         !text.contains("Dim note "),
         "the identifier `note` shadows a SolidWorks type name"
+    assert!(
+        !text.contains("Dim eNum ") && !text.contains("Dim eMsg "),
+        "the eNum/eMsg locals failed to compile in the SW VBA host (probe-prefvector bisect 2026-11-18)"
+    );
     );
     // DrawGeometry brackets its drawing with the helpers and restores on
     // the failure path too.
