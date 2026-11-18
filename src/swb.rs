@@ -1880,7 +1880,9 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
     ));
 
     // DrawGeometry
-    out.push_str(&format!("Sub DrawGeometry{index}()\n"));
+    out.push_str(&format!(
+        "Sub DrawGeometry{index}()\n    Const TOL As Double = 0.000001\n"
+    ));
     // Coordinates go through the sketch's own adaptation map (frame
     // adaptation): SC (u,v) -> (s,t) at runtime. Point handles use the
     // object-returning GetStartPoint2/GetEndPoint2/GetCenterPoint2 forms
@@ -1912,6 +1914,21 @@ fn emit_sketch_subs(index: usize, sk: &SketchStep) -> String {
             2 * i,
             2 * i + 1
         ));
+        // Placement evidence at creation time: each endpoint is checked
+        // against its CreateLine arguments BEFORE the next entity exists,
+        // so a misplacement or a later move names its exact operation.
+        for (end_txt, slot, p) in [("start", 2 * i, a), ("end", 2 * i + 1, b)] {
+            out.push_str(&format!(
+                "    If Abs(pt{index}({slot}).X - MapU({index}, {u}, {vv})) > TOL Or Abs(pt{index}({slot}).Y - MapV({index}, {u}, {vv})) > TOL Or Abs(pt{index}({slot}).Z) > TOL Then Err.Raise vbObjectError + 560, \"DrawGeometry\", \"draw line {i} {end_txt} placed at \" & Vec3Text(pt{index}({slot}).X, pt{index}({slot}).Y, pt{index}({slot}).Z) & \", expected \" & Vec3Text(MapU({index}, {u}, {vv}), MapV({index}, {u}, {vv}), 0#) & \" (source {u},{vv}) - before line {next} is created\"\n",
+                index = index,
+                i = i,
+                slot = slot,
+                end_txt = end_txt,
+                next = i + 1,
+                u = vba_num(mm(p[0])),
+                vv = vba_num(mm(p[1])),
+            ));
+        }
     }
     for (j, c) in sk.circles.iter().enumerate() {
         let ctr = sk.points[c.c];

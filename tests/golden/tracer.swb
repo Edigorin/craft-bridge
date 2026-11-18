@@ -228,18 +228,27 @@ HardFail:
 End Function
 
 Sub DrawGeometry2()
+    Const TOL As Double = 0.000001
     Set sl2(0) = swSketchMgr.CreateLine(MapU(2, 0.0, 0.0), MapV(2, 0.0, 0.0), 0#, MapU(2, 0.04, 0.0), MapV(2, 0.04, 0.0), 0#)
     Set pt2(0) = sl2(0).GetStartPoint2
     Set pt2(1) = sl2(0).GetEndPoint2
+    If Abs(pt2(0).X - MapU(2, 0.0, 0.0)) > TOL Or Abs(pt2(0).Y - MapV(2, 0.0, 0.0)) > TOL Or Abs(pt2(0).Z) > TOL Then Err.Raise vbObjectError + 560, "DrawGeometry", "draw line 0 start placed at " & Vec3Text(pt2(0).X, pt2(0).Y, pt2(0).Z) & ", expected " & Vec3Text(MapU(2, 0.0, 0.0), MapV(2, 0.0, 0.0), 0#) & " (source 0.0,0.0) - before line 1 is created"
+    If Abs(pt2(1).X - MapU(2, 0.04, 0.0)) > TOL Or Abs(pt2(1).Y - MapV(2, 0.04, 0.0)) > TOL Or Abs(pt2(1).Z) > TOL Then Err.Raise vbObjectError + 560, "DrawGeometry", "draw line 0 end placed at " & Vec3Text(pt2(1).X, pt2(1).Y, pt2(1).Z) & ", expected " & Vec3Text(MapU(2, 0.04, 0.0), MapV(2, 0.04, 0.0), 0#) & " (source 0.04,0.0) - before line 1 is created"
     Set sl2(1) = swSketchMgr.CreateLine(MapU(2, 0.04, 0.0), MapV(2, 0.04, 0.0), 0#, MapU(2, 0.04, 0.02), MapV(2, 0.04, 0.02), 0#)
     Set pt2(2) = sl2(1).GetStartPoint2
     Set pt2(3) = sl2(1).GetEndPoint2
+    If Abs(pt2(2).X - MapU(2, 0.04, 0.0)) > TOL Or Abs(pt2(2).Y - MapV(2, 0.04, 0.0)) > TOL Or Abs(pt2(2).Z) > TOL Then Err.Raise vbObjectError + 560, "DrawGeometry", "draw line 1 start placed at " & Vec3Text(pt2(2).X, pt2(2).Y, pt2(2).Z) & ", expected " & Vec3Text(MapU(2, 0.04, 0.0), MapV(2, 0.04, 0.0), 0#) & " (source 0.04,0.0) - before line 2 is created"
+    If Abs(pt2(3).X - MapU(2, 0.04, 0.02)) > TOL Or Abs(pt2(3).Y - MapV(2, 0.04, 0.02)) > TOL Or Abs(pt2(3).Z) > TOL Then Err.Raise vbObjectError + 560, "DrawGeometry", "draw line 1 end placed at " & Vec3Text(pt2(3).X, pt2(3).Y, pt2(3).Z) & ", expected " & Vec3Text(MapU(2, 0.04, 0.02), MapV(2, 0.04, 0.02), 0#) & " (source 0.04,0.02) - before line 2 is created"
     Set sl2(2) = swSketchMgr.CreateLine(MapU(2, 0.04, 0.02), MapV(2, 0.04, 0.02), 0#, MapU(2, 0.0, 0.02), MapV(2, 0.0, 0.02), 0#)
     Set pt2(4) = sl2(2).GetStartPoint2
     Set pt2(5) = sl2(2).GetEndPoint2
+    If Abs(pt2(4).X - MapU(2, 0.04, 0.02)) > TOL Or Abs(pt2(4).Y - MapV(2, 0.04, 0.02)) > TOL Or Abs(pt2(4).Z) > TOL Then Err.Raise vbObjectError + 560, "DrawGeometry", "draw line 2 start placed at " & Vec3Text(pt2(4).X, pt2(4).Y, pt2(4).Z) & ", expected " & Vec3Text(MapU(2, 0.04, 0.02), MapV(2, 0.04, 0.02), 0#) & " (source 0.04,0.02) - before line 3 is created"
+    If Abs(pt2(5).X - MapU(2, 0.0, 0.02)) > TOL Or Abs(pt2(5).Y - MapV(2, 0.0, 0.02)) > TOL Or Abs(pt2(5).Z) > TOL Then Err.Raise vbObjectError + 560, "DrawGeometry", "draw line 2 end placed at " & Vec3Text(pt2(5).X, pt2(5).Y, pt2(5).Z) & ", expected " & Vec3Text(MapU(2, 0.0, 0.02), MapV(2, 0.0, 0.02), 0#) & " (source 0.0,0.02) - before line 3 is created"
     Set sl2(3) = swSketchMgr.CreateLine(MapU(2, 0.0, 0.02), MapV(2, 0.0, 0.02), 0#, MapU(2, 0.0, 0.0), MapV(2, 0.0, 0.0), 0#)
     Set pt2(6) = sl2(3).GetStartPoint2
     Set pt2(7) = sl2(3).GetEndPoint2
+    If Abs(pt2(6).X - MapU(2, 0.0, 0.02)) > TOL Or Abs(pt2(6).Y - MapV(2, 0.0, 0.02)) > TOL Or Abs(pt2(6).Z) > TOL Then Err.Raise vbObjectError + 560, "DrawGeometry", "draw line 3 start placed at " & Vec3Text(pt2(6).X, pt2(6).Y, pt2(6).Z) & ", expected " & Vec3Text(MapU(2, 0.0, 0.02), MapV(2, 0.0, 0.02), 0#) & " (source 0.0,0.02) - before line 4 is created"
+    If Abs(pt2(7).X - MapU(2, 0.0, 0.0)) > TOL Or Abs(pt2(7).Y - MapV(2, 0.0, 0.0)) > TOL Or Abs(pt2(7).Z) > TOL Then Err.Raise vbObjectError + 560, "DrawGeometry", "draw line 3 end placed at " & Vec3Text(pt2(7).X, pt2(7).Y, pt2(7).Z) & ", expected " & Vec3Text(MapU(2, 0.0, 0.0), MapV(2, 0.0, 0.0), 0#) & " (source 0.0,0.0) - before line 4 is created"
     swDoc.ClearSelection2 True
 End Sub
 

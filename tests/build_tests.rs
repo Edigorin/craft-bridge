@@ -1750,7 +1750,9 @@ fn verify_refusals_are_named_and_the_degrade_tail_keeps_the_cause() {
     case.build_to("verify.swb", false).unwrap();
     let text = fs::read_to_string(case.dir.path().join("verify.swb")).unwrap();
     assert!(
-        text.contains("verify: line 0 start: array ") && text.contains(", point ") && text.contains(", expected "),
+        text.contains("verify: line 0 start: array ")
+            && text.contains(", point ")
+            && text.contains(", expected "),
         "point mismatches must dump the array reading, the point reading and the expected value"
     );
     assert!(
