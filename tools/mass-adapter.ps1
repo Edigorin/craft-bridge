@@ -86,17 +86,29 @@ function Format-Invariant([double]$V) {
 }
 
 function Get-Triple([object]$Raw, [string]$Tag) {
-    # Strict typed acquisition: inspect the raw result BEFORE anything
-    # else. Exactly a rank-one, lower-bound-zero, length-three Double
-    # array; finite components within a project magnitude bound.
+    # Strict typed acquisition, qualification-revised: the interop marshals
+    # the documented Double[3] (research 10 [M1]) to .NET as a VARIANT
+    # array of BOXED System.Double values (System.Object[]), and the wire
+    # to VBScript as VT_ARRAY|VT_R8. Both shapes are accepted ONLY with
+    # exact rank-one, lower-bound-zero, length-three form and strictly
+    # double elements - every other element type (COM object, string,
+    # null) is a named refusal. No coercion of any value ever happens.
     if ($null -eq $Raw) { throw "$Tag : the raw result is null" }
-    if ($Raw -isnot [double[]]) { throw "$Tag : the raw result is not a Double() (got $($Raw.GetType().FullName))" }
+    $typeName = $Raw.GetType().FullName
+    if ($Raw -isnot [double[]] -and $Raw -isnot [object[]]) {
+        throw "$Tag : the raw result is not a Double() or a boxed-Double Variant array (got $typeName)"
+    }
     if ($Raw.Rank -ne 1) { throw "$Tag : the array is not one-dimensional (rank $($Raw.Rank))" }
     if ($Raw.GetLowerBound(0) -ne 0) { throw "$Tag : the array is not zero-based (lower bound $($Raw.GetLowerBound(0)))" }
     if ($Raw.Length -ne 3) { throw "$Tag : the array length is not 3 (got $($Raw.Length))" }
     foreach ($v in $Raw) {
-        if ([double]::IsNaN($v) -or [double]::IsInfinity($v)) { throw "$Tag : a component is not finite" }
-        if ([math]::Abs($v) -gt 1E100) { throw "$Tag : a component is out of range" }
+        if ($v -isnot [double]) {
+            $elType = if ($null -eq $v) { "null" } else { $v.GetType().FullName }
+            throw "$Tag : a component is not a Double value (got $elType)"
+        }
+        $d = [double]$v
+        if ([double]::IsNaN($d) -or [double]::IsInfinity($d)) { throw "$Tag : a component is not finite" }
+        if ([math]::Abs($d) -gt 1E100) { throw "$Tag : a component is out of range" }
     }
     return $Raw
 }
@@ -202,8 +214,11 @@ try {
         $stage = "doc[$i] <$t>: GetMassProperties2 status"
         if ($status -ne 0) { Fail $Out "doc[$i] <$t>: GetMassProperties2 status is $status" }
         $stage = "doc[$i] <$t>: GetMassProperties2 shape"
-        if ($flat -isnot [double[]]) { Fail $Out "doc[$i] <$t>: the flat mass array is not a Double() (got $($flat.GetType().FullName))" }
-        if ($flat.Length -ne 12) { Fail $Out "doc[$i] <$t>: the flat mass array length is not 12 (got $($flat.Length))" }
+        if ($flat -isnot [double[]] -and $flat -isnot [object[]]) { Fail $Out "doc[$i] <$t>: the flat mass array has an unsupported shape (got $($flat.GetType().FullName))" }
+        if ($flat.Rank -ne 1 -or $flat.GetLowerBound(0) -ne 0 -or $flat.Length -ne 12) { Fail $Out "doc[$i] <$t>: the flat mass array is not a zero-based length-12 vector" }
+        foreach ($fv in $flat) {
+            if ($fv -isnot [double]) { Fail $Out "doc[$i] <$t>: a flat mass component is not a Double value" }
+        }
         $stage = "doc[$i] <$t>: cross-check values"
         for ($k = 0; $k -lt 3; $k++) {
             $fk = [double]$flat[$k]

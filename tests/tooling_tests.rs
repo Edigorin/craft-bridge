@@ -556,7 +556,7 @@ fn checker_syntax_is_paired_and_acquisition_is_typed() {
     // (strict Double() shape; no default-property/.Value coercion),
     // cross-checks it, and carries the instance handshake.
     assert!(
-        MASS_ADAPTER.contains("-isnot [double[]]") && MASS_ADAPTER.contains("Get-Triple"),
+        MASS_ADAPTER.contains("is not a Double value") && MASS_ADAPTER.contains("Get-Triple"),
         "the typed adapter lost its shape qualification"
     );
     assert!(
