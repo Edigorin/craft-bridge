@@ -534,7 +534,7 @@ End Function
 ' checker's own period-decimal values on comma-decimal Windows). Anything
 ' else is refused with a named reason and converted to nothing.
 Function ComponentNumber(ByVal comp, ByRef num, ByRef note)
-  Dim vt, coerced
+  Dim vt, coerced, tnCap
   ComponentNumber = False
   num = 0
   note = ""
@@ -554,14 +554,26 @@ Function ComponentNumber(ByVal comp, ByRef num, ByRef note)
       coerced = comp.Value
     End If
     If Err.Number <> 0 Then
-      note = "component is an object that does not coerce (typename " & TypeName(comp) & ")"
+      ' capture-then-build: TypeName on a suspect wrapper can raise, and
+      ' a raise while building the note is silently lost here - capture
+      ' into a plain variable first, then build
+      Err.Clear
+      tnCap = "?"
+      tnCap = TypeName(comp)
+      note = "component is an object that does not coerce (typename " & tnCap & ")"
       Err.Clear
       On Error GoTo 0
       Exit Function
     End If
     On Error GoTo 0
     If IsObject(coerced) Then
-      note = "component is an object that does not coerce (typename " & TypeName(comp) & ")"
+      Err.Clear
+      On Error Resume Next
+      tnCap = "?"
+      tnCap = TypeName(comp)
+      Err.Clear
+      On Error GoTo 0
+      note = "component is an object that does not coerce (typename " & tnCap & ")"
       Exit Function
     End If
   Else
@@ -603,7 +615,7 @@ End Function
 ' marshalling can shift array bases).
 Function CentroidText(ByVal mpObj, ByRef cx, ByRef cy, ByRef cz, ByVal what)
   Dim arr, lo2, hi2, k, comp, num, note, errNum, errDesc
-  Dim nx, ny, nz, readErr
+  Dim nx, ny, nz, readErr, vtCap, tnCap
   CentroidText = what & " acquisition did not complete"
   cx = 0
   cy = 0
@@ -619,7 +631,12 @@ Function CentroidText(ByVal mpObj, ByRef cx, ByRef cy, ByRef cz, ByVal what)
     Exit Function
   End If
   If Not IsArray(arr) Then
-    CentroidText = what & " did not come back as an array (vartype " & NumStr(VarType(arr)) & ")"
+    Err.Clear
+    vtCap = -1
+    vtCap = VarType(arr)
+    If Err.Number <> 0 Then vtCap = -1
+    Err.Clear
+    CentroidText = what & " did not come back as an array (vartype " & NumStr(vtCap) & ")"
     On Error GoTo 0
     Exit Function
   End If
@@ -651,13 +668,35 @@ Function CentroidText(ByVal mpObj, ByRef cx, ByRef cy, ByRef cz, ByVal what)
       readErr = Err.Number
     End If
     If readErr <> 0 Then
-      CentroidText = what & " component " & NumStr(k) & " could not be read (vartype " & NumStr(VarType(arr(lo2 + k))) & ", typename " & TypeName(arr(lo2 + k)) & ", err " & NumStr(readErr) & ")"
+      ' capture-then-build: a suspect element can raise inside
+      ' VarType/TypeName, and a raise while BUILDING the message silently
+      ' skips the assignment and leaves the function's DEFAULT text
+      ' standing (D01 run 15 evidence) - capture the type identity under
+      ' guarded steps first; the message is built from plain variables only
       Err.Clear
+      vtCap = -1
+      tnCap = "?"
+      vtCap = VarType(arr(lo2 + k))
+      If Err.Number <> 0 Then vtCap = -1
+      Err.Clear
+      tnCap = TypeName(arr(lo2 + k))
+      If Err.Number <> 0 Then tnCap = "?"
+      Err.Clear
+      CentroidText = what & " component " & NumStr(k) & " could not be read (vartype " & NumStr(vtCap) & ", typename " & tnCap & ", err " & NumStr(readErr) & ")"
       On Error GoTo 0
       Exit Function
     End If
     If Not ComponentNumber(comp, num, note) Then
-      CentroidText = what & " component " & NumStr(k) & " is not numeric (vartype " & NumStr(VarType(comp)) & "): " & note
+      Err.Clear
+      vtCap = -1
+      tnCap = "?"
+      vtCap = VarType(comp)
+      If Err.Number <> 0 Then vtCap = -1
+      Err.Clear
+      tnCap = TypeName(comp)
+      If Err.Number <> 0 Then tnCap = "?"
+      Err.Clear
+      CentroidText = what & " component " & NumStr(k) & " is not numeric (vartype " & NumStr(vtCap) & ", typename " & tnCap & "): " & note
       On Error GoTo 0
       Exit Function
     End If

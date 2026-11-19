@@ -37,7 +37,7 @@ fn example_e_ellipse_geometry_matches_the_implicit_conic() {
     // the example's classical quantities satisfy the focus-directrix
     // property at P0 (independent check against the implicit equation)
     let f: (f64, f64) = (42.4697327285 / 1000.0, -2.6666666667 / 1000.0);
-    let vtx: (f64, f64) = (43.0940107676 / 1000.0, -2.6666666667 / 1000.0);
+    let _vtx: (f64, f64) = (43.0940107676 / 1000.0, -2.6666666667 / 1000.0); // the documented classical vertex (the directrix below uses its closed form)
     let e = 0.9729679680;
     let p0: (f64, f64) = (0.0, 0.0);
     let d_focus = ((p0.0 - f.0) * (p0.0 - f.0) + (p0.1 - f.1) * (p0.1 - f.1)).sqrt();

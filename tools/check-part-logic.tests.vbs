@@ -260,6 +260,41 @@ Else
 End If
 Check "component wrapper default coerces", (errText = ""), errText
 
+' ===== the run-15 shapes: capture-then-build messages and the distText
+' vocabulary =====
+
+' A Nothing element: the plain assignment raises (no default property),
+' Set carries Nothing, and the FAILURE MESSAGE must be named. The
+' message construction is capture-then-build - a raise while building it
+' used to skip the assignment silently and leave the function's DEFAULT
+' text standing ("acquisition did not complete"), which reads like an
+' unspecified failure instead of the named one (D01 run 15 evidence).
+Dim arrNothing(2)
+arrNothing(0) = 1
+Set arrNothing(1) = Nothing
+arrNothing(2) = 3
+Set mpFake = FakeWith(arrNothing)
+errText = CentroidText(mpFake, cxT, cyT, czT, "t")
+Check "a nothing element is named, never the default text", (errText <> "" And errText <> "t acquisition did not complete" And InStr(1, errText, "component 1") > 0 And InStr(1, errText, "not numeric") > 0 And cxT = 0 And cyT = 0 And czT = 0), errText
+
+' ---- the distText vocabulary: the placement distance text is
+' classified by NonnegError's documented mapping (empty -> missing or
+' invalid, non-period -> not numeric, nonfinite -> not finite, negative
+' -> negative, else the numeric comparison) ----
+Check "an empty distance is missing or invalid", (NonnegError("") = "missing or invalid"), NonnegError("")
+Check "an unavailable distance is not numeric", (NonnegError("missing or unreadable") = "not numeric"), NonnegError("missing or unreadable")
+Check "a nonfinite distance is named", (NonnegError("1E300") = "not finite"), NonnegError("1E300")
+Check "a negative distance is named", (NonnegError("-0.001") = "negative"), NonnegError("-0.001")
+Check "a numeric distance validates", (NonnegError("0.00001") = ""), NonnegError("0.00001")
+b = PlacementLines("missing or unreadable", "0.0001")
+Check "an unavailable distance renders its class and fails", (VerdictOf(b, "placement") = "fail" And Has(b, "centroid distance (not numeric: missing or unreadable)")), b
+b = PlacementLines("-0.001", "0.0001")
+Check "a negative distance renders its class and fails", (VerdictOf(b, "placement") = "fail" And Has(b, "centroid distance (negative: -0.001)")), b
+b = PlacementLines("1E300", "0.0001")
+Check "a nonfinite distance renders its class and fails", (VerdictOf(b, "placement") = "fail" And Has(b, "centroid distance (not finite: 1E300)")), b
+b = PlacementLines("", "0.0001")
+Check "an empty distance renders missing or invalid and fails", (VerdictOf(b, "placement") = "fail" And Has(b, "the centroid distance is missing or invalid")), b
+
 If failures > 0 Then
   WScript.Echo failures & " test(s) failed"
   WScript.Quit 1

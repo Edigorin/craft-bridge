@@ -330,17 +330,32 @@ fn the_decision_mirror_is_pinned_to_the_vbs_logic() {
             "the acquisition lost a named reason: {pin}"
         );
     }
-    // The STEP import uses the documented LoadFile4 shape with the
-    // ByRef numeric error output (a literal Nothing raised err 424 from
-    // VBScript and the fourth argument was wrongly a string).
+    // The STEP import uses the documented LoadFile3 shape (FileName,
+    // ArgString, ImportData) - Boolean return, only [in] parameters, the
+    // form this seat's VBScript can marshal (the legacy LoadFile4 shape's
+    // ByRef Errors output raises Type mismatch here regardless of the
+    // placeholder - the RunMacro2 ByRef Long precedent). ONE attempt (the
+    // single-attempt discipline; the speculative marshalling ladder is
+    // gone), the loaded document taken from ActiveDoc and
+    // ownership-validated against the pre-import snapshot.
     assert!(
-        CHECKER.contains("GetImportFileData") && CHECKER.contains("TryLoadForm"),
+        CHECKER.contains("GetImportFileData")
+            && CHECKER.contains("LoadFile3(")
+            && CHECKER.contains("ImportStepDoc"),
         "the reference import lost its documented, diagnosed form"
     );
-    // the marshalling ladder is ownership-reconciled between attempts
+    assert!(
+        !CHECKER.contains("app.LoadFile4("),
+        "the uncallable ByRef-Errors load form survived"
+    );
+    // the attempt is ownership-reconciled against the snapshot
     assert!(
         CHECKER.contains("OwnershipReconciled") && CHECKER.contains("ambiguous ownership"),
-        "the import attempts lost their ownership reconciliation"
+        "the import attempt lost its ownership reconciliation"
+    );
+    assert!(
+        CHECKER.contains("refusing to attribute it"),
+        "the ActiveDoc handoff is not ownership-validated"
     );
     assert!(
         LOGIC.contains("component is an object that does not coerce"),
@@ -355,6 +370,23 @@ fn the_decision_mirror_is_pinned_to_the_vbs_logic() {
     assert!(
         CHECKER.contains("the squared distance") && CHECKER.contains("the square root raised err "),
         "the distance computation lost its checked failure path"
+    );
+    // The distance block runs on EVERY path of the comparison branch
+    // (it used to sit inside the reference-loaded branch: a failed
+    // import left distText empty and the placement detail rendered with
+    // an empty suffix).
+    let acquire = CHECKER
+        .find("refAcquireErr = CentroidText(mp, refCx")
+        .expect("no reference centroid acquisition");
+    let dist = CHECKER
+        .find("distText = \"missing or unreadable\"")
+        .expect("no distance-unavailable naming");
+    let close = CHECKER
+        .find("refCloseLines = \"\"")
+        .expect("no close block");
+    assert!(
+        acquire < dist && dist < close,
+        "the distance block does not sit between the acquisitions and the close"
     );
     // The validators fail closed with named reasons (the negative tests
     // above pin their behavior through the mirror).
@@ -508,6 +540,14 @@ fn checker_syntax_is_paired_and_acquisition_is_typed() {
         LOGIC.contains("Function ComponentNumber") && LOGIC.contains("VarType(comp)"),
         "the component type gate is missing"
     );
+    // capture-then-build: failure messages are built from plain
+    // variables only - a raise inside message construction silently
+    // skips the assignment and leaves the DEFAULT verdict text standing
+    // (D01 run 15 evidence).
+    assert!(
+        LOGIC.contains("vtCap = VarType(") && LOGIC.contains("tnCap = TypeName("),
+        "the acquisition messages are not capture-then-build"
+    );
     assert!(
         LOGIC.contains("vartype ") && LOGIC.contains("IsArray"),
         "the acquisition lost its shape checks"
@@ -517,7 +557,7 @@ fn checker_syntax_is_paired_and_acquisition_is_typed() {
     let snap = CHECKER
         .find("preTitles = preTitles & t2")
         .expect("no pre-import snapshot");
-    let load = CHECKER.find("LoadFile4").expect("no import");
+    let load = CHECKER.find("LoadFile3(").expect("no import");
     assert!(
         snap < load,
         "the document snapshot is taken after the import"

@@ -37,6 +37,7 @@ Option Explicit
 Dim swApp, swDoc, expectPath, stepPath, outPath, ownedTitle, f, line, parts
 Dim logicPath, logicText, logicFile
 Dim mp, rebuiltText, rebuiltCx, rebuiltCy, rebuiltCz, rebuiltSolidsText, rebuiltAcquireErr
+Dim volRaw, volErr, volVt
 Dim bodiesArr
 Dim skipVolume, noSolid, minFeatures, volumeTol, volumeTolAbs, placementTol, refBodies
 Dim scan, scanFso
@@ -117,11 +118,23 @@ Set mp = swDoc.Extension.CreateMassProperty()
 If Err.Number <> 0 Then
   rebuiltAcquireErr = "cannot read the rebuilt part's mass properties: " & Err.Description
 Else
+  ' capture-then-build: the property is read ONCE into a plain variable
+  ' and every message is built from plain variables - a suspect COM read
+  ' inside message construction raises under Resume Next and silently
+  ' drops the assignment, losing the named reason
   Err.Clear
-  If Not IsNumeric(mp.Volume) Then
-    rebuiltAcquireErr = "the rebuilt volume did not come back numeric (vartype " & NumStr(VarType(mp.Volume)) & ")"
+  volRaw = Empty
+  volRaw = mp.Volume
+  volErr = Err.Number
+  Err.Clear
+  If volErr <> 0 Then
+    rebuiltAcquireErr = "cannot read the rebuilt volume (err " & NumStr(volErr) & ")"
+  ElseIf Not IsNumeric(volRaw) Then
+    volVt = -1
+    volVt = VarType(volRaw)
+    rebuiltAcquireErr = "the rebuilt volume did not come back numeric (vartype " & NumStr(volVt) & ")"
   Else
-    rebuiltText = NumStr(mp.Volume)
+    rebuiltText = NumStr(volRaw)
     rebuiltAcquireErr = CentroidText(mp, rebuiltCx, rebuiltCy, rebuiltCz, "the rebuilt centroid")
   End If
 End If
@@ -217,13 +230,13 @@ If skipVolume Then
   outFile.Write blocks
   outFile.WriteLine "check:ref_close=skipped"
 Else
-  ' The documented STEP-import shape (LoadFile4: FileName, ArgString,
-  ' ImportData, Errors As Long OUT). This seat's VBScript cannot marshal
-  ' the ByRef Errors output (RunMacro2's ByRef Long raises Type mismatch
-  ' regardless of CLng), so ImportStepDoc walks the marshalling forms
-  ' ONCE each and reconciles the ownership snapshot between attempts: a
-  ' marshalling failure opens no document, but any unknown title stops
-  ' the ladder as ambiguous ownership.
+  ' ImportStepDoc runs the documented STEP-import form ONCE (the
+  ' single-attempt discipline - the marshalling ladder is gone: the
+  ' legacy form's ByRef Errors output raises Type mismatch from this
+  ' seat's VBScript, the RunMacro2 ByRef Long precedent) and reconciles
+  ' the ownership snapshot against its result: the loaded document must
+  ' be a new title taken from ActiveDoc and no other document may have
+  ' appeared, else the import is refused named and nothing is closed.
   If preErr <> 0 Then
     refAcquireErr = "cannot load the STEP reference: the ownership enumeration failed (err " & NumStr(preErr) & ") - refusing import"
     docTypeText = "unreadable"
@@ -267,42 +280,60 @@ Else
     If Err.Number <> 0 Then
       refAcquireErr = "cannot read the STEP reference's mass properties: " & Err.Description
     Else
+      ' capture-then-build (the same discipline as the rebuilt side)
       Err.Clear
-      If Not IsNumeric(mp.Volume) Then
-        refAcquireErr = "the reference volume did not come back numeric (vartype " & NumStr(VarType(mp.Volume)) & ")"
+      volRaw = Empty
+      volRaw = mp.Volume
+      volErr = Err.Number
+      Err.Clear
+      If volErr <> 0 Then
+        refAcquireErr = "cannot read the reference volume (err " & NumStr(volErr) & ")"
+      ElseIf Not IsNumeric(volRaw) Then
+        volVt = -1
+        volVt = VarType(volRaw)
+        refAcquireErr = "the reference volume did not come back numeric (vartype " & NumStr(volVt) & ")"
       Else
-        refText = NumStr(mp.Volume)
+        refText = NumStr(volRaw)
         refAcquireErr = CentroidText(mp, refCx, refCy, refCz, "the reference centroid")
       End If
     End If
-    If rebuiltText <> "" And refText <> "" And rebuiltAcquireErr = "" And refAcquireErr = "" Then
-      ' the distance computation is checked end to end: a failed read or
-      ' an unrepresentable value is named, never coerced
+    End If
+  End If
+
+  ' The centroid distance is computed - or named unavailable - on every
+  ' path of the comparison branch. This block used to sit inside the
+  ' reference-loaded branch, so a failed import left distText empty -
+  ' and NonnegError classifies empty text as "missing or invalid", which
+  ' rendered the placement detail with an empty suffix (D01 run 15). The
+  ' block always runs now and distText stays in NonnegError's vocabulary
+  ' (empty -> missing or invalid, non-period -> not numeric, nonfinite,
+  ' negative, else the numeric comparison).
+  If rebuiltText <> "" And refText <> "" And rebuiltAcquireErr = "" And refAcquireErr = "" Then
+    ' the distance computation is checked end to end: a failed read or
+    ' an unrepresentable value is named, never coerced
+    Err.Clear
+    On Error Resume Next
+    distSq = (rebuiltCx - refCx) ^ 2 + (rebuiltCy - refCy) ^ 2 + (rebuiltCz - refCz) ^ 2
+    distErr = Err.Number
+    If distErr <> 0 Then
+      distText = "missing or invalid: the squared distance raised err " & NumStr(distErr)
       Err.Clear
-      On Error Resume Next
-      distSq = (rebuiltCx - refCx) ^ 2 + (rebuiltCy - refCy) ^ 2 + (rebuiltCz - refCz) ^ 2
-      distErr = Err.Number
-      If distErr <> 0 Then
-        distText = "missing or invalid: the squared distance raised err " & NumStr(distErr)
-        Err.Clear
-      ElseIf distSq <> distSq Or distSq < 0 Then
-        distText = "missing or invalid: the squared distance is not finite"
-      ElseIf distSq = 0 Then
-        distText = NumStr(0)
-      Else
-        dist = Sqr(distSq)
-        If Err.Number <> 0 Then
-          distText = "missing or invalid: the square root raised err " & NumStr(Err.Number)
-          Err.Clear
-        Else
-          distText = NumStr(dist)
-        End If
-      End If
-      On Error GoTo 0
+    ElseIf distSq <> distSq Or distSq < 0 Then
+      distText = "missing or invalid: the squared distance is not finite"
+    ElseIf distSq = 0 Then
+      distText = NumStr(0)
     Else
-      distText = "missing or unreadable"
+      dist = Sqr(distSq)
+      If Err.Number <> 0 Then
+        distText = "missing or invalid: the square root raised err " & NumStr(Err.Number)
+        Err.Clear
+      Else
+        distText = NumStr(dist)
+      End If
     End If
-    End If
+    On Error GoTo 0
+  Else
+    distText = "missing or unreadable"
   End If
 
   ' The reference document is opened and closed by this checker - verified
@@ -602,48 +633,13 @@ Function VerifiedCloseLines(ByVal app, ByVal doc, ByVal title)
   VerifiedCloseLines = out
 End Function
 
-' One LoadFile4 marshalling form, attempted once. The ByRef Errors output
-' is a known VBScript late-binding failure point on this seat (the
-' RunMacro2 ByRef Long precedent), so the form list covers the shapes
-' VBScript can pass; every outcome is captured as errNum/errDesc and a
-' silent Nothing return is a named error.
-Function TryLoadForm(ByVal app, ByVal stepPath, ByVal importData, ByVal formIndex, ByRef errNum, ByRef errDesc)
-  Dim outLong
-  Set TryLoadForm = Nothing
-  errNum = 0
-  errDesc = ""
-  On Error Resume Next
-  Err.Clear
-  Select Case formIndex
-    Case 1
-      outLong = CLng(0)
-      Set TryLoadForm = app.LoadFile4(stepPath, "r", importData, outLong)
-    Case 2
-      Set TryLoadForm = app.LoadFile4(stepPath, "r", importData, CLng(0))
-    Case 3
-      outLong = CLng(0)
-      Set TryLoadForm = app.LoadFile4(stepPath, "r", Nothing, outLong)
-    Case 4
-      Set TryLoadForm = app.LoadFile4(stepPath, "r", Nothing, CLng(0))
-  End Select
-  errNum = Err.Number
-  errDesc = Err.Description
-  Err.Clear
-  On Error GoTo 0
-  If errNum = 0 Then
-    If TryLoadForm Is Nothing Then
-      errNum = 424
-      errDesc = "LoadFile4 returned nothing"
-    End If
-  End If
-End Function
-
-' Ownership reconciliation between import attempts: every document must
-' carry a title from the pre-import snapshot. An unknown title means an
-' attempt may have opened a document without returning its handle - the
-' ladder stops and names it, and nothing is closed (the user owns what
-' cannot be attributed).
-Function OwnershipReconciled(ByVal app, ByVal preSnapshot, ByRef note)
+' Ownership reconciliation around the single import attempt: every open
+' document must carry a title from the pre-import snapshot, except the
+' one title the attempt is allowed to have opened (an empty allowedTitle
+' means no new document may exist). An unknown title means a document
+' appeared that cannot be attributed - the import result is refused
+' named and nothing is closed (the user owns what cannot be attributed).
+Function OwnershipReconciled(ByVal app, ByVal preSnapshot, ByVal allowedTitle, ByRef note)
   Dim d2, t3, errN
   OwnershipReconciled = False
   note = ""
@@ -667,9 +663,11 @@ Function OwnershipReconciled(ByVal app, ByVal preSnapshot, ByRef note)
       Exit Function
     End If
     If InStr(1, preSnapshot, t3 & vbCrLf, vbBinaryCompare) = 0 Then
-      note = "a document appeared without a handle: <" & t3 & ">"
-      On Error GoTo 0
-      Exit Function
+      If t3 <> allowedTitle Then
+        note = "a document appeared without a handle: <" & t3 & ">"
+        On Error GoTo 0
+        Exit Function
+      End If
     End If
     Err.Clear
     Set d2 = d2.GetNext
@@ -684,10 +682,18 @@ Function OwnershipReconciled(ByVal app, ByVal preSnapshot, ByRef note)
   OwnershipReconciled = True
 End Function
 
-' STEP import through the marshalling forms above, reconciled between
-' attempts. The failure text names every attempt.
+' STEP import through the documented LoadFile3 shape (FileName,
+' ArgString, ImportData): Boolean return and only [in] parameters, the
+' form this seat's VBScript can marshal - the legacy form's ByRef Errors
+' output raises Type mismatch here regardless of the placeholder (the
+' RunMacro2 ByRef Long precedent). ONE attempt (the single-attempt
+' discipline - no speculative marshalling ladder). The loaded document
+' is taken from ActiveDoc and ownership-validated against the
+' pre-import snapshot: it must be a NEW, non-empty title, and no other
+' title may have appeared. Every failure names its cause; anything
+' unattributable is refused and nothing is closed.
 Function ImportStepDoc(ByVal app, ByVal stepPath, ByVal preSnapshot, ByRef errText)
-  Dim importData, res, i, n, dsc, recon
+  Dim importData, ok, n, dsc, recon, cand, t
   Set ImportStepDoc = Nothing
   errText = ""
   Err.Clear
@@ -701,16 +707,73 @@ Function ImportStepDoc(ByVal app, ByVal stepPath, ByVal preSnapshot, ByRef errTe
     errText = "GetImportFileData err " & NumStr(n) & ": " & dsc
     Exit Function
   End If
-  For i = 1 To 4
-    Set res = TryLoadForm(app, stepPath, importData, i, n, dsc)
-    If Not res Is Nothing Then
-      Set ImportStepDoc = res
-      Exit Function
+  ok = False
+  Err.Clear
+  On Error Resume Next
+  ok = app.LoadFile3(stepPath, "r", importData)
+  n = Err.Number
+  dsc = Err.Description
+  Err.Clear
+  On Error GoTo 0
+  If n <> 0 Then
+    errText = "LoadFile3 err " & NumStr(n) & ": " & dsc
+    If Not OwnershipReconciled(app, preSnapshot, "", recon) Then
+      errText = errText & "; ambiguous ownership after the attempt: " & recon
     End If
-    errText = errText & "form " & NumStr(i) & " err " & NumStr(n) & ": " & dsc & "; "
-    If Not OwnershipReconciled(app, preSnapshot, recon) Then
-      errText = errText & "ambiguous ownership after form " & NumStr(i) & ": " & recon
-      Exit Function
+    Exit Function
+  End If
+  If ok = False Then
+    errText = "LoadFile3 returned False (no document was opened)"
+    If Not OwnershipReconciled(app, preSnapshot, "", recon) Then
+      errText = errText & "; ambiguous ownership after the attempt: " & recon
     End If
-  Next
+    Exit Function
+  End If
+  Err.Clear
+  On Error Resume Next
+  Set cand = app.ActiveDoc
+  n = Err.Number
+  dsc = Err.Description
+  t = ""
+  If n = 0 Then
+    If Not cand Is Nothing Then
+      t = cand.GetTitle
+      If Err.Number <> 0 Then
+        n = Err.Number
+        dsc = Err.Description
+      End If
+    End If
+  End If
+  Err.Clear
+  On Error GoTo 0
+  If n <> 0 Then
+    errText = "the imported document could not be taken from ActiveDoc (err " & NumStr(n) & ": " & dsc & ")"
+    If Not OwnershipReconciled(app, preSnapshot, "", recon) Then
+      errText = errText & "; ambiguous ownership after the attempt: " & recon
+    End If
+    Exit Function
+  End If
+  If cand Is Nothing Then
+    errText = "LoadFile3 succeeded but no document is active"
+    If Not OwnershipReconciled(app, preSnapshot, "", recon) Then
+      errText = errText & "; ambiguous ownership after the attempt: " & recon
+    End If
+    Exit Function
+  End If
+  If Trim(t) = "" Then
+    errText = "the imported document reports an empty title; refusing to attribute it"
+    If Not OwnershipReconciled(app, preSnapshot, "", recon) Then
+      errText = errText & "; ambiguous ownership after the attempt: " & recon
+    End If
+    Exit Function
+  End If
+  If IsPreExistingTitle(preSnapshot, t) Then
+    errText = "the import activated a pre-existing document <" & t & ">; refusing to attribute it"
+    Exit Function
+  End If
+  If Not OwnershipReconciled(app, preSnapshot, t, recon) Then
+    errText = "the import left an ambiguous document set: " & recon
+    Exit Function
+  End If
+  Set ImportStepDoc = cand
 End Function
