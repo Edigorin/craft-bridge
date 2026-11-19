@@ -143,33 +143,47 @@ try {
         if (-not $found.ContainsKey($t)) { Fail $Out "the title <$t> matches no open document" }
     }
 
-    # ---- per-document typed acquisition ----
+    # ---- per-document typed acquisition (every stage named in any
+    # failure - the qualification discipline) ----
     $outLines = @("adapter:status=ok", "adapter:process=$pid1", "adapter:doc_count=$($titles.Count)")
     $i = 0
+    $stage = "start"
     foreach ($t in $titles) {
+        $stage = "doc[$i] <$t>: cast to IModelDoc2"
         $typed = [SolidWorks.Interop.sldworks.IModelDoc2]$found[$t]
+        $stage = "doc[$i] <$t>: Extension"
         $ext = [SolidWorks.Interop.sldworks.IModelDocExtension]$typed.Extension
+        $stage = "doc[$i] <$t>: CreateMassProperty"
         $mp = $ext.CreateMassProperty()
         if ($null -eq $mp) { Fail $Out "doc[$i] <$t>: CreateMassProperty returned null" }
+        $stage = "doc[$i] <$t>: UseSystemUnits set"
         $mp.UseSystemUnits = $useUnits
 
+        $stage = "doc[$i] <$t>: CenterOfMass get"
         $raw = $mp.CenterOfMass
         $triple = Get-Triple $raw "doc[$i] <$t> CenterOfMass"
+        $stage = "doc[$i] <$t>: Volume get"
         $vol = [double]$mp.Volume
         if ([double]::IsNaN($vol) -or [double]::IsInfinity($vol)) { Fail $Out "doc[$i] <$t>: the volume is not finite" }
         if ($vol -le 0) { Fail $Out "doc[$i] <$t>: the volume is not positive" }
 
         # cross-check against the documented flat 12-double array
         [int]$status = 0
+        $stage = "doc[$i] <$t>: GetMassProperties2 call"
         $flat = $ext.GetMassProperties2(1, [ref]$status, $false)
         if ($status -ne 0) { Fail $Out "doc[$i] <$t>: GetMassProperties2 status is $status" }
-        $flatT = Get-Triple (@($flat)[0], @($flat)[1], @($flat)[2]) "doc[$i] <$t> GetMassProperties2[0..2]"
+        $stage = "doc[$i] <$t>: GetMassProperties2 shape"
+        if ($flat -isnot [double[]]) { Fail $Out "doc[$i] <$t>: the flat mass array is not a Double() (got $($flat.GetType().FullName))" }
+        if ($flat.Length -ne 12) { Fail $Out "doc[$i] <$t>: the flat mass array length is not 12 (got $($flat.Length))" }
+        $stage = "doc[$i] <$t>: cross-check values"
         for ($k = 0; $k -lt 3; $k++) {
-            if ([math]::Abs([double]$triple[$k] - [double]$flatT[$k]) -gt $crossTol) {
+            $fk = [double]$flat[$k]
+            if ([double]::IsNaN($fk) -or [double]::IsInfinity($fk)) { Fail $Out "doc[$i] <$t>: a cross-check component is not finite" }
+            if ([math]::Abs([double]$triple[$k] - $fk) -gt $crossTol) {
                 Fail $Out "doc[$i] <$t>: the centroid cross-check failed on component $k"
             }
         }
-        if ([math]::Abs($vol - [double]@($flat)[3]) -gt ($crossTol + 1E-12 * [math]::Abs($vol))) {
+        if ([math]::Abs($vol - [double]$flat[3]) -gt ($crossTol + 1E-12 * [math]::Abs($vol))) {
             Fail $Out "doc[$i] <$t>: the volume cross-check failed"
         }
 
@@ -185,5 +199,5 @@ try {
     Write-Result $Out $outLines
     exit 0
 } catch {
-    Fail $Out $_.Exception.Message
+    Fail $Out ("at stage [" + $stage + "]: " + $_.Exception.Message)
 }
