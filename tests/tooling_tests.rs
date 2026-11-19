@@ -13,6 +13,7 @@ const HARNESS: &str = include_str!("../tools/seat-harness.ps1");
 const RUNNER: &str = include_str!("../tools/seat-run-real.ps1");
 const RUNNER_TESTS: &str = include_str!("../tools/seat-run-real.tests.ps1");
 const LOGIC_TESTS: &str = include_str!("../tools/check-part-logic.tests.vbs");
+const MASS_ADAPTER: &str = include_str!("../tools/mass-adapter.ps1");
 
 // ---- the decision logic, mirrored ----
 // Mirrors tools/check-part-logic.vbs exactly; the pins below tie the two
@@ -78,6 +79,12 @@ fn ref_import_verdict(expected: Option<f64>, doc_type: &str, solids: Option<f64>
 fn parse_period(text: &str) -> Option<f64> {
     let s = text.trim();
     let b: Vec<char> = s.chars().collect();
+    // bounded token length (mirrors the VBS parser); the VBS exponent
+    // bound (|exp| <= 400) is outcome-equivalent here via the finite
+    // filter below.
+    if b.len() > 64 {
+        return None;
+    }
     let mut i = 0usize;
     if i < b.len() && (b[i] == '+' || b[i] == '-') {
         i += 1;
@@ -314,22 +321,28 @@ fn the_decision_mirror_is_pinned_to_the_vbs_logic() {
             "the import verdicts lost their named reasons: {pin}"
         );
     }
-    // Acquisition (CentroidText/ComponentNumber) is fail closed with
-    // named reasons and period-only string parsing (IsNumeric/CDbl are
-    // locale-poisoned; Val does not exist in VBScript).
+    // The typed mass-adapter seam: the decision module never touches a
+    // COM object; the transaction decision and the strict numeric
+    // contract live in pure text (probe evidence: no VBScript access
+    // form can read the typed SAFEARRAY(Double) centroid).
     for pin in [
-        "component is an object",
-        "string component is not period-decimal",
-        "unsupported component type",
-        "component is not finite",
-        "unexpected shape",
-        "is not numeric (vartype ",
+        "Function AdapterResponse",
+        "adapter:status=ok",
+        "adapter:end",
+        "the adapter timed out",
+        "a failure response never publishes values",
+        "is not a bounded finite number",
+        "Function CentroidDistanceText",
     ] {
         assert!(
             LOGIC.contains(pin),
-            "the acquisition lost a named reason: {pin}"
+            "the adapter seam lost a pinned form: {pin}"
         );
     }
+    assert!(
+        !LOGIC.contains("CenterOfMass") && !LOGIC.contains("Function ComponentNumber("),
+        "COM acquisition or coercion survived in the decision module"
+    );
     // The STEP import uses the documented LoadFile3 shape (FileName,
     // ArgString, ImportData) - Boolean return, only [in] parameters, the
     // form this seat's VBScript can marshal (the legacy LoadFile4 shape's
@@ -358,35 +371,38 @@ fn the_decision_mirror_is_pinned_to_the_vbs_logic() {
         "the ActiveDoc handoff is not ownership-validated"
     );
     assert!(
-        LOGIC.contains("component is an object that does not coerce"),
-        "the object-coercion refusal lost its named reason"
+        MASS_ADAPTER.contains("no default-property/.Value/CDbl"),
+        "the typed adapter lost its no-coercion contract"
     );
     assert!(
-        !CHECKER.contains("Function CentroidText("),
-        "the acquisition must live in the shared logic module (testable via cscript)"
+        CHECKER.contains("mass-adapter.ps1") && CHECKER.contains("RunMassAdapter"),
+        "the checker does not run the pinned typed adapter"
     );
-    // The distance computation is checked end to end (Sqr(0) raised in
-    // the SW VBA host; a failed read must never coerce to zero).
     assert!(
-        CHECKER.contains("the squared distance") && CHECKER.contains("the square root raised err "),
+        !LOGIC.contains("Function CentroidText("),
+        "the COM acquisition must not live in the decision module at all"
+    );
+    // The distance computation is checked end to end and lives in the
+    // shared logic module (the single owner): a failed computation is
+    // named, never coerced to zero.
+    assert!(
+        LOGIC.contains("the squared distance") && LOGIC.contains("the square root raised err "),
         "the distance computation lost its checked failure path"
     );
-    // The distance block runs on EVERY path of the comparison branch
-    // (it used to sit inside the reference-loaded branch: a failed
-    // import left distText empty and the placement detail rendered with
-    // an empty suffix).
+    // The distance block runs on EVERY path of the comparison branch,
+    // after the typed adapter acquisition and before the close block.
     let acquire = CHECKER
-        .find("refAcquireErr = CentroidText(mp, refCx")
-        .expect("no reference centroid acquisition");
+        .find("adapterErr = RunMassAdapter(")
+        .expect("no adapter acquisition");
     let dist = CHECKER
-        .find("distText = \"missing or unreadable\"")
-        .expect("no distance-unavailable naming");
+        .find("distText = CentroidDistanceText(")
+        .expect("no seam-routed distance");
     let close = CHECKER
         .find("refCloseLines = \"\"")
         .expect("no close block");
     assert!(
         acquire < dist && dist < close,
-        "the distance block does not sit between the acquisitions and the close"
+        "the distance block does not sit between the adapter acquisition and the close"
     );
     // The validators fail closed with named reasons (the negative tests
     // above pin their behavior through the mirror).
@@ -533,24 +549,31 @@ fn checker_syntax_is_paired_and_acquisition_is_typed() {
         "the body counts are not proven typed"
     );
     assert!(
-        LOGIC.contains("Function CentroidText") && LOGIC.contains("centerofmass"),
-        "the centroid components are not proven typed"
+        LOGIC.contains("Function AdapterValue") && LOGIC.contains("Function AdapterResponse"),
+        "the adapter parse seam is missing"
+    );
+    // The typed adapter qualifies its raw result BEFORE any conversion
+    // (strict Double() shape; no default-property/.Value coercion),
+    // cross-checks it, and carries the instance handshake.
+    assert!(
+        MASS_ADAPTER.contains("-isnot [double[]]") && MASS_ADAPTER.contains("Get-Triple"),
+        "the typed adapter lost its shape qualification"
     );
     assert!(
-        LOGIC.contains("Function ComponentNumber") && LOGIC.contains("VarType(comp)"),
-        "the component type gate is missing"
-    );
-    // capture-then-build: failure messages are built from plain
-    // variables only - a raise inside message construction silently
-    // skips the assignment and leaves the DEFAULT verdict text standing
-    // (D01 run 15 evidence).
-    assert!(
-        LOGIC.contains("vtCap = VarType(") && LOGIC.contains("tnCap = TypeName("),
-        "the acquisition messages are not capture-then-build"
+        MASS_ADAPTER.contains("cross-check failed") && MASS_ADAPTER.contains("GetMassProperties2"),
+        "the typed adapter lost its cross-check"
     );
     assert!(
-        LOGIC.contains("vartype ") && LOGIC.contains("IsArray"),
-        "the acquisition lost its shape checks"
+        MASS_ADAPTER.contains("ambiguous SolidWorks process identity"),
+        "the typed adapter lost its instance handshake"
+    );
+    assert!(
+        MASS_ADAPTER.contains("Write-Result") && MASS_ADAPTER.contains("adapter:end"),
+        "the typed adapter lost its transactional output contract"
+    );
+    assert!(
+        LOGIC.contains("If n > 64 Then Exit Function") && LOGIC.contains("expVal > 400"),
+        "the parser lost its bounded evaluation"
     );
     // Finding 4: the ownership snapshot precedes the import and a
     // pre-existing title refuses the close, named.

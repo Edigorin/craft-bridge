@@ -176,106 +176,61 @@ Check "a new title is not pre-existing", (Not IsPreExistingTitle("Doc1" & vbCrLf
 Check "an empty title is never pre-existing", (Not IsPreExistingTitle("Doc1" & vbCrLf, "")), "false positive"
 Check "an empty snapshot owns nothing", (Not IsPreExistingTitle("", "Doc1")), "false positive"
 
-' ===== acquisition tests (CentroidText / ComponentNumber): the actual
-' checker code with synthetic mass-property objects - no SolidWorks.
-Dim mpFake, compNum, compNote, cxT, cyT, czT, errText
+' ===== the typed mass-adapter seam: the transaction decision and the
+' strict numeric contract (the COM acquisition lives in
+' tools/mass-adapter.ps1; this module never touches a COM object and
+' never coerces). Fixture cases cover the review list: timeout, nonzero
+' exit despite a sentinel, stale/truncated/duplicate output, late
+' failure, extreme numeric tokens.
+Dim volA, cxA, cyA, czA, volB, cxB, cyB, czB, why, pv2
 
-Class FakeMass
-  Public centerofmass
-End Class
-
-Function FakeWith(ByVal theArray)
-  Dim m
-  Set m = New FakeMass
-  m.centerofmass = theArray
-  Set FakeWith = m
+Function AdapterTry(ByVal exitC, ByVal timedOut, ByVal fixture)
+  why = AdapterResponse(exitC, timedOut, fixture, "Part A", "Part B", volA, cxA, cyA, czA, volB, cxB, cyB, czB)
+  AdapterTry = (why = "")
 End Function
 
-Set mpFake = FakeWith(Array(1.5, -2.25, 3))
-errText = CentroidText(mpFake, cxT, cyT, czT, "t")
-Check "centroid doubles publish", (errText = "" And cxT = 1.5 And cyT = -2.25 And czT = 3), errText
+Function GoodResponse()
+  GoodResponse = "adapter:status=ok" & vbCrLf & _
+    "adapter:process=1234" & vbCrLf & _
+    "adapter:doc_count=2" & vbCrLf & _
+    "adapter:doc[0].title=Part A" & vbCrLf & _
+    "adapter:doc[0].volume=0.000006" & vbCrLf & _
+    "adapter:doc[0].cx=0.015" & vbCrLf & _
+    "adapter:doc[0].cy=0.01" & vbCrLf & _
+    "adapter:doc[0].cz=0.005" & vbCrLf & _
+    "adapter:doc[0].crosscheck=ok" & vbCrLf & _
+    "adapter:doc[1].title=Part B" & vbCrLf & _
+    "adapter:doc[1].volume=0.000006" & vbCrLf & _
+    "adapter:doc[1].cx=-0.015" & vbCrLf & _
+    "adapter:doc[1].cy=0.01" & vbCrLf & _
+    "adapter:doc[1].cz=0.005" & vbCrLf & _
+    "adapter:doc[1].crosscheck=ok" & vbCrLf & _
+    "adapter:end" & vbCrLf
+End Function
 
-' (a one-based array cannot be constructed natively in VBScript - Dim
-' takes no bounds - so the any-base code path is exercised through the
-' wrong-count case below and by real COM returns on the seat.)
-Dim arrFour(3)
-arrFour(0) = 1
-arrFour(1) = 2
-arrFour(2) = 3
-arrFour(3) = 4
-Set mpFake = FakeWith(arrFour)
-errText = CentroidText(mpFake, cxT, cyT, czT, "t")
-Check "centroid four elements refused", (InStr(1, errText, "unexpected shape") > 0 And cxT = 0), errText
+Function WithLine(ByVal fixture, ByVal needle, ByVal replacement)
+  WithLine = Replace(fixture, needle, replacement, 1, 1, vbBinaryCompare)
+End Function
 
-Set mpFake = FakeWith(Array("1.5", "-2.25", "3"))
-errText = CentroidText(mpFake, cxT, cyT, czT, "t")
-Check "centroid period-decimal strings", (errText = "" And cxT = 1.5 And cyT = -2.25 And czT = 3), errText
+Check "a complete adapter response publishes both triples", (AdapterTry(0, False, GoodResponse()) And volA = 0.000006 And cxA = 0.015 And czB = 0.005 And cxB = -0.015), why
+Check "an unresolved timeout is named and publishes nothing", ((Not AdapterTry(0, True, GoodResponse())) And InStr(1, why, "timed out") > 0 And cxA = 0 And volA = 0), why
+Check "a nonzero exit despite a sentinel publishes nothing", ((Not AdapterTry(1, False, GoodResponse())) And InStr(1, why, "exited 1") > 0 And cxA = 0), why
+Check "a failed status response is refused named", ((Not AdapterTry(0, False, WithLine(GoodResponse(), "adapter:status=ok", "adapter:status=failed boom"))) And InStr(1, why, "not a success response") > 0), why
+Check "a missing final sentinel is refused", ((Not AdapterTry(0, False, WithLine(GoodResponse(), "adapter:end", "adapter:tail=oops"))) And InStr(1, why, "sentinel") > 0), why
+Check "trailing data after the sentinel is refused", (Not AdapterTry(0, False, GoodResponse() & "adapter:extra=1" & vbCrLf)), why
+Check "truncated output is refused and publishes nothing", ((Not AdapterTry(0, False, Left(GoodResponse(), 200))) And cxA = 0), why
+Check "a duplicated record is refused", (Not AdapterTry(0, False, WithLine(GoodResponse(), "adapter:doc[0].cx=0.015", "adapter:doc[0].volume=0.015"))), why
+Check "a title mismatch is refused named", ((Not AdapterTry(0, False, WithLine(GoodResponse(), "adapter:doc[0].title=Part A", "adapter:doc[0].title=Part C"))) And InStr(1, why, "Part A") > 0), why
+Check "a non-period component is refused", (Not AdapterTry(0, False, WithLine(GoodResponse(), "adapter:doc[0].cx=0.015", "adapter:doc[0].cx=0,015"))), why
+Check "an extreme exponent token is refused before evaluation", ((Not AdapterTry(0, False, WithLine(GoodResponse(), "adapter:doc[0].cx=0.015", "adapter:doc[0].cx=1E999999999"))) And InStr(1, why, "not a bounded finite number") > 0), why
+Check "an out-of-range component is refused", (Not AdapterTry(0, False, WithLine(GoodResponse(), "adapter:doc[0].cx=0.015", "adapter:doc[0].cx=1E300"))), why
+Check "the parser itself refuses an extreme exponent", (Not ParsePeriod("1E999999999", pv2)), "parsed"
+Check "a bounded exponent still parses", (ParsePeriod("1E300", pv2) And Abs(pv2) > 1E200), "pv=" & NumStr(pv2)
+Check "an oversized response is refused", (Not AdapterTry(0, False, String(20000, "x"))), why
 
-Set mpFake = FakeWith(Array("1,5", "2", "3"))
-errText = CentroidText(mpFake, cxT, cyT, czT, "t")
-Check "centroid comma strings refused", (InStr(1, errText, "not period-decimal") > 0 And cxT = 0), errText
-
-Set mpFake = FakeWith(Array(1, 2))
-errText = CentroidText(mpFake, cxT, cyT, czT, "t")
-Check "centroid wrong shape refused", (InStr(1, errText, "unexpected shape") > 0 And cxT = 0), errText
-
-Set mpFake = FakeWith(Array(1, Empty, 3))
-errText = CentroidText(mpFake, cxT, cyT, czT, "t")
-Check "centroid empty component refused", (InStr(1, errText, "unsupported component type") > 0 And cxT = 0), errText
-
-Dim objHolder
-Set objHolder = CreateObject("Scripting.Dictionary")
-Dim arrObj(2)
-arrObj(0) = 1
-Set arrObj(1) = objHolder
-arrObj(2) = 3
-Set mpFake = FakeWith(arrObj)
-errText = CentroidText(mpFake, cxT, cyT, czT, "t")
-Check "centroid object component refused", (InStr(1, errText, "is an object") > 0 And InStr(1, errText, "Dictionary") > 0 And cxT = 0), errText
-
-Set mpFake = FakeWith(Array("1E300", 2, 3))
-errText = CentroidText(mpFake, cxT, cyT, czT, "t")
-Check "centroid nonfinite refused", (InStr(1, errText, "not finite") > 0 And cxT = 0), errText
-
-Set mpFake = CreateObject("Scripting.Dictionary")
-errText = CentroidText(mpFake, cxT, cyT, czT, "t")
-Check "centroid missing property refused", (InStr(1, errText, "cannot read") > 0 And cxT = 0 And cyT = 0 And czT = 0), errText
-
-Check "component doubles convert", ComponentNumber(2.5, compNum, compNote) And compNum = 2.5, compNote
-Check "component strings parse period", ComponentNumber("-0.25", compNum, compNote) And compNum = -0.25, compNote
-Check "component comma strings refused", (Not ComponentNumber("0,25", compNum, compNote)), compNote
-Check "component booleans refused", (Not ComponentNumber(True, compNum, compNote)), compNote
-
-Class DoubleBox
-  Public Value
-End Class
-Dim boxed
-Set boxed = New DoubleBox
-boxed.Value = 7.25
-errText = ""
-If ComponentNumber(boxed, compNum, compNote) Then
-  If compNum <> 7.25 Then errText = "wrong value " & compNum
-Else
-  errText = compNote
-End If
-Check "component wrapper default coerces", (errText = ""), errText
-
-' ===== the run-15 shapes: capture-then-build messages and the distText
-' vocabulary =====
-
-' A Nothing element: the plain assignment raises (no default property),
-' Set carries Nothing, and the FAILURE MESSAGE must be named. The
-' message construction is capture-then-build - a raise while building it
-' used to skip the assignment silently and leave the function's DEFAULT
-' text standing ("acquisition did not complete"), which reads like an
-' unspecified failure instead of the named one (D01 run 15 evidence).
-Dim arrNothing(2)
-arrNothing(0) = 1
-Set arrNothing(1) = Nothing
-arrNothing(2) = 3
-Set mpFake = FakeWith(arrNothing)
-errText = CentroidText(mpFake, cxT, cyT, czT, "t")
-Check "a nothing element is named, never the default text", (errText <> "" And errText <> "t acquisition did not complete" And InStr(1, errText, "component 1") > 0 And InStr(1, errText, "not numeric") > 0 And cxT = 0 And cyT = 0 And czT = 0), errText
+' the single distance owner (moved from the checker)
+Check "a coincident centroid pair gives zero", (CentroidDistanceText(1, 2, 3, 1, 2, 3) = "0"), CentroidDistanceText(1, 2, 3, 1, 2, 3)
+Check "a known centroid distance computes", (CentroidDistanceText(0, 0, 0, 3, 4, 0) = "5"), CentroidDistanceText(0, 0, 0, 3, 4, 0)
 
 ' ---- the distText vocabulary: the placement distance text is
 ' classified by NonnegError's documented mapping (empty -> missing or

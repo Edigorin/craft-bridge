@@ -214,6 +214,47 @@ occasionally fail closed on solver timing; if a run trips on "the value
 edit did not carry the ... geometry", that is the next probe question
 (rebuild-before-reread vs immediate read).
 
+## 2026-11-19 - probe-typed-arrays + probe-massprops: the centroid array is a typed SAFEARRAY(Double)
+
+Synthetic evidence only (the WSH engine probe runs anywhere; the
+SolidWorks probe imports the committed synthetic
+`tests/fixtures/box.step`, an independently authored 158-entity AP203
+box - one manifold solid, volume 0.000006 m3 = 30x20x10 mm, geometry
+gate pass, verified close pass). No real-part data appears here.
+
+**probe-typed-arrays (WSH engine, no SolidWorks):** `Array(1.25,2.5,3.75)`
+-> VarType 8204 (VT_ARRAY|VT_VARIANT), TypeName `Variant()`, indexing
+works (items vbDouble). `Scripting.Dictionary.Keys` -> 8204, indexing
+works. `ADODB.Stream.Read(3)` -> **VarType 8209 (0x2009) TypeName
+`Byte()`** - bounds 0..2 fine, **every `a(i)` raises err 13 Type
+mismatch**, and `For Each` raises **err 451 (Object not a collection)**
+after one item. This is Microsoft KB 165967's documented rule on this
+engine: VBScript indexes SAFEARRAY(VARIANT) only; bounds inspection
+works on typed arrays; For Each is NOT a workaround.
+
+**probe-massprops (seat, SolidWorks 2026, synthetic box):**
+`IMassProperty.CenterOfMass` and `IMassProperty2.CenterOfMass` both
+arrive as **VarType 8197 (0x2005) TypeName `Double()`** - a typed
+SAFEARRAY(Double), zero-based 0..2, one dimension. Every element access
+form fails **err 13** (plain assignment, Set, VarType(element),
+TypeName(element)). `For Each` fails **err 451** after one item.
+`GetBodies2(0, False)` bounds-count works but its elements are
+unindexable the same way. `GetMassProperties2(1, Status, False)` (the
+documented `Accuracy, ByRef Status, UseSelected` shape) fails **err 13**
+from VBScript - the ByRef Status is the seat's known uncallable shape
+(the RunMacro2/LoadFile4 precedent). `CreateMassProperty2()` +
+`Recalculate()` (True) + `UseSystemUnits` all work; volume scalars read
+fine on both interfaces.
+
+**Conclusion pinned:** no VBScript access form can read the centroid
+triple on this seat (research 11's hypothesis confirmed at the wire).
+Acquisition moves to a typed adapter (PowerShell + the SolidWorks interop
+assembly: real `double[]` indexing, `[ref]` status for
+GetMassProperties2, cross-check CenterOfMass against
+GetMassProperties2[0..2]); the checker keeps every verdict and validates
+the adapter's text strictly. All default-property/.Value coercion is
+gone from the acquisition path (research 10/11's rule).
+
 ## 2026-11-17 - `fixed: true` + `exprs` is creatable through the MCP
 
 Source-confirmed earlier (nested-schema research [S38]); the design

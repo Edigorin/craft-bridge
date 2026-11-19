@@ -32,7 +32,8 @@
 #     },
 #     "tooling": {
 #       "tools/seat-run.ps1": "<hex>", "tools/run-macro.vbs": "<hex>",
-#       "tools/check-part.vbs": "<hex>", "tools/check-part-logic.vbs": "<hex>"
+#       "tools/check-part.vbs": "<hex>", "tools/check-part-logic.vbs": "<hex>",
+#       "tools/mass-adapter.ps1": "<hex>"
 #     },
 #     "approved_macro_sha256": "<hex>"
 #   }
@@ -57,7 +58,7 @@ if (-not $RepoRoot) { $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).
 
 # Every tooling script this run executes - THIS RUNNER INCLUDED - must be
 # pinned: the pins cover the execution path, not just the repo copy.
-function Get-RequiredTooling { @("tools/seat-run-real.ps1", "tools/seat-run.ps1", "tools/run-macro.vbs", "tools/check-part.vbs", "tools/check-part-logic.vbs") }
+function Get-RequiredTooling { @("tools/seat-run-real.ps1", "tools/seat-run.ps1", "tools/run-macro.vbs", "tools/check-part.vbs", "tools/check-part-logic.vbs", "tools/mass-adapter.ps1") }
 
 function Get-RealFileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)

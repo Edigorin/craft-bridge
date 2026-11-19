@@ -47,6 +47,8 @@ Dim importErrDesc
 Dim distSq, distErr, dist
 Dim docTypeText, solidsText, sheetsText, refAcquireErr
 Dim distText, blocks, dtRaw, refBodiesArr, refSheetsArr, refCloseLines
+Dim adapterErr, adapterTimedOut, adapterVolA, adapterCxA, adapterCyA, adapterCzA
+Dim adapterVolB, adapterCxB, adapterCyB, adapterCzB
 Dim preTitles, preErr, d, t2
 If WScript.Arguments.Count < 4 Then
   WScript.Echo "usage: check-part.vbs <expect> <step-reference> <out> <owned-title>"
@@ -135,7 +137,6 @@ Else
     rebuiltAcquireErr = "the rebuilt volume did not come back numeric (vartype " & NumStr(volVt) & ")"
   Else
     rebuiltText = NumStr(volRaw)
-    rebuiltAcquireErr = CentroidText(mp, rebuiltCx, rebuiltCy, rebuiltCz, "the rebuilt centroid")
   End If
 End If
 Err.Clear
@@ -294,44 +295,56 @@ Else
         refAcquireErr = "the reference volume did not come back numeric (vartype " & NumStr(volVt) & ")"
       Else
         refText = NumStr(volRaw)
-        refAcquireErr = CentroidText(mp, refCx, refCy, refCz, "the reference centroid")
       End If
     End If
     End If
   End If
 
+  ' ---- the typed centroid acquisition: ONE adapter call for both
+  ' documents. Probe evidence (docs/source-probe-evidence.md 2026-11-19):
+  ' CenterOfMass arrives as a typed SAFEARRAY(Double) that no VBScript
+  ' access form can read, so tools/mass-adapter.ps1 (the typed client,
+  ' pinned tooling) reads it and publishes strict invariant text. An
+  ' ordinary acquisition failure is named and falls through to the
+  ' verdicts; an unresolved TIMEOUT stops all further seat work.
+  adapterErr = ""
+  adapterTimedOut = False
+  adapterVolA = 0
+  adapterCxA = 0
+  adapterCyA = 0
+  adapterCzA = 0
+  adapterVolB = 0
+  adapterCxB = 0
+  adapterCyB = 0
+  adapterCzB = 0
+  If refDoc Is Nothing Then
+    adapterErr = "the centroid acquisition needs both documents (no reference was opened)"
+  ElseIf rebuiltText = "" Or refText = "" Then
+    adapterErr = "the centroid acquisition needs both volumes (a mass read failed)"
+  Else
+    adapterErr = RunMassAdapter(ownedTitle, refTitle, rebuiltText, refText, adapterVolA, adapterCxA, adapterCyA, adapterCzA, adapterVolB, adapterCxB, adapterCyB, adapterCzB, adapterTimedOut)
+  End If
+  If adapterTimedOut Then
+    ' fail closed and STOP: no document close, no later step (a hung
+    ' adapter means the application state is unknown)
+    outFile.WriteLine "detail:mass=" & adapterErr
+    outFile.WriteLine "check:placement=fail"
+    outFile.WriteLine "detail:placement=the centroid acquisition timed out; seat work stops here (documents are left open; nothing further is attempted)"
+    outFile.WriteLine "check:mass=fail"
+    outFile.WriteLine "check:mass_vs_reference=fail"
+    outFile.WriteLine "check:ref_close=skipped"
+    outFile.WriteLine "detail:ref_close=not attempted (the adapter timeout stopped the run)"
+    outFile.Close
+    WScript.Quit 5
+  End If
+
   ' The centroid distance is computed - or named unavailable - on every
-  ' path of the comparison branch. This block used to sit inside the
-  ' reference-loaded branch, so a failed import left distText empty -
-  ' and NonnegError classifies empty text as "missing or invalid", which
-  ' rendered the placement detail with an empty suffix (D01 run 15). The
-  ' block always runs now and distText stays in NonnegError's vocabulary
-  ' (empty -> missing or invalid, non-period -> not numeric, nonfinite,
-  ' negative, else the numeric comparison).
-  If rebuiltText <> "" And refText <> "" And rebuiltAcquireErr = "" And refAcquireErr = "" Then
-    ' the distance computation is checked end to end: a failed read or
-    ' an unrepresentable value is named, never coerced
-    Err.Clear
-    On Error Resume Next
-    distSq = (rebuiltCx - refCx) ^ 2 + (rebuiltCy - refCy) ^ 2 + (rebuiltCz - refCz) ^ 2
-    distErr = Err.Number
-    If distErr <> 0 Then
-      distText = "missing or invalid: the squared distance raised err " & NumStr(distErr)
-      Err.Clear
-    ElseIf distSq <> distSq Or distSq < 0 Then
-      distText = "missing or invalid: the squared distance is not finite"
-    ElseIf distSq = 0 Then
-      distText = NumStr(0)
-    Else
-      dist = Sqr(distSq)
-      If Err.Number <> 0 Then
-        distText = "missing or invalid: the square root raised err " & NumStr(Err.Number)
-        Err.Clear
-      Else
-        distText = NumStr(dist)
-      End If
-    End If
-    On Error GoTo 0
+  ' path of the comparison branch; distText stays in NonnegError's
+  ' vocabulary (empty -> missing or invalid, non-period -> not numeric,
+  ' nonfinite, negative, else the numeric comparison). The computation
+  ' itself lives in the shared logic module (the single owner).
+  If rebuiltText <> "" And refText <> "" And rebuiltAcquireErr = "" And refAcquireErr = "" And adapterErr = "" Then
+    distText = CentroidDistanceText(adapterCxA, adapterCyA, adapterCzA, adapterCxB, adapterCyB, adapterCzB)
   Else
     distText = "missing or unreadable"
   End If
@@ -366,6 +379,9 @@ Else
   End If
   If rebuiltAcquireErr <> "" Then
     blocks = blocks & "detail:mass=" & rebuiltAcquireErr & vbCrLf
+  End If
+  If adapterErr <> "" Then
+    blocks = blocks & "detail:mass=" & adapterErr & vbCrLf
   End If
   outFile.Write blocks
   outFile.Write refCloseLines
@@ -776,4 +792,117 @@ Function ImportStepDoc(ByVal app, ByVal stepPath, ByVal preSnapshot, ByRef errTe
     Exit Function
   End If
   Set ImportStepDoc = cand
+End Function
+
+' The typed mass-adapter run: one bounded child invocation per check.
+' Request and response travel as files beneath the report directory
+' (titles are never placed on a command line); the process identity is
+' the same single-SolidWorks-process handshake on both sides; the
+' response is decided by AdapterResponse in the shared logic module
+' (exit code, timeout, and the whole transaction). An unresolved
+' timeout is reported through timedOut and the caller STOPS the run.
+Function RunMassAdapter(ByVal rebuiltTitle, ByVal refTitle, ByVal rebuiltVolText, ByVal refVolText, ByRef volA, ByRef cxA, ByRef cyA, ByRef czA, ByRef volB, ByRef cxB, ByRef cyB, ByRef czB, ByRef timedOut)
+  Dim sh, exec, fso2, adapterPath, reqPath, respPath, stamp
+  Dim pidText, wmi, procs, p, waited, raw, why, outFileR
+  Dim volDirectA, volDirectB, relDiff
+  RunMassAdapter = "the centroid acquisition did not complete"
+  timedOut = False
+  volA = 0
+  cxA = 0
+  cyA = 0
+  czA = 0
+  volB = 0
+  cxB = 0
+  cyB = 0
+  czB = 0
+  ' the application-instance handshake: exactly one SolidWorks process,
+  ' and the adapter must verify the same identity
+  pidText = ""
+  Err.Clear
+  On Error Resume Next
+  Set wmi = GetObject("winmgmts:\\.\root\cimv2")
+  Set procs = wmi.ExecQuery("SELECT ProcessId FROM Win32_Process WHERE Name = 'SLDWORKS.EXE'")
+  p = 0
+  For Each d In procs
+    p = p + 1
+    pidText = CStr(d.ProcessId)
+  Next
+  If Err.Number <> 0 Or p <> 1 Then
+    RunMassAdapter = "ambiguous SolidWorks process identity (" & NumStr(p) & " processes)"
+    On Error GoTo 0
+    Exit Function
+  End If
+  On Error GoTo 0
+  Set fso2 = CreateObject("Scripting.FileSystemObject")
+  adapterPath = fso2.GetParentFolderName(WScript.ScriptFullName) & "\mass-adapter.ps1"
+  stamp = Year(Now) & Right("0" & Month(Now), 2) & Right("0" & Day(Now), 2) & "-" & Right("0" & Hour(Now), 2) & Right("0" & Minute(Now), 2) & Right("0" & Second(Now), 2) & "-" & NumStr(Int(Timer * 100) Mod 100)
+  reqPath = fso2.GetParentFolderName(outPath) & "\mass-adapter-request-" & stamp & ".txt"
+  respPath = fso2.GetParentFolderName(outPath) & "\mass-adapter-response-" & stamp & ".txt"
+  Err.Clear
+  On Error Resume Next
+  Set outFileR = fso2.CreateTextFile(reqPath, True)
+  outFileR.WriteLine "title=" & rebuiltTitle
+  outFileR.WriteLine "title=" & refTitle
+  outFileR.Close
+  If Err.Number <> 0 Then
+    RunMassAdapter = "the adapter request could not be written: " & Err.Description
+    On Error GoTo 0
+    Exit Function
+  End If
+  On Error GoTo 0
+  Set sh = CreateObject("WScript.Shell")
+  Err.Clear
+  On Error Resume Next
+  Set exec = sh.Exec("powershell.exe -NoProfile -ExecutionPolicy Bypass -File """ & adapterPath & """ -Request """ & reqPath & """ -Out """ & respPath & """ -ExpectedPid " & pidText)
+  If Err.Number <> 0 Then
+    RunMassAdapter = "the adapter could not be launched: " & Err.Description
+    On Error GoTo 0
+    Exit Function
+  End If
+  On Error GoTo 0
+  ' bounded wait: 120 s inner deadline, comfortably below the runner's
+  ' 300 s checker budget; the child writes its result to a file, so the
+  ' pipes carry at most a short line and cannot deadlock
+  waited = 0
+  Do While exec.Status = 0
+    WScript.Sleep 500
+    waited = waited + 1
+    If waited >= 240 Then
+      timedOut = True
+      RunMassAdapter = "the adapter timed out after 120 seconds; seat work stops here"
+      Exit Function
+    End If
+  Loop
+  raw = ""
+  If fso2.FileExists(respPath) Then
+    Err.Clear
+    On Error Resume Next
+    raw = fso2.OpenTextFile(respPath, 1).ReadAll
+    If Err.Number <> 0 Then raw = ""
+    On Error GoTo 0
+  End If
+  why = AdapterResponse(exec.ExitCode, False, raw, rebuiltTitle, refTitle, volA, cxA, cyA, czA, volB, cxB, cyB, czB)
+  If why <> "" Then
+    RunMassAdapter = "the centroid acquisition failed: " & why
+    Exit Function
+  End If
+  ' scope/frame evidence: the adapter volumes must agree with this
+  ' checker's direct scalar reads (same document, same units)
+  volDirectA = 0
+  volDirectB = 0
+  If Not ParsePeriod(rebuiltVolText, volDirectA) Then volDirectA = -1
+  If Not ParsePeriod(refVolText, volDirectB) Then volDirectB = -1
+  relDiff = Abs(volDirectA - volA)
+  If volA > 0 Then relDiff = relDiff / volA
+  If relDiff > 0.000000001 Then
+    RunMassAdapter = "the adapter volume for the rebuilt document disagrees with the direct read"
+    Exit Function
+  End If
+  relDiff = Abs(volDirectB - volB)
+  If volB > 0 Then relDiff = relDiff / volB
+  If relDiff > 0.000000001 Then
+    RunMassAdapter = "the adapter volume for the reference document disagrees with the direct read"
+    Exit Function
+  End If
+  RunMassAdapter = ""
 End Function

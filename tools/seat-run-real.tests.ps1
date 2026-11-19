@@ -57,13 +57,13 @@ Set-Content -Path $src -Value "{""synthetic"": true}"
 Set-Content -Path $ref -Value "synthetic step bytes"
 Set-Content -Path $exp -Value "volume_tol=0.001"
 Set-Content -Path $tracked -Value "synthetic tracked bytes"
-foreach ($t in @("seat-run-real.ps1", "seat-run.ps1", "run-macro.vbs", "check-part.vbs", "check-part-logic.vbs")) {
+foreach ($t in @("seat-run-real.ps1", "seat-run.ps1", "run-macro.vbs", "check-part.vbs", "check-part-logic.vbs", "mass-adapter.ps1")) {
     Set-Content -Path (Join-Path $scratch "tools\$t") -Value "synthetic tooling bytes"
 }
 git -C $scratch add -- "uploads/d1/tracked.bin" 2>$null | Out-Null
 
 function Sha($p) { (Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash.ToLower() }
-$allTools = @("tools/seat-run-real.ps1", "tools/seat-run.ps1", "tools/run-macro.vbs", "tools/check-part.vbs", "tools/check-part-logic.vbs")
+$allTools = @("tools/seat-run-real.ps1", "tools/seat-run.ps1", "tools/run-macro.vbs", "tools/check-part.vbs", "tools/check-part-logic.vbs", "tools/mass-adapter.ps1")
 
 # A manifest with one EXTRA pinned file (a consumed fallback sidecar).
 function WriteManifestExtra($approved, $toolsToPin, $extraPath, $extraSha) {
@@ -173,7 +173,7 @@ $threw = Throws { Test-RealToolingPins -Manifest $m -ScriptDir $scriptDir }
 Check "unpinned tooling is refused (this runner included)" $threw "no throw"
 $m = WriteManifest (Sha $macro) $allTools $false $false
 $pins = Test-RealToolingPins -Manifest $m -ScriptDir $scriptDir
-Check "pinned tooling verifies against the executed bytes" ($pins.Count -eq 5) "count=$($pins.Count)"
+Check "pinned tooling verifies against the executed bytes" ($pins.Count -eq 6) "count=$($pins.Count)"
 # A pin that matches the repo copy but not the executed bytes refuses.
 Set-Content -Path (Join-Path $scratch "tools\run-macro.vbs") -Value "synthetic tooling bytes, changed after pinning"
 $threw = Throws { Test-RealToolingPins -Manifest $m -ScriptDir $scriptDir }

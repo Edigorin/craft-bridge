@@ -41,18 +41,24 @@ End Function
 ' these modules parse arrives as period-decimal text (NumStr output or the
 ' expect file), so exactly that shape is accepted.
 Function ParsePeriod(ByVal text, ByRef value)
-  Dim s, i, c, n, digits, dots, expSeen
+  Dim s, i, c, n, digits, dots, expSeen, expVal, expDigits
   ParsePeriod = False
   value = 0
   s = Trim(text)
   n = Len(s)
   If n = 0 Then Exit Function
+  ' bounded token length and exponent magnitude (project choices): the
+  ' numeric loop below is proportional to the exponent value, so a
+  ' hostile token must be refused BEFORE evaluation
+  If n > 64 Then Exit Function
   i = 1
   c = Mid(s, i, 1)
   If c = "+" Or c = "-" Then i = i + 1
   digits = 0
   dots = 0
   expSeen = False
+  expVal = 0
+  expDigits = 0
   Do While i <= n
     c = Mid(s, i, 1)
     If c >= "0" And c <= "9" Then
@@ -63,10 +69,17 @@ Function ParsePeriod(ByVal text, ByRef value)
     ElseIf (c = "e" Or c = "E") And Not expSeen And digits > 0 Then
       expSeen = True
       digits = 0
+      expVal = 0
+      expDigits = 0
       If i + 1 <= n Then
         c = Mid(s, i + 1, 1)
         If c = "+" Or c = "-" Then i = i + 1
       End If
+    ElseIf expSeen And c >= "0" And c <= "9" Then
+      digits = digits + 1
+      expVal = expVal * 10 + (Asc(c) - 48)
+      expDigits = expDigits + 1
+      If expDigits > 3 Or expVal > 400 Then Exit Function
     Else
       Exit Function
     End If
@@ -533,186 +546,224 @@ End Function
 ' (ParsePeriod - IsNumeric/CDbl are locale-sensitive and rejected the
 ' checker's own period-decimal values on comma-decimal Windows). Anything
 ' else is refused with a named reason and converted to nothing.
-Function ComponentNumber(ByVal comp, ByRef num, ByRef note)
-  Dim vt, coerced, tnCap
-  ComponentNumber = False
-  num = 0
-  note = ""
-  ' The seat's COM marshalling delivers CenterOfMass components as
-  ' OBJECTS (D01 run 12: "component 0 is an object"). A wrapper carrying
-  ' a default numeric property coerces through a plain assignment; a
-  ' wrapper without one refuses named.
-  coerced = Empty
-  If IsObject(comp) Then
-    Err.Clear
-    On Error Resume Next
-    coerced = comp
-    If Err.Number <> 0 Then
-      ' no default property: an explicit Value member is the second and
-      ' last guarded attempt
-      Err.Clear
-      coerced = comp.Value
-    End If
-    If Err.Number <> 0 Then
-      ' capture-then-build: TypeName on a suspect wrapper can raise, and
-      ' a raise while building the note is silently lost here - capture
-      ' into a plain variable first, then build
-      Err.Clear
-      tnCap = "?"
-      tnCap = TypeName(comp)
-      note = "component is an object that does not coerce (typename " & tnCap & ")"
-      Err.Clear
-      On Error GoTo 0
-      Exit Function
-    End If
-    On Error GoTo 0
-    If IsObject(coerced) Then
-      Err.Clear
-      On Error Resume Next
-      tnCap = "?"
-      tnCap = TypeName(comp)
-      Err.Clear
-      On Error GoTo 0
-      note = "component is an object that does not coerce (typename " & tnCap & ")"
-      Exit Function
-    End If
-  Else
-    coerced = comp
-  End If
-  vt = VarType(coerced)
-  If vt = vbByte Or vt = vbInteger Or vt = vbLong Or vt = vbSingle Or vt = vbDouble Or vt = vbCurrency Or vt = vbDecimal Then
-    ' the value is already binary: a plain assignment carries it with no
-    ' locale surface (IsNumeric/CDbl are locale-poisoned and Val does not
-    ' exist in VBScript - both are pinned out of this module)
-    num = coerced
-  ElseIf vt = vbString Then
-    If Not ParsePeriod(CStr(coerced), num) Then
-      note = "string component is not period-decimal"
-      Exit Function
-    End If
-  Else
-    note = "unsupported component type"
-    Exit Function
-  End If
-  If num <> num Then
-    note = "component is not finite"
-    num = 0
-    Exit Function
-  End If
-  If Abs(num) > 1E+100 Then
-    note = "component is not finite"
-    num = 0
-    Exit Function
-  End If
-  ComponentNumber = True
-End Function
 
-' Centroid acquisition, fail closed: the function reports a named failure
-' unless every one of the three components validated, and the coordinates
-' are published only AFTER all three - a failed read can never leave
-' initialized zeros looking like a real centroid. Any array base is
-' accepted as long as exactly three elements are present (VBScript COM
-' marshalling can shift array bases).
-Function CentroidText(ByVal mpObj, ByRef cx, ByRef cy, ByRef cz, ByVal what)
-  Dim arr, lo2, hi2, k, comp, num, note, errNum, errDesc
-  Dim nx, ny, nz, readErr, vtCap, tnCap
-  CentroidText = what & " acquisition did not complete"
-  cx = 0
-  cy = 0
-  cz = 0
-  Err.Clear
-  On Error Resume Next
-  arr = mpObj.centerofmass
-  errNum = Err.Number
-  errDesc = Err.Description
-  If errNum <> 0 Then
-    CentroidText = "cannot read " & what & ": " & errDesc & " (err " & NumStr(errNum) & ")"
-    On Error GoTo 0
+' ===== the typed mass-adapter seam (probe evidence:
+' docs/source-probe-evidence.md 2026-11-19) =====
+'
+' The centroid triples arrive from tools/mass-adapter.ps1 as strict
+' invariant-culture text (see its output contract). This module owns the
+' TRANSACTION decision and the numeric validation; no COM object is ever
+' touched here and no value is coerced. Nothing is published until the
+' WHOLE response validates (fresh invocation-bound output, successful
+' process exit, exactly the expected records, final sentinel, no
+' trailing data).
+
+' The adapter response verdict: "" when the whole transaction validates,
+' else the named reason. The triples and volumes are published ONLY on
+' success (a failed or partial response can never leave a half-filled
+' coordinate looking real). Bounded: at most 64 lines of at most 512
+' characters over at most 16384 characters of text.
+Function AdapterResponse(ByVal exitCode, ByVal timedOut, ByVal rawText, ByVal titleA, ByVal titleB, ByRef volA, ByRef cxA, ByRef cyA, ByRef czA, ByRef volB, ByRef cxB, ByRef cyB, ByRef czB)
+  Dim lines, i, k, n, line, expect, tA, tB
+  Dim vA2, xA2, yA2, zA2, vB2, xB2, yB2, zB2
+  Dim parts, seenEnd
+  AdapterResponse = "the adapter response is not validated"
+  volA = 0
+  cxA = 0
+  cyA = 0
+  czA = 0
+  volB = 0
+  cxB = 0
+  cyB = 0
+  czB = 0
+  If timedOut Then
+    AdapterResponse = "the adapter timed out; seat work stops here"
     Exit Function
   End If
-  If Not IsArray(arr) Then
-    Err.Clear
-    vtCap = -1
-    vtCap = VarType(arr)
-    If Err.Number <> 0 Then vtCap = -1
-    Err.Clear
-    CentroidText = what & " did not come back as an array (vartype " & NumStr(vtCap) & ")"
-    On Error GoTo 0
+  If exitCode <> 0 Then
+    AdapterResponse = "the adapter exited " & NumStr(exitCode) & " (a failure response never publishes values)"
     Exit Function
   End If
-  Err.Clear
-  lo2 = LBound(arr)
-  hi2 = UBound(arr)
-  If Err.Number <> 0 Then
-    CentroidText = what & " has unreadable bounds"
-    Err.Clear
-    On Error GoTo 0
+  If Len(rawText) > 16384 Then
+    AdapterResponse = "the adapter response is oversized"
     Exit Function
   End If
-  If hi2 - lo2 <> 2 Then
-    CentroidText = what & " has an unexpected shape (bounds " & NumStr(lo2) & ".." & NumStr(hi2) & ")"
-    On Error GoTo 0
+  ' the writer terminates the last line; a single trailing newline is
+  ' transport, not a record
+  If Right(rawText, 2) = vbCrLf Then rawText = Left(rawText, Len(rawText) - 2)
+  lines = Split(rawText, vbCrLf)
+  n = UBound(lines) - LBound(lines) + 1
+  If n < 10 Or n > 64 Then
+    AdapterResponse = "the adapter response has " & NumStr(n) & " lines (10..64 expected)"
     Exit Function
   End If
-  For k = 0 To 2
-    ' A plain assignment coerces a wrapper's DEFAULT property (the seat
-    ' delivers CenterOfMass components as objects); when it raises, Set
-    ' carries the object itself to ComponentNumber's coercion gate. Every
-    ' read failure names the element's vartype, typename and error.
-    Err.Clear
-    comp = arr(lo2 + k)
-    readErr = Err.Number
-    If readErr <> 0 Then
-      Err.Clear
-      Set comp = arr(lo2 + k)
-      readErr = Err.Number
-    End If
-    If readErr <> 0 Then
-      ' capture-then-build: a suspect element can raise inside
-      ' VarType/TypeName, and a raise while BUILDING the message silently
-      ' skips the assignment and leaves the function's DEFAULT text
-      ' standing (D01 run 15 evidence) - capture the type identity under
-      ' guarded steps first; the message is built from plain variables only
-      Err.Clear
-      vtCap = -1
-      tnCap = "?"
-      vtCap = VarType(arr(lo2 + k))
-      If Err.Number <> 0 Then vtCap = -1
-      Err.Clear
-      tnCap = TypeName(arr(lo2 + k))
-      If Err.Number <> 0 Then tnCap = "?"
-      Err.Clear
-      CentroidText = what & " component " & NumStr(k) & " could not be read (vartype " & NumStr(vtCap) & ", typename " & tnCap & ", err " & NumStr(readErr) & ")"
-      On Error GoTo 0
+  ' the exact record set, in order, two documents
+  expect = Array( _
+    "adapter:status=ok", _
+    "adapter:process=", _
+    "adapter:doc_count=2", _
+    "adapter:doc[0].title=", _
+    "adapter:doc[0].volume=", _
+    "adapter:doc[0].cx=", _
+    "adapter:doc[0].cy=", _
+    "adapter:doc[0].cz=", _
+    "adapter:doc[0].crosscheck=ok", _
+    "adapter:doc[1].title=", _
+    "adapter:doc[1].volume=", _
+    "adapter:doc[1].cx=", _
+    "adapter:doc[1].cy=", _
+    "adapter:doc[1].cz=", _
+    "adapter:doc[1].crosscheck=ok", _
+    "adapter:end")
+  If n <> UBound(expect) + 1 Then
+    AdapterResponse = "the adapter response has " & NumStr(n) & " lines (" & NumStr(UBound(expect) + 1) & " expected)"
+    Exit Function
+  End If
+  seenEnd = False
+  For i = 0 To n - 1
+    line = lines(LBound(lines) + i)
+    If Len(line) > 512 Then
+      AdapterResponse = "adapter line " & NumStr(i) & " is oversized"
       Exit Function
     End If
-    If Not ComponentNumber(comp, num, note) Then
-      Err.Clear
-      vtCap = -1
-      tnCap = "?"
-      vtCap = VarType(comp)
-      If Err.Number <> 0 Then vtCap = -1
-      Err.Clear
-      tnCap = TypeName(comp)
-      If Err.Number <> 0 Then tnCap = "?"
-      Err.Clear
-      CentroidText = what & " component " & NumStr(k) & " is not numeric (vartype " & NumStr(vtCap) & ", typename " & tnCap & "): " & note
-      On Error GoTo 0
-      Exit Function
-    End If
-    If k = 0 Then
-      nx = num
-    ElseIf k = 1 Then
-      ny = num
+    If i = 0 Then
+      If line <> "adapter:status=ok" Then
+        AdapterResponse = "the adapter response is not a success response: " & line
+        Exit Function
+      End If
+    ElseIf i = 1 Then
+      If Left(line, Len("adapter:process=")) <> "adapter:process=" Then
+        AdapterResponse = "the adapter response lost its process record"
+        Exit Function
+      End If
+    ElseIf i = 2 Then
+      If line <> "adapter:doc_count=2" Then
+        AdapterResponse = "the adapter response does not carry two documents"
+        Exit Function
+      End If
+    ElseIf i = n - 1 Then
+      If line <> "adapter:end" Then
+        AdapterResponse = "the adapter response has no final sentinel"
+        Exit Function
+      End If
+      seenEnd = True
     Else
-      nz = num
+      If Left(line, Len(expect(i))) <> expect(i) Then
+        AdapterResponse = "adapter line " & NumStr(i) & " is not the expected record: " & line
+        Exit Function
+      End If
     End If
   Next
-  ' publish only after every component validated: a failed read can
-  ' never leave partially-coerced coordinates looking real
-  cx = nx
-  cy = ny
-  cz = nz
+  If Not seenEnd Then
+    AdapterResponse = "the adapter response has no final sentinel"
+    Exit Function
+  End If
+  ' titles: exact, and in the requested order
+  tA = Mid(lines(LBound(lines) + 3), Len("adapter:doc[0].title=") + 1)
+  tB = Mid(lines(LBound(lines) + 10), Len("adapter:doc[1].title=") + 1)
+  If tA <> titleA Then
+    AdapterResponse = "the adapter response title for document 0 is <" & tA & ">, expected <" & titleA & ">"
+    Exit Function
+  End If
+  If tB <> titleB Then
+    AdapterResponse = "the adapter response title for document 1 is <" & tB & ">, expected <" & titleB & ">"
+    Exit Function
+  End If
+  ' numbers: period-decimal, finite, bounded; publish nothing until all
+  ' eight validate
+  If Not AdapterValue(lines(LBound(lines) + 4), vA2) Then
+    AdapterResponse = "the adapter volume for document 0 is not a bounded finite number"
+    Exit Function
+  End If
+  If Not AdapterValue(lines(LBound(lines) + 5), xA2) Then
+    AdapterResponse = "the adapter cx for document 0 is not a bounded finite number"
+    Exit Function
+  End If
+  If Not AdapterValue(lines(LBound(lines) + 6), yA2) Then
+    AdapterResponse = "the adapter cy for document 0 is not a bounded finite number"
+    Exit Function
+  End If
+  If Not AdapterValue(lines(LBound(lines) + 7), zA2) Then
+    AdapterResponse = "the adapter cz for document 0 is not a bounded finite number"
+    Exit Function
+  End If
+  If Not AdapterValue(lines(LBound(lines) + 11), vB2) Then
+    AdapterResponse = "the adapter volume for document 1 is not a bounded finite number"
+    Exit Function
+  End If
+  If Not AdapterValue(lines(LBound(lines) + 12), xB2) Then
+    AdapterResponse = "the adapter cx for document 1 is not a bounded finite number"
+    Exit Function
+  End If
+  If Not AdapterValue(lines(LBound(lines) + 13), yB2) Then
+    AdapterResponse = "the adapter cy for document 1 is not a bounded finite number"
+    Exit Function
+  End If
+  If Not AdapterValue(lines(LBound(lines) + 14), zB2) Then
+    AdapterResponse = "the adapter cz for document 1 is not a bounded finite number"
+    Exit Function
+  End If
+  volA = vA2
+  cxA = xA2
+  cyA = yA2
+  czA = zA2
+  volB = vB2
+  cxB = xB2
+  cyB = yB2
+  czB = zB2
+  AdapterResponse = ""
+End Function
+
+' One adapter number: the "key=" prefix is stripped by the caller's
+' record check; the value must parse as a bounded finite period-decimal
+' number (the numeric contract of the whole acquisition path).
+Function AdapterValue(ByVal line, ByRef value)
+  Dim p, text
+  AdapterValue = False
+  value = 0
+  p = InStr(1, line, "=")
+  If p = 0 Then Exit Function
+  text = Mid(line, p + 1)
+  If Not ParsePeriod(text, value) Then Exit Function
+  If value <> value Then Exit Function
+  If Abs(value) > 1E+100 Then Exit Function
+  AdapterValue = True
+End Function
+
+' The centroid distance in metres as text: "" is never returned - the
+' distance stays in NonnegError's vocabulary (a period-decimal number or
+' "missing or invalid: <named cause>"). This is the SINGLE owner of the
+' distance computation (the checker only routes values through it).
+Function CentroidDistanceText(ByVal cxA, ByVal cyA, ByVal czA, ByVal cxB, ByVal cyB, ByVal czB)
+  Dim distSq, distErr, dist
+  CentroidDistanceText = ""
+  Err.Clear
+  On Error Resume Next
+  distSq = (cxA - cxB) ^ 2 + (cyA - cyB) ^ 2 + (czA - czB) ^ 2
+  distErr = Err.Number
+  If distErr <> 0 Then
+    CentroidDistanceText = "missing or invalid: the squared distance raised err " & NumStr(distErr)
+    Err.Clear
+    On Error GoTo 0
+    Exit Function
+  End If
+  If distSq <> distSq Or distSq < 0 Then
+    CentroidDistanceText = "missing or invalid: the squared distance is not finite"
+    On Error GoTo 0
+    Exit Function
+  End If
+  If distSq = 0 Then
+    CentroidDistanceText = NumStr(0)
+    On Error GoTo 0
+    Exit Function
+  End If
+  dist = Sqr(distSq)
+  If Err.Number <> 0 Then
+    CentroidDistanceText = "missing or invalid: the square root raised err " & NumStr(Err.Number)
+    Err.Clear
+    On Error GoTo 0
+    Exit Function
+  End If
+  CentroidDistanceText = NumStr(dist)
   On Error GoTo 0
-  CentroidText = ""
 End Function
