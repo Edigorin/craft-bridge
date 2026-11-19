@@ -1019,15 +1019,203 @@ fn plan_feature57(
             }
             Ok(planned)
         }
-        "fillet" | "chamfer" | "shell" | "draft" | "hole" | "thread" => Ok(unmappable(format!(
+        "fillet" => {
+            // Native solidcraft/57 fillet record (research 12 T1.3/T2):
+            // 3-D picks in `edges`; `edge_names` and `edge_refs` default
+            // to EMPTY at v0.43.0 - a missing field is a default, never a
+            // malformed record. The complete record validates before its
+            // gate, and nothing emits until the P0 AND P1 probes land.
+            let edges_n = match feature.get("edges") {
+                None => 0usize,
+                Some(v) => match v.as_array() {
+                    Some(a) => a.len(),
+                    None => {
+                        return Err(Error::InvalidRecipe(format!(
+                            "fillet {name:?} edges is not an array"
+                        )))
+                    }
+                },
+            };
+            let refs_n = match feature.get("edge_refs") {
+                None => 0usize,
+                Some(v) => match v.as_array() {
+                    Some(a) => {
+                        for (j, e) in a.iter().enumerate() {
+                            if !e.is_object() {
+                                return Err(Error::InvalidRecipe(format!(
+                                    "fillet {name:?} edge_refs[{j}] is not an object"
+                                )));
+                            }
+                        }
+                        a.len()
+                    }
+                    None => {
+                        return Err(Error::InvalidRecipe(format!(
+                            "fillet {name:?} edge_refs is not an array"
+                        )))
+                    }
+                },
+            };
+            if let Some(v) = feature.get("edge_names") {
+                match v.as_array() {
+                    Some(a) => {
+                        for (j, e) in a.iter().enumerate() {
+                            if !e.is_string() {
+                                return Err(Error::InvalidRecipe(format!(
+                                    "fillet {name:?} edge_names[{j}] is not a string"
+                                )));
+                            }
+                        }
+                    }
+                    None => {
+                        return Err(Error::InvalidRecipe(format!(
+                            "fillet {name:?} edge_names is not an array"
+                        )))
+                    }
+                }
+            }
+            Ok(unmappable(format!(
+                "fillet {name:?} ({edges_n} edge pick(s), {refs_n} edge_ref(s)) stops at the phase B seat gate: reference resolution awaits the research 12 P0 body-registry and edge-resolver probes AND the P1 D06 fillet probe (feature-definition readback); no feature is emitted. edge_refs min/max are BODY bounds, never edge identity (research 12 C05), and no stable edge ordinals exist (C04)"
+            )))
+        }
+        "chamfer" | "shell" | "draft" | "hole" | "thread" => Ok(unmappable(format!(
             "{kind} {name:?} carries edge/face references; reference resolution is unpinned until the edge-resolver probe lands (Phase B)"
         ))),
-        "move" | "remove" | "body_transfer" | "align" | "scale" => Ok(unmappable(format!(
+        "move" => {
+            let bodies_n = match feature.get("bodies") {
+                None => 0usize,
+                Some(v) => match v.as_array() {
+                    Some(a) => a.len(),
+                    None => {
+                        return Err(Error::InvalidRecipe(format!(
+                            "move {name:?} bodies is not an array"
+                        )))
+                    }
+                },
+            };
+            if let Some(v) = feature.get("translate") {
+                match v.as_array() {
+                    Some(a) => {
+                        if a.len() != 3 {
+                            return Err(Error::InvalidRecipe(format!(
+                                "move {name:?} translate is not a 3-component expression vector"
+                            )));
+                        }
+                    }
+                    None => {
+                        return Err(Error::InvalidRecipe(format!(
+                            "move {name:?} translate is not a 3-component expression vector"
+                        )))
+                    }
+                }
+            }
+            if let Some(v) = feature.get("copy") {
+                if !v.is_boolean() {
+                    return Err(Error::InvalidRecipe(format!(
+                        "move {name:?} copy is not a boolean"
+                    )));
+                }
+            }
+            if let Some(v) = feature.get("copy_frames") {
+                if !v.is_array() {
+                    return Err(Error::InvalidRecipe(format!(
+                        "move {name:?} copy_frames is not an array"
+                    )));
+                }
+            }
+            for key in ["rotate_axis", "origin"] {
+                if let Some(v) = feature.get(key) {
+                    match v.as_array() {
+                        Some(a) if a.len() == 3 => {}
+                        _ => {
+                            return Err(Error::InvalidRecipe(format!(
+                                "move {name:?} {key} is not a 3-component vector"
+                            )))
+                        }
+                    }
+                }
+            }
+            if let Some(v) = feature.get("angle") {
+                if !(v.is_string() || v.is_number()) {
+                    return Err(Error::InvalidRecipe(format!(
+                        "move {name:?} angle is not an expression"
+                    )));
+                }
+            }
+            Ok(unmappable(format!(
+                "move {name:?} ({bodies_n} bod(y/ies)) stops at the phase B seat gate: the body registry and verified transforms await the research 12 P0 body-registry probe AND the P1 D04 move probe; no feature is emitted. The transform splits into separate translation and rotation features - never mixed in one (research 12 C01) - and arbitrary axis-angle conversion is unprobed (C07)"
+            )))
+        }
+        "remove" => {
+            let bodies_n = match feature.get("bodies") {
+                None => 0usize,
+                Some(v) => match v.as_array() {
+                    Some(a) => a.len(),
+                    None => {
+                        return Err(Error::InvalidRecipe(format!(
+                            "remove {name:?} bodies is not an array"
+                        )))
+                    }
+                },
+            };
+            Ok(unmappable(format!(
+                "remove {name:?} ({bodies_n} bod(y/ies)) stops at the phase B seat gate: the body registry and verified absence await the research 12 P0 body-registry probe AND the P1 D04 remove probe; no feature is emitted. The mapping is the Body-Delete/Keep feature (InsertDeleteBody2(False)) with targeted-absence verification"
+            )))
+        }
+        "body_transfer" | "align" | "scale" => Ok(unmappable(format!(
             "{kind} {name:?} needs the source-body-to-runtime-body registry and verified transforms (Phase B)"
         ))),
-        "combine" => Ok(unmappable(format!(
-            "combine {name:?} needs the source-body-to-runtime-body registry and the merge/scope probe (Phase B)"
-        ))),
+        "combine" => {
+            let op = feature
+                .get("operation")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    Error::InvalidRecipe(format!("combine {name:?} has no operation"))
+                })?;
+            if !["new_body", "join", "cut", "intersect"].contains(&op) {
+                return Err(Error::InvalidRecipe(format!(
+                    "combine {name:?} operation {op:?} is outside the known set (new_body, join, cut, intersect)"
+                )));
+            }
+            let keep = match feature.get("keep_tools") {
+                None => false,
+                Some(v) => match v.as_bool() {
+                    Some(b) => b,
+                    None => {
+                        return Err(Error::InvalidRecipe(format!(
+                            "combine {name:?} keep_tools is not a boolean"
+                        )))
+                    }
+                },
+            };
+            for key in ["target", "tools"] {
+                if let Some(v) = feature.get(key) {
+                    let name_like = match v {
+                        Value::String(_) => true,
+                        Value::Array(a) => a.iter().all(|e| e.is_string()),
+                        _ => false,
+                    };
+                    if !name_like {
+                        return Err(Error::InvalidRecipe(format!(
+                            "combine {name:?} {key} is not a body name or name list"
+                        )));
+                    }
+                }
+            }
+            let mut gate = if op == "new_body" {
+                format!(
+                    "combine {name:?} (operation new_body) stops at the phase B seat gate: new_body is structurally valid but its combine semantics are unsupported - never interpreted as join - awaiting the research 12 P0 body-registry and merge/scope probes AND the P1 D03 join probe; no feature is emitted"
+                )
+            } else {
+                format!(
+                    "combine {name:?} (operation {op}) stops at the phase B seat gate: the source-body-to-runtime-body registry and merge/scope await the research 12 P0 body-registry and merge/scope probes AND the P1 D03 join and D07 cut probes (result identity, tool retention); no feature is emitted"
+                )
+            };
+            if keep {
+                gate.push_str("; source keep_tools=true: COMBINE_KEEP_TOOLS_UNSUPPORTED - the creation contract has no retention parameter (research 12 C03)");
+            }
+            Ok(unmappable(gate))
+        }
         "construction_plane" => {
             // The replayed variant is an offset plane from an origin base
             // (its creation and equation chain are seat-probe-backed).

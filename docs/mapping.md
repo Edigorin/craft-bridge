@@ -109,6 +109,23 @@ end there - see the truth-table row). The guard stays in the macro for a
 zeroed cell: while it reads 0 every primitive step fails with a named
 reason naming its probe and never reports `created`.
 
+## Phase B features (fillet, combine, move, remove) - parsed, validated, gated
+
+Native `solidcraft/57` records validate fail-closed at the loader
+(required vs defaulted fields pinned to v0.43.0: `edge_refs`/`edge_names`
+default empty, `combine.keep_tools` defaults false, `move.copy` defaults
+false and `copy_frames` empty, rotation fields optional; `Operation` is
+`new_body | join | cut | intersect` and unknown values are whole-plan
+refusals) and every one stops at a named per-step seat gate with **no
+emission**. The complete release gate per feature:
+
+| source feature | gate (research 12) | notes |
+|---|---|---|
+| `fillet` | P0 body-registry + edge-resolver probes AND P1 D06 (feature-definition readback) | `edge_refs` min/max are BODY bounds, never edge identity (C05); no stable edge ordinals (C04). Emission target: the `swFmFillet` feature-data builder, not the obsolete `FeatureFillet` family |
+| `combine` | P0 body-registry + merge/scope probes AND P1 D03 join / D07 cut (result identity, tool retention) | `new_body` is structurally valid but its combine semantics are unsupported (never interpreted as join); `keep_tools=true` refuses as `COMBINE_KEEP_TOOLS_UNSUPPORTED` (C03) |
+| `move` | P0 body-registry probe AND P1 D04 move probe | transforms split into separate translation and rotation features - never mixed in one (C01); arbitrary axis-angle conversion unprobed (C07) |
+| `remove` | P0 body-registry probe AND P1 D04 remove probe (verified absence) | mapping is the Body-Delete/Keep feature (InsertDeleteBody2(False)) with targeted-absence verification |
+
 ## Modifications (fillet, chamfer, shell, draft, hole)
 
 Coordinate picks in model millimetres (identity map per the orientation
@@ -119,6 +136,13 @@ chamfer is equal-distance (unequal stops); shell honours the direction field
 drilled (counterbore, countersink, threads, to-object and sketch-point holes
 stop). Feature-call shapes: `FeatureFillet3`, `FeatureChamfer3`,
 `FeatureShell`, `FeatureDraft`, `SimpleHole2` — all checkpoint-pending.
+SUPERSEDED IN PART by research 12 (2026-11-19): the fillet call shape
+moves to the `swFmFillet` feature-data builder
+(`CreateDefinition`/`Initialize`/`CreateFeature`) with mark-1 edge
+selections and `AccessSelections`/`ReleaseSelectionAccess` readback -
+`FeatureFillet3` and the legacy family are obsolete. The modification
+path's emission of `FeatureFillet3` remains checkpoint-pending and is
+subject to the same P0+P1 gate as the native `fillet` feature above.
 
 ## Patterns and mirrors
 

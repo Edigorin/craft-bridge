@@ -1606,3 +1606,314 @@ fn conic_stops_are_snapshot_survivable_and_emit_nothing() {
         assert!(!m.contains(forbidden), "conic emission leaked: {forbidden}");
     }
 }
+
+/// A minimal solidcraft/57 design: one Phase B feature, then a sketch as
+/// the downstream step (the stop-cascade and snapshot paths read it).
+fn phase_design(feature: &str) -> String {
+    format!(
+        r#"{{
+  "format": "solidcraft/57",
+  "units": "mm",
+  "params": [],
+  "features": [
+    {feature},
+    {{
+      "id": 90,
+      "name": "s",
+      "suppressed": false,
+      "type": "sketch",
+      "plane": {{ "type": "origin", "name": "XY" }},
+      "sketch": {{
+        "points": [{{ "id": "p0", "pos": [0.0, 0.0] }}, {{ "id": "p1", "pos": [10.0, 0.0] }}],
+        "curves": [{{ "id": "l1", "type": "line", "a": 0, "b": 1 }}],
+        "constraints": [],
+        "counters": {{ "l": 1, "p": 2 }}
+      }}
+    }}
+  ]
+}}"#
+    )
+}
+
+#[test]
+fn phase_b_features_stop_at_named_seat_gates() {
+    // fillet: the record validates (defaults noted) and stops naming the
+    // research 12 P0 AND P1 gates and the identity gaps
+    let fillet = r#"{ "id": 1, "name": "F", "suppressed": false, "type": "fillet", "edges": [[0,0,0],[1,0,0]], "edge_refs": [{"dir":[0,0,1],"min":[0,0,0],"max":[1,1,1]}] }"#;
+    let steps = plan_of(&phase_design(fillet));
+    assert!(matches!(steps[0].work, Work::Unmappable), "{:?}", steps[0]);
+    for needle in [
+        "2 edge pick(s), 1 edge_ref(s)",
+        "research 12 P0 body-registry and edge-resolver probes",
+        "P1 D06 fillet probe",
+        "no feature is emitted",
+        "BODY bounds, never edge identity (research 12 C05)",
+        "no stable edge ordinals exist (C04)",
+    ] {
+        assert!(
+            steps[0].detail.contains(needle),
+            "{needle}: {}",
+            steps[0].detail
+        );
+    }
+    // move: the transform-split rule and the D04 gate are named
+    let mov = r#"{ "id": 1, "name": "M", "suppressed": false, "type": "move", "bodies": ["b1"], "translate": ["10 mm", "0 mm", "0 mm"] }"#;
+    let steps = plan_of(&phase_design(mov));
+    for needle in [
+        "1 bod(y/ies)",
+        "P1 D04 move probe",
+        "never mixed in one (research 12 C01)",
+        "axis-angle conversion is unprobed (C07)",
+    ] {
+        assert!(
+            steps[0].detail.contains(needle),
+            "{needle}: {}",
+            steps[0].detail
+        );
+    }
+    // remove: the Body-Delete/Keep mapping is named
+    let rm = r#"{ "id": 1, "name": "R", "suppressed": false, "type": "remove", "bodies": ["b1"] }"#;
+    let steps = plan_of(&phase_design(rm));
+    for needle in [
+        "P1 D04 remove probe",
+        "InsertDeleteBody2(False)",
+        "no feature is emitted",
+    ] {
+        assert!(
+            steps[0].detail.contains(needle),
+            "{needle}: {}",
+            steps[0].detail
+        );
+    }
+    // combine: join/cut/intersect share the merge/scope gate
+    for op in ["join", "cut", "intersect"] {
+        let c = format!(
+            r#"{{ "id": 1, "name": "C", "suppressed": false, "type": "combine", "target": "b1", "tools": ["b2"], "operation": "{op}" }}"#
+        );
+        let steps = plan_of(&phase_design(&c));
+        for needle in [
+            "P0 body-registry and merge/scope probes",
+            "P1 D03 join and D07 cut probes",
+        ] {
+            assert!(
+                steps[0].detail.contains(needle),
+                "{op} {needle}: {}",
+                steps[0].detail
+            );
+        }
+    }
+}
+
+#[test]
+fn combine_new_body_is_named_and_never_join() {
+    let c = r#"{ "id": 1, "name": "C", "suppressed": false, "type": "combine", "operation": "new_body" }"#;
+    let steps = plan_of(&phase_design(c));
+    assert!(matches!(steps[0].work, Work::Unmappable));
+    assert!(
+        steps[0].detail.contains("new_body is structurally valid but its combine semantics are unsupported - never interpreted as join"),
+        "{}",
+        steps[0].detail
+    );
+    // keep_tools=true carries its named refusal inside the gate
+    let c = r#"{ "id": 1, "name": "C", "suppressed": false, "type": "combine", "operation": "cut", "keep_tools": true }"#;
+    let steps = plan_of(&phase_design(c));
+    assert!(
+        steps[0].detail.contains("COMBINE_KEEP_TOOLS_UNSUPPORTED"),
+        "{}",
+        steps[0].detail
+    );
+}
+
+#[test]
+fn phase_b_defaulted_fields_are_never_malformed() {
+    // v0.43.0 defaults: edge_refs/edge_names empty, keep_tools false,
+    // copy false, copy_frames empty, rotation fields optional
+    for feature in [
+        r#"{ "id": 1, "name": "F", "suppressed": false, "type": "fillet" }"#,
+        r#"{ "id": 1, "name": "C", "suppressed": false, "type": "combine", "operation": "join" }"#,
+        r#"{ "id": 1, "name": "M", "suppressed": false, "type": "move", "bodies": ["b1"] }"#,
+        r#"{ "id": 1, "name": "R", "suppressed": false, "type": "remove" }"#,
+    ] {
+        let steps = plan_of(&phase_design(feature));
+        assert!(
+            matches!(steps[0].work, Work::Unmappable),
+            "{feature}: {:?}",
+            steps[0]
+        );
+        // the defaulted fillet still reports its zero counts
+        if feature.contains("fillet") {
+            assert!(
+                steps[0].detail.contains("0 edge pick(s), 0 edge_ref(s)"),
+                "{}",
+                steps[0].detail
+            );
+        }
+    }
+}
+
+#[test]
+fn phase_b_malformed_records_refuse_as_invalid_recipe() {
+    for (feature, needle) in [
+        (
+            r#"{ "id": 1, "name": "F", "suppressed": false, "type": "fillet", "edges": 3 }"#,
+            "edges is not an array",
+        ),
+        (
+            r#"{ "id": 1, "name": "F", "suppressed": false, "type": "fillet", "edge_refs": [3] }"#,
+            "edge_refs[0] is not an object",
+        ),
+        (
+            r#"{ "id": 1, "name": "F", "suppressed": false, "type": "fillet", "edge_names": ["e1", 2] }"#,
+            "edge_names[1] is not a string",
+        ),
+        (
+            r#"{ "id": 1, "name": "C", "suppressed": false, "type": "combine" }"#,
+            "has no operation",
+        ),
+        (
+            r#"{ "id": 1, "name": "C", "suppressed": false, "type": "combine", "operation": "explode" }"#,
+            "outside the known set (new_body, join, cut, intersect)",
+        ),
+        (
+            r#"{ "id": 1, "name": "C", "suppressed": false, "type": "combine", "operation": "join", "keep_tools": 3 }"#,
+            "keep_tools is not a boolean",
+        ),
+        (
+            r#"{ "id": 1, "name": "C", "suppressed": false, "type": "combine", "operation": "join", "target": 7 }"#,
+            "target is not a body name or name list",
+        ),
+        (
+            r#"{ "id": 1, "name": "M", "suppressed": false, "type": "move", "bodies": "b1" }"#,
+            "bodies is not an array",
+        ),
+        (
+            r#"{ "id": 1, "name": "M", "suppressed": false, "type": "move", "translate": ["1 mm", "2 mm"] }"#,
+            "translate is not a 3-component expression vector",
+        ),
+        (
+            r#"{ "id": 1, "name": "M", "suppressed": false, "type": "move", "copy": 2 }"#,
+            "copy is not a boolean",
+        ),
+        (
+            r#"{ "id": 1, "name": "M", "suppressed": false, "type": "move", "copy_frames": 1 }"#,
+            "copy_frames is not an array",
+        ),
+        (
+            r#"{ "id": 1, "name": "M", "suppressed": false, "type": "move", "rotate_axis": [1, 0] }"#,
+            "rotate_axis is not a 3-component vector",
+        ),
+        (
+            r#"{ "id": 1, "name": "M", "suppressed": false, "type": "move", "angle": false }"#,
+            "angle is not an expression",
+        ),
+        (
+            r#"{ "id": 1, "name": "R", "suppressed": false, "type": "remove", "bodies": 2 }"#,
+            "bodies is not an array",
+        ),
+    ] {
+        let msg = plan_err(&phase_design(feature));
+        assert!(msg.contains(needle), "{feature}: {msg}");
+    }
+}
+
+#[test]
+fn phase_b_stops_are_snapshot_survivable_and_emit_nothing() {
+    use craft_bridge::profile::SnapshotScope;
+    let fillet =
+        r#"{ "id": 1, "name": "F", "suppressed": false, "type": "fillet", "edges": [[0,0,0]] }"#;
+    let design = phase_design(fillet);
+    // ordinary planning: the stop cascades downstream exactly like the
+    // conic gate (the shared machinery is untouched)
+    let steps = plan_of(&design);
+    assert!(matches!(steps[0].work, Work::Unmappable));
+    assert_eq!(steps[1].status, PlanStatus::NotExecuted);
+    // a boundary snapshot at the stopped step lets planning continue:
+    // an INDEPENDENT downstream step plans normally (dependent steps go
+    // to their fallback builder - the conic test's case)
+    let limits = Limits::default();
+    let value = recipe::validate(design.as_bytes(), &limits).unwrap();
+    let mut snaps = BTreeMap::new();
+    snaps.insert(0usize, SnapshotScope::Boundary);
+    let steps = replay::plan(&value, &limits, &snaps).unwrap();
+    assert!(matches!(steps[0].work, Work::Unmappable));
+    assert_eq!(steps[1].status, PlanStatus::Mapped, "{:?}", steps[1]);
+    // only Boundary unblocks: a final-scope snapshot keeps the stop
+    // cascade (replay termination is the build layer's final-snapshot
+    // machinery - coarse_final_snapshots_terminate_replay)
+    let mut snaps = BTreeMap::new();
+    snaps.insert(0usize, SnapshotScope::Final);
+    let steps = replay::plan(&value, &limits, &snaps).unwrap();
+    assert!(matches!(steps[0].work, Work::Unmappable));
+    assert_eq!(steps[1].status, PlanStatus::NotExecuted, "{:?}", steps[1]);
+    // the built macro carries NO executable phase B feature call - the
+    // release gate requires P0 AND P1 probes before any emission. The
+    // stop text may name the members diagnostically; the assertions are
+    // on executable call shapes.
+    let dir = tempfile::tempdir().unwrap();
+    let recipe_path = dir.path().join("design.json");
+    let step_path = dir.path().join("part.step");
+    let artifact = dir.path().join("design.craftx");
+    let out: PathBuf = dir.path().join("design.swb");
+    fs::write(&recipe_path, &design).unwrap();
+    fs::write(&step_path, STEP_FIXTURE).unwrap();
+    pack::pack(
+        &PackOptions {
+            recipe: &recipe_path,
+            step: &step_path,
+            out: &artifact,
+            warnings: None,
+            name: None,
+            overwrite: false,
+            snapshots: Vec::new(),
+            final_snapshot: None,
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    build::build(
+        &BuildOptions {
+            artifact: &artifact,
+            out: &out,
+            plan: None,
+            plan_text: None,
+            overwrite: true,
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    let m = fs::read_to_string(&out).unwrap();
+    for forbidden in [
+        "FeatureManager.FeatureFillet",
+        "CreateDefinition(swFmFillet",
+        "CreateFeature(",
+        "FeatureManager.InsertCombineFeature",
+        "FeatureManager.InsertMoveCopyBody2",
+        "FeatureManager.InsertDeleteBody2",
+    ] {
+        assert!(
+            !m.contains(forbidden),
+            "phase B emission leaked: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn phase_b_generic_arms_keep_their_texts() {
+    // the neighbouring kinds stay on their established stops
+    let c = r#"{ "id": 1, "name": "H", "suppressed": false, "type": "chamfer" }"#;
+    let steps = plan_of(&phase_design(c));
+    assert!(
+        steps[0].detail.contains("carries edge/face references"),
+        "{}",
+        steps[0].detail
+    );
+    let c = r#"{ "id": 1, "name": "T", "suppressed": false, "type": "body_transfer" }"#;
+    let steps = plan_of(&phase_design(c));
+    assert!(
+        steps[0]
+            .detail
+            .contains("needs the source-body-to-runtime-body registry and verified transforms"),
+        "{}",
+        steps[0].detail
+    );
+}
