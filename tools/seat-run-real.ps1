@@ -45,7 +45,7 @@
 # 5 the run could not complete (runner/checker errors).
 
 param(
-    [Parameter(Mandatory = $true)][string]$Design,
+    [string]$Design,
     [string]$RepoRoot
 )
 $ErrorActionPreference = "Stop"
@@ -437,6 +437,13 @@ function Invoke-RealDesignRun {
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
+    # This file doubles as the library surface (the offline tests
+    # dot-source it, parameterless); as the ENTRYPOINT -Design is
+    # required and a missing design is a named refusal, never a run.
+    if ([string]::IsNullOrEmpty($Design)) {
+        Write-Host "refusing: -Design <name> is required"
+        exit 4
+    }
     try {
         $code = Invoke-RealDesignRun -DesignName $Design -Root $RepoRoot
         exit $code
