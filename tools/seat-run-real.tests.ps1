@@ -152,11 +152,11 @@ Check "a changed macro needs re-approval" $threw "no throw"
 # ---- acceptance: real designs REQUIRE the full verdict set, passing ----
 $fullPass = @("check:mass=pass", "check:mass_vs_reference=pass", "check:step_reference=pass", "check:bodies=pass", "check:placement=pass", "check:ref_close=pass")
 Check "the full passing verdict set is accepted" ((Test-RealAcceptance -Checks $fullPass) -eq "") "reason given"
-Check "mass_vs_reference=skipped is refused (real designs always compare)" ((Test-RealAcceptance -Checks @($fullPass | Where-Object { $_ -ne "check:mass_vs_reference=pass" }) + @("check:mass_vs_reference=skipped")) -ne "") "accepted"
-Check "mass_vs_reference=fail is refused" ((Test-RealAcceptance -Checks @($fullPass | Where-Object { $_ -ne "check:mass_vs_reference=pass" }) + @("check:mass_vs_reference=fail")) -ne "") "accepted"
+Check "mass_vs_reference=skipped is refused (real designs always compare)" ((Test-RealAcceptance -Checks (@($fullPass | Where-Object { $_ -ne "check:mass_vs_reference=pass" }) + @("check:mass_vs_reference=skipped"))) -ne "") "accepted"
+Check "mass_vs_reference=fail is refused" ((Test-RealAcceptance -Checks (@($fullPass | Where-Object { $_ -ne "check:mass_vs_reference=pass" }) + @("check:mass_vs_reference=fail"))) -ne "") "accepted"
 Check "a missing companion verdict is refused" ((Test-RealAcceptance -Checks @("check:mass=pass", "check:mass_vs_reference=pass")) -ne "") "accepted"
 Check "a duplicate verdict is refused" ((Test-RealAcceptance -Checks ($fullPass + @("check:mass=pass"))) -ne "") "accepted"
-Check "a non-passing companion verdict is refused" ((Test-RealAcceptance -Checks @($fullPass | Where-Object { $_ -ne "check:placement=pass" }) + @("check:placement=fail")) -ne "") "accepted"
+Check "a non-passing companion verdict is refused" ((Test-RealAcceptance -Checks (@($fullPass | Where-Object { $_ -ne "check:placement=pass" }) + @("check:placement=fail"))) -ne "") "accepted"
 Check "a failed check elsewhere still refuses" ((Test-RealAcceptance -Checks ($fullPass + @("check:tree_count=fail"))) -ne "") "accepted"
 
 # ---- the runtime report gate (finding 7) ----
