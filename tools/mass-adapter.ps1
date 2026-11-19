@@ -214,10 +214,17 @@ try {
         $stage = "doc[$i] <$t>: GetMassProperties2 status"
         if ($status -ne 0) { Fail $Out "doc[$i] <$t>: GetMassProperties2 status is $status" }
         $stage = "doc[$i] <$t>: GetMassProperties2 shape"
-        if ($flat -isnot [double[]] -and $flat -isnot [object[]]) { Fail $Out "doc[$i] <$t>: the flat mass array has an unsupported shape (got $($flat.GetType().FullName))" }
-        if ($flat.Rank -ne 1 -or $flat.GetLowerBound(0) -ne 0 -or $flat.Length -ne 12) { Fail $Out "doc[$i] <$t>: the flat mass array is not a zero-based length-12 vector" }
+        $flatType = $flat.GetType().FullName
+        if ($flat -isnot [double[]] -and $flat -isnot [object[]]) { Fail $Out "doc[$i] <$t>: the flat mass array has an unsupported shape (type $flatType)" }
+        # documented layout: 12 doubles (center 3, volume, area, mass,
+        # inertia 6); the sibling legacy member returns 13 - both keep
+        # volume at index 3. Anything else is refused WITH its measured
+        # shape (the qualification protocol).
+        if ($flat.Rank -ne 1 -or $flat.GetLowerBound(0) -ne 0 -or ($flat.Length -ne 12 -and $flat.Length -ne 13)) {
+            Fail $Out "doc[$i] <$t>: the flat mass array shape is not the documented vector (type $flatType, rank $($flat.Rank), lb $($flat.GetLowerBound(0)), length $($flat.Length))"
+        }
         foreach ($fv in $flat) {
-            if ($fv -isnot [double]) { Fail $Out "doc[$i] <$t>: a flat mass component is not a Double value" }
+            if ($fv -isnot [double]) { Fail $Out "doc[$i] <$t>: a flat mass component is not a Double value (type $flatType)" }
         }
         $stage = "doc[$i] <$t>: cross-check values"
         for ($k = 0; $k -lt 3; $k++) {
