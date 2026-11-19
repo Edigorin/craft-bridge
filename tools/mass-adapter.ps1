@@ -64,11 +64,20 @@ function Fail([string]$Path, [string]$Reason) {
     exit 5
 }
 
-function Com-Call($obj, [string]$name) {
-    # Force DISPATCH_METHOD on an untyped COM return: PowerShell's binder
-    # can mistake a 0-arg method for a property and index the result
-    # (DISP_E_BADINDEX at $doc.GetTitle() - qualification evidence).
-    return $obj.GetType().InvokeMember($name, [System.Reflection.BindingFlags]::InvokeMethod, $null, $obj, @())
+# Typed COM access through the interop metadata (MethodInfo/PropertyInfo
+# Invoke), which QIs the RCW by IID: immune to both failure classes the
+# qualification produced - PowerShell's binder mistaking a 0-arg method
+# for a property (DISP_E_BADINDEX at $doc.GetTitle()), and the language
+# cast refusing a LoadFrom interop identity ("Cannot convert
+# System.__ComObject to ISldWorks").
+function T-Method($t, $obj, [string]$name, $callArgs) {
+    return $t.GetMethod($name).Invoke($obj, $callArgs)
+}
+function T-Get($t, $obj, [string]$name) {
+    return $t.GetProperty($name).GetValue($obj, @())
+}
+function T-Set($t, $obj, [string]$name, $v) {
+    $t.GetProperty($name).SetValue($obj, $v, @())
 }
 
 function Format-Invariant([double]$V) {
@@ -136,22 +145,26 @@ try {
     }
     $stage = "typed application creation"
     $sw = New-Object SolidWorks.Interop.sldworks.SldWorksClass
+    $tSw = [SolidWorks.Interop.sldworks.ISldWorks]
+    $tDoc = [SolidWorks.Interop.sldworks.IModelDoc2]
+    $tExt = [SolidWorks.Interop.sldworks.IModelDocExtension]
+    $tMp = [SolidWorks.Interop.sldworks.IMassProperty]
     $useUnits = $true
     $crossTol = 1E-9   # project choice: cross-check tolerance in metres
 
     # ---- unique, exact document matching by complete enumeration ----
     $found = @{}
     $stage = "doc walk: GetFirstDocument"
-    $doc = $sw.GetFirstDocument()
+    $doc = T-Method $tSw $sw "GetFirstDocument" @()
     while ($null -ne $doc) {
         $stage = "doc walk: GetTitle"
-        $t = [string](Com-Call $doc "GetTitle")
+        $t = [string](T-Method $tDoc $doc "GetTitle" @())
         if ($titles -contains $t) {
             if ($found.ContainsKey($t)) { Fail $Out "the title <$t> matches more than one open document" }
             $found[$t] = $doc
         }
         $stage = "doc walk: GetNext"
-        $doc = Com-Call $doc "GetNext"
+        $doc = T-Method $tDoc $doc "GetNext" @()
     }
     $stage = "doc match check"
     foreach ($t in $titles) {
@@ -165,25 +178,27 @@ try {
     $stage = "start"
     foreach ($t in $titles) {
         $stage = "doc[$i] <$t>: Extension"
-        $ext = $found[$t].Extension
+        $ext = T-Get $tDoc $found[$t] "Extension"
         $stage = "doc[$i] <$t>: CreateMassProperty"
-        $mp = Com-Call $ext "CreateMassProperty"
+        $mp = T-Method $tExt $ext "CreateMassProperty" @()
         if ($null -eq $mp) { Fail $Out "doc[$i] <$t>: CreateMassProperty returned null" }
         $stage = "doc[$i] <$t>: UseSystemUnits set"
-        $mp.UseSystemUnits = $useUnits
+        T-Set $tMp $mp "UseSystemUnits" $useUnits
 
         $stage = "doc[$i] <$t>: CenterOfMass get"
-        $raw = $mp.CenterOfMass
+        $raw = T-Get $tMp $mp "CenterOfMass"
         $triple = Get-Triple $raw "doc[$i] <$t> CenterOfMass"
         $stage = "doc[$i] <$t>: Volume get"
-        $vol = [double]$mp.Volume
+        $vol = [double](T-Get $tMp $mp "Volume")
         if ([double]::IsNaN($vol) -or [double]::IsInfinity($vol)) { Fail $Out "doc[$i] <$t>: the volume is not finite" }
         if ($vol -le 0) { Fail $Out "doc[$i] <$t>: the volume is not positive" }
 
         # cross-check against the documented flat 12-double array
         [int]$status = 0
         $stage = "doc[$i] <$t>: GetMassProperties2 call"
-        $flat = $ext.GetMassProperties2(1, [ref]$status, $false)
+        $callArgs = @([object]1, [object]0, [object]$false)
+        $flat = T-Method $tExt $ext "GetMassProperties2" $callArgs
+        $status = [int]$callArgs[1]
         $stage = "doc[$i] <$t>: GetMassProperties2 status"
         if ($status -ne 0) { Fail $Out "doc[$i] <$t>: GetMassProperties2 status is $status" }
         $stage = "doc[$i] <$t>: GetMassProperties2 shape"
