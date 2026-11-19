@@ -259,3 +259,40 @@ tools 2; operation constants 15903/15902/15901).
   a swallowed error under `On Error Resume Next`. tools/check-part.vbs
   used `Val` in the `dim:` expect path - now the logic module's
   `ParsePeriod`. The tooling tests pin the ban list.
+
+
+## 2026-11-19 - session wedges, macro-invocation fatigue, and the guarded restart
+
+SolidWorks's VBA layer wedges while COM stays alive: the window reports
+Responding=True and COM reads answer (revision, document walks), but
+RunMacro/RunMacro2 fail for every macro ("invocation returned: failure",
+run-macro.vbs exit 6) and `ISldWorks.ExitApp` silently does nothing. A
+modal dialog on the instance produces the same signature. Observed
+twice; the second instance matched a CUMULATIVE pattern: roughly 20-25
+macro invocations in one session before invocation starts failing.
+
+Operating rules pinned (synthetic tooling behavior):
+
+1. **Restart the session before each long macro sequence** (harness
+   qualification runs, multi-item work). Budget roughly 20-25 macro
+   invocations per session.
+2. **Never launch seat work while a restart task is running** - poll the
+   restart until it settles and `craft-swalive` (the probe-ckcompile
+   smoke) reports Last Result 0. A harness launched mid-restart failed
+   every item.
+3. `craft-swalive` is the macro-execution health signal (0 = macros
+   run). `craft-swrestart` only LAUNCHES SolidWorks; it cannot clear a
+   wedged instance.
+4. **Guarded force-restart** (owner-authorized 2026-11-19): verify zero
+   open documents (COM walk; the count is also suspect while wedged, so
+   re-verify immediately before), Stop-Process, relaunch via
+   craft-swrestart, verify with craft-swalive. Never kill with documents
+   open - that is the owner's decision.
+5. After a forced termination, the fresh instance may sit behind a
+   startup/recovery dialog that blocks macros: the owner dismisses it.
+
+And the process rule that cost a debugging round: **every
+check-part-logic.vbs change runs the cscript fixture suite on the seat
+before any further seat work** - an off-by-one in the adapter parser
+would have been caught by the fixtures on their first run; source pins
+alone are insufficient (the review said exactly this).

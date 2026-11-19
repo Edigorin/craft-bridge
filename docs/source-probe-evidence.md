@@ -255,6 +255,42 @@ GetMassProperties2[0..2]); the checker keeps every verdict and validates
 the adapter's text strictly. All default-property/.Value coercion is
 gone from the acquisition path (research 10/11's rule).
 
+## 2026-11-19 - typed mass-adapter qualification (synthetic fixtures)
+
+Synthetic only: the corpus comparison fixtures (corpus/box-compare and
+corpus/box-compare-shifted - independently authored box recipes, 30x20x10
+mm, known centroid (15,10,5) mm; the shifted reference is the same box
+translated +20 mm X). Measured on the seat through the checker ->
+mass-adapter path:
+
+- **CenterOfMass marshaling (final answer):** the typed interop metadata
+  path returns `System.Object[]` of BOXED `System.Double` values; the
+  VBScript wire shows `VT_ARRAY|VT_R8` (VarType 8197). The accepted
+  contract is exact rank-one, zero-based, length-three vectors with
+  strictly Double elements (double[] or boxed-Double Variant arrays);
+  every other element type is a named refusal. The original `double[]`
+  hypothesis is formally revised (research 11's revise clause).
+- **PowerShell COM binding traps, both named:** the language cast of an
+  RCW to an interop interface refuses when the assembly came from
+  LoadFrom ("Cannot convert System.__ComObject to ISldWorks"), and
+  PowerShell's binder mistakes a 0-arg method on an untyped COM return
+  for a property then indexes it (DISP_E_BADINDEX at GetTitle - which
+  VBScript's combined method/property flags mask, explaining the
+  checker's working `d.GetTitle`). The reliable path is invocation
+  through the interop metadata (MethodInfo/PropertyInfo Invoke, QI by
+  IID).
+- **GetMassProperties2** (Accuracy, ByRef Status, UseSelected) is
+  callable through the metadata path with the ByRef status traveling in
+  the Invoke args array; its flat mass vector carries the documented
+  twelve-double layout (thirteen accepted as the legacy sibling variant;
+  volume at index 3 in both).
+- **Fixture discriminator proven end to end:** box-compare reports
+  `centroid distance 0 m` placement=pass with the full verdict set green;
+  box-compare-shifted reports `centroid distance 0.02 m ... past the
+  0.0001 m tolerance` placement=fail and nothing else fails. A
+  defaulted-zero-triple adapter would wrongly pass the shifted case, so
+  the pair qualifies the acquisition.
+
 ## 2026-11-17 - `fixed: true` + `exprs` is creatable through the MCP
 
 Source-confirmed earlier (nested-schema research [S38]); the design
