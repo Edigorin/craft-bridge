@@ -86,6 +86,7 @@ function Get-Triple([object]$Raw, [string]$Tag) {
 }
 
 try {
+    $stage = "request parse"
     # ---- the request (single-line titles; nothing executable) ----
     if (-not (Test-Path -LiteralPath $Request)) { Fail $Out "the request file is missing" }
     $lines = @(Get-Content -LiteralPath $Request)
@@ -102,6 +103,7 @@ try {
 
     # ---- application-instance handshake (the checker computed the same
     # identity; exactly one SolidWorks process must exist) ----
+    $stage = "process handshake"
     $procs = @(Get-Process -Name "SLDWORKS" -ErrorAction SilentlyContinue)
     if ($procs.Count -ne 1) { Fail $Out "ambiguous SolidWorks process identity ($($procs.Count) processes)" }
     $pid1 = [string]$procs[0].Id
@@ -116,6 +118,7 @@ try {
     # fallback) and create the COM object THROUGH its interop type - the
     # same typed chain a compiled C# helper would use. Get-Triple below
     # stays the runtime qualification gate on every array that arrives.
+    $stage = "interop assembly load"
     $dllName = "SolidWorks.Interop.sldworks"
     $loaded = $false
     try { [void][System.Reflection.Assembly]::Load($dllName); $loaded = $true } catch { }
@@ -124,21 +127,26 @@ try {
         if (-not (Test-Path -LiteralPath $dll)) { Fail $Out "the SolidWorks interop assembly is missing" }
         [void][System.Reflection.Assembly]::LoadFrom($dll)
     }
+    $stage = "typed application creation"
     $sw = New-Object SolidWorks.Interop.sldworks.SldWorksClass
     $useUnits = $true
     $crossTol = 1E-9   # project choice: cross-check tolerance in metres
 
     # ---- unique, exact document matching by complete enumeration ----
     $found = @{}
+    $stage = "doc walk: GetFirstDocument"
     $doc = $sw.GetFirstDocument()
     while ($null -ne $doc) {
+        $stage = "doc walk: GetTitle"
         $t = $doc.GetTitle()
         if ($titles -contains $t) {
             if ($found.ContainsKey($t)) { Fail $Out "the title <$t> matches more than one open document" }
             $found[$t] = $doc
         }
+        $stage = "doc walk: GetNext"
         $doc = $doc.GetNext()
     }
+    $stage = "doc match check"
     foreach ($t in $titles) {
         if (-not $found.ContainsKey($t)) { Fail $Out "the title <$t> matches no open document" }
     }
