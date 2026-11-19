@@ -662,7 +662,7 @@ Function AdapterResponse(ByVal exitCode, ByVal timedOut, ByVal rawText, ByVal ti
   End If
   ' titles: exact, and in the requested order
   tA = Mid(lines(LBound(lines) + 3), Len("adapter:doc[0].title=") + 1)
-  tB = Mid(lines(LBound(lines) + 10), Len("adapter:doc[1].title=") + 1)
+  tB = Mid(lines(LBound(lines) + 9), Len("adapter:doc[1].title=") + 1)
   If tA <> titleA Then
     AdapterResponse = "the adapter response title for document 0 is <" & tA & ">, expected <" & titleA & ">"
     Exit Function
@@ -689,19 +689,19 @@ Function AdapterResponse(ByVal exitCode, ByVal timedOut, ByVal rawText, ByVal ti
     AdapterResponse = "the adapter cz for document 0 is not a bounded finite number"
     Exit Function
   End If
-  If Not AdapterValue(lines(LBound(lines) + 11), vB2) Then
+  If Not AdapterValue(lines(LBound(lines) + 10), vB2) Then
     AdapterResponse = "the adapter volume for document 1 is not a bounded finite number"
     Exit Function
   End If
-  If Not AdapterValue(lines(LBound(lines) + 12), xB2) Then
+  If Not AdapterValue(lines(LBound(lines) + 11), xB2) Then
     AdapterResponse = "the adapter cx for document 1 is not a bounded finite number"
     Exit Function
   End If
-  If Not AdapterValue(lines(LBound(lines) + 13), yB2) Then
+  If Not AdapterValue(lines(LBound(lines) + 12), yB2) Then
     AdapterResponse = "the adapter cy for document 1 is not a bounded finite number"
     Exit Function
   End If
-  If Not AdapterValue(lines(LBound(lines) + 14), zB2) Then
+  If Not AdapterValue(lines(LBound(lines) + 13), zB2) Then
     AdapterResponse = "the adapter cz for document 1 is not a bounded finite number"
     Exit Function
   End If
