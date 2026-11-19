@@ -64,6 +64,13 @@ function Fail([string]$Path, [string]$Reason) {
     exit 5
 }
 
+function Com-Call($obj, [string]$name) {
+    # Force DISPATCH_METHOD on an untyped COM return: PowerShell's binder
+    # can mistake a 0-arg method for a property and index the result
+    # (DISP_E_BADINDEX at $doc.GetTitle() - qualification evidence).
+    return $obj.GetType().InvokeMember($name, [System.Reflection.BindingFlags]::InvokeMethod, $null, $obj, @())
+}
+
 function Format-Invariant([double]$V) {
     # round-trippable, always period-decimal
     return $V.ToString("G17", [System.Globalization.CultureInfo]::InvariantCulture)
@@ -138,13 +145,13 @@ try {
     $doc = $sw.GetFirstDocument()
     while ($null -ne $doc) {
         $stage = "doc walk: GetTitle"
-        $t = $doc.GetTitle()
+        $t = [string](Com-Call $doc "GetTitle")
         if ($titles -contains $t) {
             if ($found.ContainsKey($t)) { Fail $Out "the title <$t> matches more than one open document" }
             $found[$t] = $doc
         }
         $stage = "doc walk: GetNext"
-        $doc = $doc.GetNext()
+        $doc = Com-Call $doc "GetNext"
     }
     $stage = "doc match check"
     foreach ($t in $titles) {
@@ -157,12 +164,10 @@ try {
     $i = 0
     $stage = "start"
     foreach ($t in $titles) {
-        $stage = "doc[$i] <$t>: cast to IModelDoc2"
-        $typed = [SolidWorks.Interop.sldworks.IModelDoc2]$found[$t]
         $stage = "doc[$i] <$t>: Extension"
-        $ext = [SolidWorks.Interop.sldworks.IModelDocExtension]$typed.Extension
+        $ext = $found[$t].Extension
         $stage = "doc[$i] <$t>: CreateMassProperty"
-        $mp = $ext.CreateMassProperty()
+        $mp = Com-Call $ext "CreateMassProperty"
         if ($null -eq $mp) { Fail $Out "doc[$i] <$t>: CreateMassProperty returned null" }
         $stage = "doc[$i] <$t>: UseSystemUnits set"
         $mp.UseSystemUnits = $useUnits
@@ -179,6 +184,7 @@ try {
         [int]$status = 0
         $stage = "doc[$i] <$t>: GetMassProperties2 call"
         $flat = $ext.GetMassProperties2(1, [ref]$status, $false)
+        $stage = "doc[$i] <$t>: GetMassProperties2 status"
         if ($status -ne 0) { Fail $Out "doc[$i] <$t>: GetMassProperties2 status is $status" }
         $stage = "doc[$i] <$t>: GetMassProperties2 shape"
         if ($flat -isnot [double[]]) { Fail $Out "doc[$i] <$t>: the flat mass array is not a Double() (got $($flat.GetType().FullName))" }
