@@ -29,7 +29,7 @@ Dim refDoc, refTitle, importErrDesc, importData, ok, n, dsc
 Dim report(300), reportN
 Dim solidsText, sheetsText, volRaw, volErr, mp, bodiesArr, sheetsArr
 Dim usRaw, mp2, recalcRaw, statusVar, arr2
-Dim body0, bmRaw, bmErr, bi, bv, be, j, jv, je, w
+Dim body0, bmRaw, bmErr, bi, bv, be, j, jv, je, w, it
 Dim cnt2, isOurs, closeErr
 
 reportN = 0
@@ -99,10 +99,10 @@ On Error GoTo 0
 Emit "probe:pre_enumeration=err " & NumStr(preErr)
 If preErr <> 0 Then
   Emit "probe:verdict=refused (the ownership enumeration failed; nothing imported)"
-  GoTo Finish
 End If
 
 ' ---- import the committed synthetic box (the proven check-part shape) ----
+If preErr = 0 Then
 Set refDoc = Nothing
 importErrDesc = ""
 Err.Clear
@@ -155,8 +155,8 @@ End If
 If refDoc Is Nothing Then
   Emit "probe:import=fail " & importErrDesc
   Emit "probe:verdict=refused (the synthetic fixture did not import)"
-  GoTo Finish
 End If
+If Not refDoc Is Nothing Then
 Emit "probe:import=pass title <" & refTitle & ">"
 
 ' ---- the geometry gate: one solid and positive volume FIRST ----
@@ -466,9 +466,10 @@ If n = 0 Then
     Emit "probe:getmassproperties2_for_each=count " & NumStr(cnt2)
   End If
 End If
+End If
+End If
 
 ' ---- verified close of exactly the opened document ----
-Finish:
 If refDoc Is Nothing Then
   Emit "probe:close=skipped (no document opened)"
 Else
