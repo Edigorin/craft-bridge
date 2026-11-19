@@ -581,13 +581,15 @@ Function AdapterResponse(ByVal exitCode, ByVal timedOut, ByVal rawText, ByVal ti
     Exit Function
   End If
   If exitCode <> 0 Then
-    AdapterResponse = "the adapter exited " & NumStr(exitCode) & " (a failure response never publishes values)"
+    AdapterResponse = "the adapter exited " & NumStr(exitCode) & " (a failure response never publishes values): " & AdapterFailureReason(rawText)
     Exit Function
   End If
   If Len(rawText) > 16384 Then
     AdapterResponse = "the adapter response is oversized"
     Exit Function
   End If
+  ' a failure response keeps its named reason: surface it (it publishes
+  ' no values either way)
   ' the writer terminates the last line; a single trailing newline is
   ' transport, not a record
   If Right(rawText, 2) = vbCrLf Then rawText = Left(rawText, Len(rawText) - 2)
@@ -712,6 +714,23 @@ Function AdapterResponse(ByVal exitCode, ByVal timedOut, ByVal rawText, ByVal ti
   cyB = yB2
   czB = zB2
   AdapterResponse = ""
+End Function
+
+' The adapter's own named reason from a failure response ("adapter:status=
+' failed <reason>"), bounded and best-effort: "" when there is none.
+Function AdapterFailureReason(ByVal rawText)
+  Dim lines, i, line
+  AdapterFailureReason = ""
+  lines = Split(rawText, vbCrLf)
+  If UBound(lines) - LBound(lines) + 1 > 64 Then Exit Function
+  For i = LBound(lines) To UBound(lines)
+    line = lines(i)
+    If Len(line) > 512 Then Exit Function
+    If Left(line, Len("adapter:status=failed ")) = "adapter:status=failed " Then
+      AdapterFailureReason = Mid(line, Len("adapter:status=failed ") + 1)
+      Exit Function
+    End If
+  Next
 End Function
 
 ' One adapter number: the "key=" prefix is stripped by the caller's

@@ -215,6 +215,7 @@ End Function
 Check "a complete adapter response publishes both triples", (AdapterTry(0, False, GoodResponse()) And volA = 0.000006 And cxA = 0.015 And czB = 0.005 And cxB = -0.015), why
 Check "an unresolved timeout is named and publishes nothing", ((Not AdapterTry(0, True, GoodResponse())) And InStr(1, why, "timed out") > 0 And cxA = 0 And volA = 0), why
 Check "a nonzero exit despite a sentinel publishes nothing", ((Not AdapterTry(1, False, GoodResponse())) And InStr(1, why, "exited 1") > 0 And cxA = 0), why
+Check "a failure response surfaces the adapter's own reason", ((Not AdapterTry(5, False, "adapter:status=failed interop assembly missing" & vbCrLf & "adapter:end" & vbCrLf)) And InStr(1, why, "interop assembly missing") > 0), why
 Check "a failed status response is refused named", ((Not AdapterTry(0, False, WithLine(GoodResponse(), "adapter:status=ok", "adapter:status=failed boom"))) And InStr(1, why, "not a success response") > 0), why
 Check "a missing final sentinel is refused", ((Not AdapterTry(0, False, WithLine(GoodResponse(), "adapter:end", "adapter:tail=oops"))) And InStr(1, why, "sentinel") > 0), why
 Check "trailing data after the sentinel is refused", (Not AdapterTry(0, False, GoodResponse() & "adapter:extra=1" & vbCrLf)), why

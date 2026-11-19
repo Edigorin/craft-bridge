@@ -108,11 +108,23 @@ try {
     if ($pid1 -ne $ExpectedPid) { Fail $Out "the SolidWorks process identity changed (expected $ExpectedPid, found $pid1)" }
 
     # ---- the typed interop chain (qualified at runtime) ----
-    $dll = "C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\api\redist\SolidWorks.Interop.sldworks.dll"
-    if (-not (Test-Path -LiteralPath $dll)) { Fail $Out "the SolidWorks interop assembly is missing" }
-    [void][System.Reflection.Assembly]::LoadFrom($dll)
-    $swRaw = New-Object -ComObject SldWorks.Application
-    $sw = [SolidWorks.Interop.sldworks.ISldWorks]$swRaw
+    # The late-bound RCW cast proved unreliable on this seat (a LoadFrom
+    # interop identity does not associate with the COM object's type
+    # information: "Cannot convert System.__ComObject to ISldWorks").
+    # The documented typed path is the interop COCLASS creation: load the
+    # assembly by display name (the GAC primary interop assembly, redist
+    # fallback) and create the COM object THROUGH its interop type - the
+    # same typed chain a compiled C# helper would use. Get-Triple below
+    # stays the runtime qualification gate on every array that arrives.
+    $dllName = "SolidWorks.Interop.sldworks"
+    $loaded = $false
+    try { [void][System.Reflection.Assembly]::Load($dllName); $loaded = $true } catch { }
+    if (-not $loaded) {
+        $dll = "C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\api\redist\$dllName.dll"
+        if (-not (Test-Path -LiteralPath $dll)) { Fail $Out "the SolidWorks interop assembly is missing" }
+        [void][System.Reflection.Assembly]::LoadFrom($dll)
+    }
+    $sw = New-Object SolidWorks.Interop.sldworks.SldWorksClass
     $useUnits = $true
     $crossTol = 1E-9   # project choice: cross-check tolerance in metres
 
