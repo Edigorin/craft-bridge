@@ -1,0 +1,52 @@
+{
+  "about": {
+    "design": "Box Compare",
+    "format": "solidcraft/53",
+    "replay": "craft-bridge build",
+    "version": "0.40.0-rc.4"
+  },
+  "commands": [
+    {
+      "command": "timeline.add",
+      "params": {
+        "feature": {
+          "corner": [
+            "0",
+            "0",
+            "0"
+          ],
+          "height": "10 mm",
+          "id": 1,
+          "length": "30 mm",
+          "name": "Block",
+          "operation": "new_body",
+          "param_names": [
+            "d1",
+            "d2",
+            "d3"
+          ],
+          "suppressed": false,
+          "type": "box",
+          "width": "20 mm"
+        },
+        "params": [
+          {
+            "expression": "30 mm",
+            "name": "d1",
+            "unit": "mm"
+          },
+          {
+            "expression": "20 mm",
+            "name": "d2",
+            "unit": "mm"
+          },
+          {
+            "expression": "10 mm",
+            "name": "d3",
+            "unit": "mm"
+          }
+        ]
+      }
+    }
+  ]
+}

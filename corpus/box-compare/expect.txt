@@ -1,0 +1,6 @@
+sha256=a54cbe0b94d6c38f1da98e4b6c6788754b6e51b0507468ab52afde8849351bd7
+min_features=2
+ref_bodies=1
+volume_tol=0.001
+volume_tol_abs=0.000000001
+placement_tol=0.0001
