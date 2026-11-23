@@ -237,47 +237,6 @@ End Function
 ' candidate (1e-6 - the 10x10x10 box). The second candidate's volume
 ' equals the control's, so identify by POSITION: the control is the
 ' body whose centroid is farthest from the target's.
-Function IdentifyJoinBodies(ByVal tag As String, ByRef targetBody As Object, ByRef ctrlBody As Object, ByRef secondBody As Object, ByRef vT As Double, ByRef vC As Double, ByRef vS As Double, ByVal twoCandidates As Boolean) As Boolean
-    Dim bs As Variant, i As Long, n As Long
-    Dim bv As Double, cc(0 To 2, 0 To 2) As Double, have(0 To 2) As Boolean
-    Dim d0 As Double, d1 As Double
-    IdentifyJoinBodies = False
-    Err.Clear
-    bs = PartDocBodies()
-    If Err.Number <> 0 Or Not IsArray(bs) Then Exit Function
-    n = UBound(bs) - LBound(bs) + 1
-    If twoCandidates And n <> 3 Then
-        gFailures = gFailures & tag & ": join fixture built " & Trim(Str(n)) & " bodies, expected 3; "
-        Exit Function
-    End If
-    If (Not twoCandidates) And n <> 2 Then
-        gFailures = gFailures & tag & ": join fixture built " & Trim(Str(n)) & " bodies, expected 2; "
-        Exit Function
-    End If
-    For i = LBound(bs) To UBound(bs)
-        bv = BodyVolume(bs(i))
-        If Abs(bv - 0.000006) <= 0.000006 * 0.000001 Then
-            Set targetBody = bs(i): vT = bv: Call BodyCentroid(bs(i), cc(0, 0), cc(0, 1), cc(0, 2)): have(0) = True
-        ElseIf have(1) = False Then
-            Set ctrlBody = bs(i): vC = bv: Call BodyCentroid(bs(i), cc(1, 0), cc(1, 1), cc(1, 2)): have(1) = True
-        Else
-            Set secondBody = bs(i): vS = bv: Call BodyCentroid(bs(i), cc(2, 0), cc(2, 1), cc(2, 2)): have(2) = True
-        End If
-    Next
-    If targetBody Is Nothing Or ctrlBody Is Nothing Then Exit Function
-    If twoCandidates Then
-        If secondBody Is Nothing Then Exit Function
-        ' the control is the far one from the target: swap if needed
-        d0 = PtDist(cc(0, 0), cc(0, 1), cc(0, 2), cc(1, 0), cc(1, 1), cc(1, 2))
-        d1 = PtDist(cc(0, 0), cc(0, 1), cc(0, 2), cc(2, 0), cc(2, 1), cc(2, 2))
-        If d0 < d1 Then
-            Dim tmpB As Object, tmpV As Double
-            Set tmpB = ctrlBody: Set ctrlBody = secondBody: Set secondBody = tmpB
-            tmpV = vC: vC = vS: vS = tmpV
-        End If
-    End If
-    IdentifyJoinBodies = True
-End Function
 
 ' Body selection with an explicit mark: the documented body selection
 ' members (IBody2.Select2(append, mark); the Select form as the
@@ -303,6 +262,76 @@ End Function
 ' The body enumeration through its DOCUMENTED owner: IPartDoc.GetBodies2
 ' (research 12 [S12] - ModelDoc2 does not carry it; typed VBA refuses the
 ' call otherwise). Returns the Variant of Body2 array or Empty.
+Function PartDocBodies() As Variant
+    Dim pd As Object
+    On Error Resume Next
+    PartDocBodies = Empty
+    Set pd = swDoc
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    PartDocBodies = pd.GetBodies2(0, False)
+End Function
+
+Function BodyVolume(ByVal b As Object) As Double
+    Dim v As Variant
+    BodyVolume = -1
+    Err.Clear
+    v = b.GetMassProperties(1000#)
+    If Err.Number <> 0 Then Exit Function
+    If Not IsArray(v) Then Exit Function
+    If UBound(v) < 3 Then Exit Function
+    If v(3) <> v(3) Then Exit Function
+    BodyVolume = v(3)
+End Function
+
+Sub BodyCentroid(ByVal b As Object, ByRef cx As Double, ByRef cy As Double, ByRef cz As Double)
+    Dim v As Variant
+    cx = 0: cy = 0: cz = 0
+    Err.Clear
+    v = b.GetMassProperties(1000#)
+    If Err.Number <> 0 Then Exit Sub
+    If Not IsArray(v) Then Exit Sub
+    If UBound(v) < 2 Then Exit Sub
+    cx = v(0): cy = v(1): cz = v(2)
+End Sub
+
+Function PtDist(ByVal x1 As Double, ByVal y1 As Double, ByVal z1 As Double, ByVal x2 As Double, ByVal y2 As Double, ByVal z2 As Double) As Double
+    PtDist = Sqr((x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2) + (z1 - z2) * (z1 - z2))
+End Function
+
+' Close THIS case's part with the verified-close discipline. An
+' uncertain close aborts the battery (the fold-in: stop on uncertain
+' cleanup).
+Sub CloseCasePart(ByVal tag As String)
+    Dim closedOk As Boolean
+    Dim cleanupMode As String
+    cleanupMode = CloseMode()
+    If cleanupMode = "close" Then
+        CloseOwnedDoc closedOk
+        If Not closedOk Then gAbort = "uncertain cleanup after " & tag & "; the battery stops"
+    Else
+        gAbort = "the close mode is not close-after-run (" & cleanupMode & ") after " & tag & "; the battery stops"
+    End If
+    Set swDoc = Nothing
+    Set swFeatMgr = Nothing
+    Set swSketchMgr = Nothing
+End Sub
+
+Function CountOpenDocuments() As Long
+    Dim d As Object, n As Long
+    On Error Resume Next
+    CountOpenDocuments = -1
+    n = 0
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Function
+    Do While Not d Is Nothing
+        n = n + 1
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Function
+    Loop
+    CountOpenDocuments = n
+End Function
 
 ' ===================== shared skeleton helpers =====================
 ' (reused verbatim from the probe-dimkind skeleton)
