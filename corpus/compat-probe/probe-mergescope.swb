@@ -162,12 +162,14 @@ Sub RunBooleanCase(ByVal idx As Long, ByVal op As String, ByVal form As String)
         Exit Sub
     End If
     If Not BuildThreeBoxes(tag) Then
-        gAbort = "fixture construction failed for " & tag & "; the battery stops"
+        gFailures = gFailures & tag & ": fixture construction failed (recorded); "
+        WriteStep idx, "fixture." & tag, "failed", "fixture construction failed"
         CloseCasePart tag
         Exit Sub
     End If
     If Not IdentifyBodies(tag, bodyA, bodyB, bodyC, vA, vB, vC, dAB, dAC, dBC) Then
-        gAbort = "fixture verification failed for " & tag & "; the battery stops"
+        gFailures = gFailures & tag & ": fixture verification failed (recorded); "
+        WriteStep idx, "fixture." & tag, "failed", "fixture verification failed"
         CloseCasePart tag
         Exit Sub
     End If
@@ -208,10 +210,14 @@ Sub RunBooleanCase(ByVal idx As Long, ByVal op As String, ByVal form As String)
         swDoc.ClearSelection2 True
         Set sd = swDoc.SelectionManager.CreateSelectData
         If op = "cut" Then
+            ' cut: target with mark 1, tool with mark 2
             ok = SelectBody(bodyA, False, 1, sd, tag)
             If ok Then ok = SelectBody(bodyB, True, 2, sd, tag)
         Else
-            ok = SelectBody(bodyA, False, 1, sd, tag)
+            ' add/intersect: no main body exists - every operand is a
+            ' TOOL (mark 2), the empirical companion to the documented
+            ' MainBody=Nothing rule
+            ok = SelectBody(bodyA, False, 2, sd, tag)
             If ok Then ok = SelectBody(bodyB, True, 2, sd, tag)
         End If
         If Not ok Then
