@@ -150,6 +150,10 @@ Sub main()
         gAbort = "uncertain cleanup after reopen; the battery stops"
         GoTo Finish
     End If
+    ' drop the closed handle: the finish-path close must be a NO-OP on
+    ' the already-verified-closed document (a stale handle would make
+    ' its title-based check refuse a second time)
+    Set swDoc = Nothing
     openCount = CountOpenDocuments()
     If openCount <> 0 Then
         gAbort = "uncertain cleanup: " & Trim(Str(openCount)) & " document(s) remain open"
