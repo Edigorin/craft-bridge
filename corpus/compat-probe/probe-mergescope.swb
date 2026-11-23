@@ -52,6 +52,7 @@ Dim swSketchMgr As SketchManager
 Dim reportPath As String
 Dim gFailures As String
 Dim gAbort As String
+Dim gSelectForm As String
 
 Sub main()
     Dim stepIdx As Long
@@ -215,16 +216,20 @@ Sub RunBooleanCase(ByVal idx As Long, ByVal op As String, ByVal form As String)
         End If
         If Not ok Then
             gFailures = gFailures & tag & ": body selection failed (COMBINE_FAILED); "
+            WriteStep idx, "select." & tag, "failed", "body selection failed via " & gSelectForm
             CloseCasePart tag
             Exit Sub
         End If
+        WriteStep idx, "select." & tag, "ok", "body selection via " & gSelectForm
         Set cf = swFeatMgr.InsertCombineFeature(opCode, Nothing, emptyArr)
     End If
     If cf Is Nothing Then
         gFailures = gFailures & tag & ": InsertCombineFeature returned nothing (COMBINE_FAILED); "
+        WriteStep idx, "combine." & tag, "failed", "InsertCombineFeature returned nothing (COMBINE_FAILED)"
         CloseCasePart tag
         Exit Sub
     End If
+    WriteStep idx, "combine." & tag, "ok", "form " & form & " created the combine feature"
 
     ' ---- operand readback under the selection-access protocol (SM3/SM2) ----
     readOp = -1: readCount = -1: readMain = 0
@@ -541,18 +546,29 @@ End Function
 ' members (IBody2.Select2(append, mark); the Select form as the
 ' fallback) - both attempts recorded in the tag on failure.
 Function SelectBody(ByVal b As Object, ByVal append As Boolean, ByVal mark As Long, ByVal sd As Object, ByVal tag As String) As Boolean
+    ' The documented signatures (reflected): Select2(Append, SelectData)
+    ' carries the mark in the SelectData; Select(Append, Mark) is the
+    ' legacy form. The current form first, the legacy second - each
+    ' attempt guarded, the working form recorded.
     Dim ok As Boolean
     SelectBody = False
-    sd.Mark = mark
+    gSelectForm = "none"
     Err.Clear
-    ok = b.Select2(append, mark)
-    If Err.Number = 0 And ok Then
-        SelectBody = True
-        Exit Function
+    sd.Mark = mark
+    If Err.Number = 0 Then
+        ok = b.Select2(append, sd)
+        If Err.Number = 0 And ok Then
+            SelectBody = True
+            gSelectForm = "Select2(append, SelectData)"
+            Exit Function
+        End If
     End If
     Err.Clear
     ok = b.Select(append, mark)
-    If Err.Number = 0 And ok Then SelectBody = True
+    If Err.Number = 0 And ok Then
+        SelectBody = True
+        gSelectForm = "Select(append, mark)"
+    End If
 End Function
 
 ' Per-body volume and centroid through IBody2.GetMassProperties(density):
