@@ -59,10 +59,17 @@ Sub main()
     reportPath = ReportPathFromHost()
     If reportPath = "" Then Err.Raise vbObjectError + 513, "probe-mergescope.swb", "no report path"
     StartReport
-    WriteLine "{""type"":""header"",""macro"":""probe-mergescope variantH"",""bridge_version"":""0.1.0""}"
+    WriteLine "{""type"":""header"",""macro"":""probe-mergescope variantI"",""bridge_version"":""0.1.0""}"
     Set swApp = Application.SldWorks
-    WriteStep 0, "variantH", "ok", "all helpers compiled; main executed"
-    WriteStep 1, "probe-verdict", "ok", "variant H of the bisect"
+    WriteStep 0, "variantI", "ok", "RunBooleanCase compiled; running one case"
+    RunBooleanCase 1, "add", "array"
+    If gAbort <> "" Then
+        WriteStep 2, "probe-verdict", "failed", gAbort
+    ElseIf gFailures = "" Then
+        WriteStep 2, "probe-verdict", "ok", "variant I: one add-array case met its expectations"
+    Else
+        WriteStep 2, "probe-verdict", "failed", gFailures
+    End If
     WriteLine "{""type"":""summary"",""status"":""ok""}"
     Exit Sub
 Fail:
@@ -296,6 +303,145 @@ Sub BodyCentroid(ByVal b As Object, ByRef cx As Double, ByRef cy As Double, ByRe
     If Not IsArray(v) Then Exit Sub
     If UBound(v) < 2 Then Exit Sub
     cx = v(0): cy = v(1): cz = v(2)
+End Sub
+
+Sub RunBooleanCase(ByVal idx As Long, ByVal op As String, ByVal form As String)
+    Dim tag As String
+    Dim bodyA As Object, bodyB As Object, bodyC As Object
+    Dim vA As Double, vB As Double, vC As Double
+    Dim dAB As Double, dAC As Double, dBC As Double
+    Dim overlap As Double, expMain As Double, expCount As Long
+    Dim opCode As Long, expRead As Long
+    Dim afterBodies As Variant, i As Long
+    Dim mergedVol As Double, ctrlVol As Double, mergedCount As Long
+    Dim cf As SldWorks.Feature, ok As Boolean
+    Dim readOp As Long, readCount As Long, readMain As Long
+    Dim toolsArr As Variant
+    Dim emptyArr As Variant, sd As Object
+    Dim cfd As Object
+    Dim bv As Double
+    tag = op & "-" & form
+
+    If Not NewFixturePart(tag) Then
+        gAbort = "fixture construction failed for " & tag & "; the battery stops"
+        Exit Sub
+    End If
+    If Not BuildThreeBoxes(tag) Then
+        gAbort = "fixture construction failed for " & tag & "; the battery stops"
+        CloseCasePart tag
+        Exit Sub
+    End If
+    If Not IdentifyBodies(tag, bodyA, bodyB, bodyC, vA, vB, vC, dAB, dAC, dBC) Then
+        gAbort = "fixture verification failed for " & tag & "; the battery stops"
+        CloseCasePart tag
+        Exit Sub
+    End If
+    ' fixture gate: volumes AND centroid distances must match the drawn
+    ' fixture before any expectation is interpreted
+    If Abs(vA - 0.000006) > 0.000006 * 0.000001 Or Abs(vB - 0.000004) > 0.000004 * 0.000001 Or Abs(vC - 0.000001) > 0.000001 * 0.000001 Then
+        gFailures = gFailures & tag & ": fixture volumes wrong (" & SafeNum(vA) & "," & SafeNum(vB) & "," & SafeNum(vC) & "); "
+        CloseCasePart tag
+        Exit Sub
+    End If
+    If Abs(dAB - 0.01) > 0.000001 Or Abs(dAC - 0.026925824) > 0.000001 Or Abs(dBC - 0.032015621) > 0.000001 Then
+        gFailures = gFailures & tag & ": fixture centroid distances wrong (" & SafeNum(dAB) & "," & SafeNum(dAC) & "," & SafeNum(dBC) & "); "
+        CloseCasePart tag
+        Exit Sub
+    End If
+    WriteStep idx, "fixture." & tag, "ok", "volumes 6e-6/4e-6/1e-6, distances 0.01/0.026925824/0.032015621 verified"
+
+    overlap = 0.000003
+    Select Case op
+        Case "add": opCode = 15903: expRead = 0: expMain = vA + vB - overlap: expCount = 2
+        Case "cut": opCode = 15902: expRead = 1: expMain = vA - overlap: expCount = 2
+        Case "intersect": opCode = 15901: expRead = 2: expMain = overlap: expCount = 2
+    End Select
+
+    ' ---- the combine, in exactly one form ----
+    Set cf = Nothing
+    Err.Clear
+    If form = "array" Then
+        If op = "cut" Then
+            toolsArr = Array(bodyB)
+            Set cf = swFeatMgr.InsertCombineFeature(opCode, bodyA, toolsArr)
+        Else
+            toolsArr = Array(bodyA, bodyB)
+            Set cf = swFeatMgr.InsertCombineFeature(opCode, Nothing, toolsArr)
+        End If
+    Else
+        emptyArr = Array()
+        swDoc.ClearSelection2 True
+        Set sd = swDoc.SelectionManager.CreateSelectData
+        If op = "cut" Then
+            ok = SelectBody(bodyA, False, 1, sd, tag)
+            If ok Then ok = SelectBody(bodyB, True, 2, sd, tag)
+        Else
+            ok = SelectBody(bodyA, False, 1, sd, tag)
+            If ok Then ok = SelectBody(bodyB, True, 2, sd, tag)
+        End If
+        If Not ok Then
+            gFailures = gFailures & tag & ": body selection failed (COMBINE_FAILED); "
+            CloseCasePart tag
+            Exit Sub
+        End If
+        Set cf = swFeatMgr.InsertCombineFeature(opCode, Nothing, emptyArr)
+    End If
+    If cf Is Nothing Then
+        gFailures = gFailures & tag & ": InsertCombineFeature returned nothing (COMBINE_FAILED); "
+        CloseCasePart tag
+        Exit Sub
+    End If
+
+    ' ---- operand readback under the selection-access protocol (SM3/SM2) ----
+    readOp = -1: readCount = -1: readMain = 0
+    Err.Clear
+    Set cfd = cf.GetDefinition
+    If Err.Number = 0 And Not cfd Is Nothing Then
+        If cfd.AccessSelections(swDoc, Nothing) Then
+            readOp = cfd.OperationType
+            readCount = cfd.GetBodiesToCombineCount
+            If Not cfd.MainBody Is Nothing Then readMain = 1
+            cfd.ReleaseSelectionAccess
+        Else
+            gFailures = gFailures & tag & ": AccessSelections refused (COMBINE_FAILED); "
+        End If
+    Else
+        gFailures = gFailures & tag & ": no combine feature definition (COMBINE_FAILED); "
+    End If
+    WriteStep idx, "definition." & tag, "ok", "readback OperationType=" & Trim(Str(readOp)) & " bodies=" & Trim(Str(readCount)) & " mainbody=" & Trim(Str(readMain))
+    If readOp <> expRead Then
+        gFailures = gFailures & tag & ": enum-family pairing wrong (creation " & Trim(Str(opCode)) & " readback " & Trim(Str(readOp)) & " expected " & Trim(Str(expRead)) & "); "
+    End If
+    If op = "cut" And readMain <> 1 Then
+        gFailures = gFailures & tag & ": cut definition carries no MainBody (COMBINE_WRONG_TARGET); "
+    End If
+
+    ' ---- post-state: counts, volumes, control invariance (SM4) ----
+    mergedVol = 0: ctrlVol = 0: mergedCount = 0
+    afterBodies = swDoc.GetBodies2(0, False)
+    If IsArray(afterBodies) Then
+        mergedCount = UBound(afterBodies) - LBound(afterBodies) + 1
+        For i = LBound(afterBodies) To UBound(afterBodies)
+            bv = BodyVolume(afterBodies(i))
+            If Abs(bv - vC) <= vC * 0.000001 Then
+                ctrlVol = ctrlVol + bv
+            Else
+                mergedVol = mergedVol + bv
+            End If
+        Next
+    End If
+    WriteStep idx, "result." & tag, "ok", "bodies=" & Trim(Str(mergedCount)) & " merged=" & SafeNum(mergedVol) & " control=" & SafeNum(ctrlVol)
+    If mergedCount <> expCount Then
+        gFailures = gFailures & tag & ": body count " & Trim(Str(mergedCount)) & " expected " & Trim(Str(expCount)) & " (COMBINE_SCOPE_MISMATCH); "
+    End If
+    If Abs(mergedVol - expMain) > expMain * 0.000001 Then
+        gFailures = gFailures & tag & ": result volume " & SafeNum(mergedVol) & " expected " & SafeNum(expMain) & " (COMBINE_WRONG_TARGET); "
+    End If
+    If Abs(ctrlVol - vC) > vC * 0.000001 Then
+        gFailures = gFailures & tag & ": control body changed (" & SafeNum(ctrlVol) & " vs " & SafeNum(vC) & ") (COMBINE_SCOPE_MISMATCH); "
+    End If
+
+    CloseCasePart tag
 End Sub
 
 Function PtDist(ByVal x1 As Double, ByVal y1 As Double, ByVal z1 As Double, ByVal x2 As Double, ByVal y2 As Double, ByVal z2 As Double) As Double
