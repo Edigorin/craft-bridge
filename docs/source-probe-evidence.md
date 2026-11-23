@@ -331,8 +331,19 @@ in every case):
   invariant); Merge=False yields a separate new body (count 3); with TWO
   touched candidates and UseFeatScope=False, the merge COALESCES every
   touched body into one result (only untouched controls stay separate) -
-  the measured semantics research 12 left open. The scoped variant
-  (UseFeatScope=True) answers the target-selectivity question directly.
+  the measured semantics research 12 left open. The scoped variant (UseFeatScope=True with
+  auto-select) coalesces IDENTICALLY: target-selectivity must come from
+  which geometry the profile touches (or explicit scope-body selection,
+  the P1 follow-up). The plaque's reliefs touch only their backing - the
+  proven single-target case.
+
+Battery verdict (the reviewed postconditions): the marks form carries
+correct operation, target identity, volume, count and untouched
+controls in every case; the enum families pair correctly; the join
+semantics are established. The array form's named outcome is the
+required form-comparison finding. P0 merge/scope: SATISFIED (P0 body
+registry, edge-resolver and expression placement remain; the P1 probes
+gate emission together with P0).
 
 The probe also recorded two compile-layer lessons for hand-written probe
 VBA: typed VBA rejects `ModelDoc2.GetBodies2` (it is `IPartDoc`'s -
