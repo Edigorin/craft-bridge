@@ -314,7 +314,10 @@ Function BuildDrivenBox(ByRef posIdx As Long, ByRef widIdx As Long) As Boolean
     gPhase = "build: fix the origin"
     ' the rect from the carried corner
     rectSegs = swSketchMgr.CreateCornerRectangle(0.015, 0#, 0#, 0.035, 0.015, 0#)
-    If rectSegs Is Nothing Then Exit Function
+    ' CreateCornerRectangle returns an ARRAY of segments: Is Nothing on
+    ' an array raises 424 - the array shape is the check
+    If Not IsArray(rectSegs) Then Exit Function
+    If UBound(rectSegs) < 0 Then Exit Function
     gPhase = "build: share the corner"
     ' share the corner: the rect's first line start == the carrier end
     swDoc.ClearSelection2 True
@@ -366,7 +369,7 @@ Function BuildDrivenBox(ByRef posIdx As Long, ByRef widIdx As Long) As Boolean
     swSketchMgr.InsertSketch True
     swDoc.ClearSelection2 True
     ok = False
-    If Not rectSegs Is Nothing Then ok = rectSegs(0).Select(False)
+    ok = rectSegs(0).Select(False)
     If ok = False Then ok = swDoc.Extension.SelectByID2(nm, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If ok = False Then Exit Function
     Err.Clear
