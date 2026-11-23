@@ -17,6 +17,7 @@ const MASS_ADAPTER: &str = include_str!("../tools/mass-adapter.ps1");
 const PROBE_MERGESCOPE: &str = include_str!("../corpus/compat-probe/probe-mergescope.swb");
 const PROBE_EXPRPLACEMENT: &str = include_str!("../corpus/compat-probe/probe-exprplacement.swb");
 const CLEANUP_STRAYS: &str = include_str!("../corpus/compat-probe/cleanup-strays.swb");
+const PROBE_EDGERESOLVER: &str = include_str!("../corpus/compat-probe/probe-edgeresolver.swb");
 
 // ---- the decision logic, mirrored ----
 // Mirrors tools/check-part-logic.vbs exactly; the pins below tie the two
@@ -1006,6 +1007,55 @@ fn expr_placement_probe_carries_its_contract() {
             && PROBE_EXPRPLACEMENT.contains("Set swDoc = Nothing")
             && PROBE_EXPRPLACEMENT.contains("every path closes the document"),
         "the probe lost its ownership discipline"
+    );
+}
+
+#[test]
+fn edge_resolver_probe_carries_its_contract() {
+    // the supported runner envelope
+    assert!(
+        PROBE_EDGERESOLVER.contains("WriteStep")
+            && PROBE_EDGERESOLVER.contains("summary"),
+        "the probe does not write the runner envelope"
+    );
+    // the terminal verdict after the verified cleanup
+    let clean = PROBE_EDGERESOLVER
+        .find("cleanup")
+        .expect("no cleanup step");
+    let verdict = PROBE_EDGERESOLVER
+        .find("exactly one edge matches the geometric query")
+        .expect("no terminal verdict");
+    assert!(clean < verdict, "the verdict is not written after cleanup");
+    // the named refusals from the research 12 P0 row
+    for name in [
+        "EDGE_NOT_FOUND",
+        "EDGE_AMBIGUOUS",
+        "PERSIST_RESOLVE_FAILED",
+        "EDGE_WRONG_BODY",
+    ] {
+        assert!(
+            PROBE_EDGERESOLVER.contains(name),
+            "missing named refusal {name}"
+        );
+    }
+    // identity is established by entity re-measurement, never byte
+    // equality
+    assert!(
+        PROBE_EDGERESOLVER.contains("never compared")
+            && PROBE_EDGERESOLVER.contains("entity re-measurement"),
+        "the probe lost its no-byte-equality discipline"
+    );
+    // the persistent-reference chain and its status check
+    assert!(
+        PROBE_EDGERESOLVER.contains("GetPersistReference3")
+            && PROBE_EDGERESOLVER.contains("GetObjectByPersistReference3")
+            && PROBE_EDGERESOLVER.contains("garbage"),
+        "the probe lost its persistent-reference chain"
+    );
+    // the ambiguous twin query is a real refusal test (expected 2)
+    assert!(
+        PROBE_EDGERESOLVER.contains("the ambiguous twin query resolved to ONE edge"),
+        "the probe lost its ambiguous negative"
     );
 }
 

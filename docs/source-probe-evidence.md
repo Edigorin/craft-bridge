@@ -424,3 +424,60 @@ refuses entirely if any saved document is open) restores the clean-session
 precondition; probes themselves never close documents they did not open.
 (5) the finish-path close must drop its handle (`Set swDoc = Nothing`) or
 the ownership check refuses a second time on the stale handle.
+
+## probe-edgeresolver (P0 4/4, SATISFIED 2026-11-23) — seat evidence
+
+Verdict run `probe-verdict ok` (task craft-probe-edgeresolver, commit
+edcbe1a; seat report probe-edgeresolver/runtime-report.jsonl). Fixture: a
+30x10x10 mm main box (3e-6 m3) whose four long edges are near-identical
+twins, plus a 10x10x10 mm control body (1e-6 m3, analytic centroid
+distance 0.04 m). Geometric matcher: endpoints via the reflected
+IEdge.GetStartVertex/GetEndVertex + IVertex.GetPoint chain, length 1e-6 m,
+|direction dot| > 0.999 (orientation-free), pick-point-to-segment distance
+6 mm, candidates restricted to the volume-fingerprinted target body.
+
+- **ER1 exactly one match**: the unique query resolves the intended edge
+  (endpoints 0/0/0 -> 0/.03/0) at baseline and after the supported
+  rebuild (-> 0/.04/0). EDGE_NOT_FOUND / EDGE_AMBIGUOUS are the named
+  refusals; the lowest index is never chosen.
+- **ER2 the ambiguous twin query refuses**: a pick point equidistant
+  (5 mm) from two twin long edges matches exactly 2 candidates and the
+  resolver refuses to choose (EDGE_AMBIGUOUS enforced).
+- **ER3 persistent-reference round-trip**: GetPersistReference3 capture
+  (shape recorded: vartype 8209 = VT_ARRAY|VT_UI1, 365 bytes - recorded
+  only, NEVER compared as a raw equality oracle), GetObjectByPersist-
+  Reference3 resolve with the status code checked (0 = Ok), identity
+  established by re-measuring the resolved entity's geometry. The
+  garbage-reference negative refuses with status 1
+  (swPersistReferencedObject_Invalid = PERSIST_RESOLVE_FAILED as
+  required). The baseline reference SURVIVES the upstream dimension edit
+  (30->40 mm) and resolves to the UPDATED geometry (length .04) on the
+  fingerprinted body.
+- **ER4 checked body ownership**: the matched and the resolved edge both
+  carry IEdge.GetBody fingerprints of the target body at every step
+  (EDGE_WRONG_BODY named).
+
+Consequence: the Phase B edge resolver contract (research 12 P0 row, T1)
+holds on this seat for this form: geometric matching with a hard
+exactly-one rule, refusal on ambiguity, and persistent references that
+survive supported rebuilds with entity-test identity. Pierre's fillet
+gate (P1 D06) can build on this.
+
+### Iteration lessons (edge probe)
+
+- IVertex's point getter is `GetPoint` (returns Object/array).
+  `GetPoint3` does not exist (438). Reflection against
+  `api\redist\SolidWorks.Interop.sldworks.dll` (LoadFrom path used by
+  mass-adapter.ps1) settles member names before the seat run - the
+  interop is not loadable by assembly NAME in a scheduled task.
+- `Err.Clear` + `Err.Number` checks do NOT catch raises unless the
+  procedure carries its own `On Error Resume Next`: without it a raise
+  propagates to the caller's handler and the checks never run. Every
+  helper that inspects Err.Number must own its error context.
+- The default part template's first plane maps sketch (u,v) to model
+  (y,x) on this seat: model-space queries must follow the MEASURED frame.
+  The fixture gate now pins both body centroids individually so a
+  template change fails loudly at the gate.
+- Reflected IEdge surface confirms GetStartVertex/GetEndVertex/GetBody/
+  GetCurve/GetCurveParams2/3/GetClosestPointOn (GetClosestPointOn is
+  available for pick-point matching in production code).
