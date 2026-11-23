@@ -15,6 +15,8 @@ const RUNNER_TESTS: &str = include_str!("../tools/seat-run-real.tests.ps1");
 const LOGIC_TESTS: &str = include_str!("../tools/check-part-logic.tests.vbs");
 const MASS_ADAPTER: &str = include_str!("../tools/mass-adapter.ps1");
 const PROBE_MERGESCOPE: &str = include_str!("../corpus/compat-probe/probe-mergescope.swb");
+const PROBE_EXPRPLACEMENT: &str = include_str!("../corpus/compat-probe/probe-exprplacement.swb");
+const CLEANUP_STRAYS: &str = include_str!("../corpus/compat-probe/cleanup-strays.swb");
 
 // ---- the decision logic, mirrored ----
 // Mirrors tools/check-part-logic.vbs exactly; the pins below tie the two
@@ -948,5 +950,79 @@ fn merge_scope_probe_carries_its_contract() {
         PROBE_MERGESCOPE.contains("AccessSelections")
             && PROBE_MERGESCOPE.contains("ReleaseSelectionAccess"),
         "the operand readback lost its selection-access protocol"
+    );
+}
+
+#[test]
+fn expr_placement_probe_carries_its_contract() {
+    // the supported runner envelope
+    assert!(
+        PROBE_EXPRPLACEMENT.contains("WriteStep")
+            && PROBE_EXPRPLACEMENT.contains("summary"),
+        "the probe does not write the runner envelope"
+    );
+    // the terminal verdict after the verified cleanup
+    let clean = PROBE_EXPRPLACEMENT
+        .find("cleanup")
+        .expect("no cleanup step");
+    let verdict = PROBE_EXPRPLACEMENT
+        .find("probe-verdict\", \"ok\", \"placement is parametric")
+        .expect("no terminal verdict");
+    assert!(clean < verdict, "the verdict is not written after cleanup");
+    // the three evidence questions as named outcomes
+    for name in ["PLACEMENT_NOT_PARAMETRIC", "DEPENDENCY_LOST"] {
+        assert!(
+            PROBE_EXPRPLACEMENT.contains(name),
+            "missing named outcome {name}"
+        );
+    }
+    // the dependency test is REAL: save, verified close, reopen, and an
+    // independent edit afterwards
+    assert!(
+        PROBE_EXPRPLACEMENT.contains("SaveAs3")
+            && PROBE_EXPRPLACEMENT.contains("OpenDoc6")
+            && PROBE_EXPRPLACEMENT.contains("edit.post-reopen"),
+        "the probe lost its save/reopen dependency test"
+    );
+    // every edit verifies edited AND unedited quantities (the control
+    // body fingerprint and both driven dims)
+    assert!(
+        PROBE_EXPRPLACEMENT.contains("the control body changed")
+            && PROBE_EXPRPLACEMENT.contains("the size dim is")
+            && PROBE_EXPRPLACEMENT.contains("the placement dim is"),
+        "the probe does not verify the unedited quantities"
+    );
+    // the equation layer is the emitter's own discipline (stored text
+    // read back), not an assumed write
+    assert!(
+        PROBE_EXPRPLACEMENT.contains("eqMgr.Add(-1,")
+            && PROBE_EXPRPLACEMENT.contains("reads back differently"),
+        "the equation layer lost its readback discipline"
+    );
+    // ownership across the save-time title change; every path closes its
+    // document (fixture failures included)
+    assert!(
+        PROBE_EXPRPLACEMENT.contains("CloseOwnedDoc")
+            && PROBE_EXPRPLACEMENT.contains("Set swDoc = Nothing")
+            && PROBE_EXPRPLACEMENT.contains("every path closes the document"),
+        "the probe lost its ownership discipline"
+    );
+}
+
+#[test]
+fn cleanup_strays_macro_carries_its_safety_contract() {
+    // it closes ONLY exact observed titles and ONLY when unsaved
+    assert!(
+        CLEANUP_STRAYS.contains("Part46")
+            && CLEANUP_STRAYS.contains("Part49")
+            && CLEANUP_STRAYS.contains("GetPathName"),
+        "the cleanup macro lost its narrow target set"
+    );
+    // it refuses entirely if any saved document is open (the owner's
+    // work is never touched)
+    assert!(
+        CLEANUP_STRAYS.contains("a SAVED document is open; refusing")
+            && CLEANUP_STRAYS.contains("the owner's work must never be touched"),
+        "the cleanup macro lost its saved-document refusal"
     );
 }

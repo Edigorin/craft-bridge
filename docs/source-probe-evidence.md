@@ -361,3 +361,66 @@ correctly, closing open issue 3 of the nested-schema research for these
 cases (saved `pos` matches `exprs` evaluation in the delivered files -
 though stale-pos remains possible in general per [S34]-[S36], and the
 loader's expr-wins rule covers it).
+
+## probe-exprplacement (P0 3/4, SATISFIED 2026-11-23) — seat evidence
+
+Verdict run `probe-verdict ok` (task craft-probe-exprplacement, commit
+3b19114; seat report probe-exprplacement/runtime-report.jsonl). Fixture: a
+carried-corner box (carrier line from the FIXED sketch origin to the rect
+corner, corner shared via sgCOINCIDENT, carrier marked construction
+geometry) with two equation-driven globals (`"myPos" = 15mm` driving the
+carrier-length placement dim, `"myW" = 20mm` driving the rect-width size
+dim, both via the emitter's `eqMgr.Add(-1, ...)` discipline with stored-text
+readback), plus a static 10x10x10 mm control body. Fixture gate verified
+volumes 3e-6 / 1e-6 m3 and analytic centroid distance 0.034003676 m.
+
+- **EP1 placement is parametric**: `myPos` 15mm->25mm moves the body
+  (D1=.025 exact); the size dim D2=.02, driven volume 3e-6 and the control
+  all invariant. A static coordinate snapshot is refuted.
+- **EP2 size edits are isolated**: `myW` 20mm->30mm -> D2=.03, volA
+  4.5e-6 exact; D1 stays .025; control invariant.
+- **EP3 the dependency survives save/close/reopen**: after the reopen an
+  INDEPENDENT placement edit (`myPos` 25mm->20mm) still drives D1=.02 with
+  D2=.03 and volA 4.5e-6 invariant. (DEPENDENCY_LOST is refuted for this
+  form.)
+
+Named outcomes implemented: PLACEMENT_NOT_PARAMETRIC, DEPENDENCY_LOST.
+Consequence: the Phase B expression layer may treat primitive placement as
+parametric for equation-driven placement parameters in this form; Pierre's
+first blocker (research 12 P0 row, cross-report observation C) is cleared.
+
+### Probe-iteration lessons (VBA/COM on the seat)
+
+- `CreateCornerRectangle` returns an ARRAY of segments: `Set` on it is
+  type mismatch (13), and `Is Nothing` on an array raises 424. Use a plain
+  Variant assignment and `IsArray` guards.
+- A line-segment select "succeeds" as an extrude profile selection but
+  hands FeatureExtrusion2 no contour (it returns Nothing): the profile is
+  the SKETCH (the sketch object or SelectByID2 fallback).
+- A stray non-construction line in the profile sketch gives the profile
+  detector two contours and the extrude finds none. Carrier lines must be
+  construction geometry (`seg.ConstructionGeometry = True`).
+- `InsertSketch` toggles: after dimension/constraint/equation operations
+  the sketch may already be closed; a blind close RE-OPENS an empty sketch.
+  Guard every close (`If Not ActiveSketch Is Nothing Then`).
+- Two `Dim sk` lines in one procedure = Name redefined = module-load
+  failure; blind string replaces must be asserted and the dup scan run.
+- Equation edits (`eqMgr.Equation(idx) = text`) work and read back
+  verbatim, matching the emitter's discipline.
+
+### Shared-session hygiene (the phantom-document case)
+
+The probe's cleanup walk counted four documents mid-run that no external
+PowerShell walk could see: real unsaved PartDoc fixtures of FAILED probe
+runs (before their finish-path close existed). Root causes and rules now
+in force: (1) `New-Object ...SldWorksClass` in a scheduled PowerShell task
+does NOT see the macro's instance (the binder-attach trap, same family as
+the mass-adapter saga) - only the in-process VBA walk is authoritative;
+(2) concurrent probe instances must never share a save target - every run
+saves to a timestamped path; (3) launches are strictly serialized (one
+macro at a time, wait for the report); (4) `corpus/compat-probe/cleanup-
+strays.swb` (committed, narrow: exact observed titles, unsaved-only,
+refuses entirely if any saved document is open) restores the clean-session
+precondition; probes themselves never close documents they did not open.
+(5) the finish-path close must drop its handle (`Set swDoc = Nothing`) or
+the ownership check refuses a second time on the stale handle.
