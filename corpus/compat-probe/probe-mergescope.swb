@@ -84,15 +84,19 @@ Sub main()
     ' ---- join-extrude cases (SM5; the plaque's gate) ----
     If gAbort = "" Then
         stepIdx = stepIdx + 1
-        RunJoinExtrudeCase stepIdx, "join-merge-into-target", True, False
+        RunJoinExtrudeCase stepIdx, "join-merge-into-target", True, False, False
     End If
     If gAbort = "" Then
         stepIdx = stepIdx + 1
-        RunJoinExtrudeCase stepIdx, "new-body-no-merge", False, False
+        RunJoinExtrudeCase stepIdx, "new-body-no-merge", False, False, False
     End If
     If gAbort = "" Then
         stepIdx = stepIdx + 1
-        RunJoinExtrudeCase stepIdx, "join-two-candidates", True, True
+        RunJoinExtrudeCase stepIdx, "join-two-candidates", True, True, False
+    End If
+    If gAbort = "" Then
+        stepIdx = stepIdx + 1
+        RunJoinExtrudeCase stepIdx, "join-two-candidates-scoped", True, True, True
     End If
 
     ' ---- final cleanup: the leave-no-documents rule, verified ----
@@ -298,7 +302,7 @@ End Sub
 ' with Merge=True the material outside the target (10x10x10 = 1000 mm3)
 ' must land in exactly one body; with Merge=False a new body appears.
 ' ================================================================
-Sub RunJoinExtrudeCase(ByVal idx As Long, ByVal tag As String, ByVal mergeFlag As Boolean, ByVal twoCandidates As Boolean)
+Sub RunJoinExtrudeCase(ByVal idx As Long, ByVal tag As String, ByVal mergeFlag As Boolean, ByVal twoCandidates As Boolean, ByVal useScope As Boolean)
     Dim targetBody As Object, ctrlBody As Object, secondBody As Object
     Dim vT As Double, vC As Double, vS As Double
     Dim expCount As Long, afterBodies As Variant, i As Long
@@ -333,7 +337,7 @@ Sub RunJoinExtrudeCase(ByVal idx As Long, ByVal tag As String, ByVal mergeFlag A
     If ok = False Then ok = swDoc.Extension.SelectByID2(skName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If ok = False Then GoTo JoinFixtureFail
     Err.Clear
-    Set feat = swFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.02, 0#, False, False, False, False, 0#, 0#, False, False, False, False, mergeFlag, False, True, 0, 0#, False)
+    Set feat = swFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.02, 0#, False, False, False, False, 0#, 0#, False, False, False, False, mergeFlag, useScope, True, 0, 0#, False)
     If feat Is Nothing Then GoTo JoinFixtureFail
 
     ' post-state: exactly one body must carry the joined material (merge)
@@ -356,13 +360,15 @@ Sub RunJoinExtrudeCase(ByVal idx As Long, ByVal tag As String, ByVal mergeFlag A
         Next
     End If
     If mergeFlag Then
+        ' merge coalesces every TOUCHED body into one result (the
+        ' measured two-candidate semantics); only the untouched control
+        ' stays separate
         expCount = 2
-        If twoCandidates Then expCount = 3
     Else
         expCount = 3
         If twoCandidates Then expCount = 4
     End If
-    WriteStep idx, "join." & tag, "ok", "merge=" & CStr(mergeFlag) & " scope2=" & CStr(twoCandidates) & " bodies=" & Trim(Str(countAfter)) & " grown=" & SafeNum(grownVol) & " control=" & SafeNum(ctrlVol) & " free=" & SafeNum(freeVol)
+    WriteStep idx, "join." & tag, "ok", "merge=" & CStr(mergeFlag) & " candidates2=" & CStr(twoCandidates) & " usefeat_scope=" & CStr(useScope) & " bodies=" & Trim(Str(countAfter)) & " grown=" & SafeNum(grownVol) & " control=" & SafeNum(ctrlVol) & " free=" & SafeNum(freeVol)
     If mergeFlag Then
         If countAfter <> expCount Then
             gFailures = gFailures & tag & ": body count " & Trim(Str(countAfter)) & " expected " & Trim(Str(expCount)) & " (COMBINE_SCOPE_MISMATCH); "
