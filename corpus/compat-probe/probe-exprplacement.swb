@@ -66,7 +66,7 @@ Sub main()
         GoTo Finish
     End If
     If Not BuildDrivenBox(posIdx, widIdx) Then
-        gAbort = "fixture construction failed (the driven box); the battery stops"
+        gAbort = "fixture construction failed (the driven box) at [" & gPhase & "]; findings: " & gFindings
         GoTo Finish
     End If
     If Not DrawAndExtrudeBox(0#, 0.03, 0.01, 0.04, 0.01) Then
