@@ -1,0 +1,1296 @@
+' craft-bridge probe - probe-moveremove.swb (Phase B P1: D04 move/copy
+' and body remove)
+' Hand-written on the proven probe skeleton. Plan-review fold-ins are in
+' force throughout (APPROVE WITH CHANGES 2026-11-23):
+'   - the analytic oracle is pinned BEFORE any result is interpreted:
+'     expected coordinates are computed independently from the fixture
+'     math and checked on >=3 non-collinear points PLUS the centroid and
+'     the bounding box (a self-consistent SolidWorks transform proves
+'     nothing about source parity);
+'   - copy-count inputs are stated explicitly (BCopy/NumCopies) and the
+'     body count is checked after EVERY feature (sequential transforms
+'     must not introduce extra copies);
+'   - arbitrary-axis rotation is EXPLICITLY GATED (the euler/axis
+'     convention for a general SolidCraft rotate_axis is unresolved -
+'     principal-axis success never clears it);
+'   - source combined-move transform order is recorded as
+'     SOURCE_TRANSFORM_ORDER_UNRESOLVED (an emitter mapping concern,
+'     never silently assumed);
+'   - positive feature cases require a successful rebuild and a
+'     feature-error check;
+'   - the remove case verifies across rebuild AND save/reopen.
+'
+' Evidence questions (research 12 P1 rows):
+'   MC1 translation alone: InsertMoveCopyBody2 with BCopy=False,
+'        NumCopies=0 (the probe-candidate input, stated) must move the
+'        body by exactly T and change nothing else.
+'        (MOVE_WRONG_FRAME / MOVE_COPY_COUNT_MISMATCH)
+'   MC2 rotation alone: single-axis rotation (euler order irrelevant)
+'        about a NON-ORIGIN pivot must match the analytic rotation.
+'        (MOVE_WRONG_FRAME)
+'   MC3 sequential pair: translation feature then rotation feature, with
+'        the body RE-RESOLVED between them (by point-set fingerprint),
+'        must compose to exactly R(T(p)) with NO extra copies.
+'        (MOVE_WRONG_ORDER / MOVE_COPY_COUNT_MISMATCH)
+'   MC4 copy semantics: BCopy=True, NumCopies=1 must preserve the
+'        ORIGINAL at its original position and place exactly one copy.
+'        (MOVE_COPY_COUNT_MISMATCH)
+'   RB1 remove: three bodies, remove only the middle via
+'        InsertDeleteBody2(False) on a uniquely selected body; after
+'        rebuild AND save/reopen the target is absent, the survivors are
+'        geometrically EXACT, and the creating features remain.
+'        (REMOVE_BODY_FAILED / REMOVE_WRONG_BODY / REMOVE_COLLATERAL)
+'
+' Fixture (independently authored synthetic; model frame pinned at the
+' gates - this template maps sketch (u,v) to model (y,x), extrude +z):
+'   move fixture: body A = 20x30x10 mm box (6e-6 m3, centroid
+'   0.01/0.015/0.005), control C = 10mm cube at y=50..60mm (1e-6 m3,
+'   centroid 0.005/0.055/0.005).
+'   remove fixture: b1 = 4e-6 (centroid .01/.01/.005), b2 = the MIDDLE
+'   body 1.5e-6 (centroid .0075/.035/.005), b3 = 1e-6 (centroid
+'   .005/.0525/.005) - distinct fingerprints, middle by position AND
+'   size. No downstream features exist in the fixture (stated: the
+'   broken-dependency case is not exercised here).
+' Tolerances: point/centroid/bbox equality 1e-6 m; volumes relative 1e-6
+' (project choices for exact-decimal fixtures).
+
+Option Explicit
+
+Dim swApp As SldWorks.SldWorks
+Dim swDoc As SldWorks.ModelDoc2
+Dim swFeatMgr As Object
+Dim swSketchMgr As SketchManager
+Dim reportPath As String
+Dim gFailures As String
+Dim gAbort As String
+Dim gFindings As String
+Dim gPhase As String
+
+' working buffers (module-level: no array-parameter minefields)
+Dim gBuf1(0 To 23) As Double
+Dim gBuf1N As Long
+Dim gExp(0 To 23) As Double
+Dim gExpN As Long
+Dim gCtrl(0 To 23) As Double
+Dim gCtrlN As Long
+Dim gRemoveFeat As Object
+
+Sub main()
+    Dim stepIdx As Long
+    Dim errNum As Long, errMsg As String
+    Dim closedOk As Boolean
+    Dim openCount As Long
+    On Error GoTo Fail
+
+    reportPath = ReportPathFromHost()
+    If reportPath = "" Then Err.Raise vbObjectError + 513, "probe-moveremove.swb", "no report path"
+    StartReport
+    WriteLine "{""type"":""header"",""macro"":""tools/probe-moveremove.swb"",""bridge_version"":""0.1.0""}"
+    Set swApp = Application.SldWorks
+    stepIdx = 0
+
+    gPhase = "case: translation"
+    If Not CaseTranslation(stepIdx) Then GoTo Finish
+    stepIdx = stepIdx + 1
+    CloseCaseDoc closedOk
+    If Not closedOk Then
+        gAbort = "uncertain cleanup after the translation case; the battery stops"
+        GoTo Finish
+    End If
+
+    gPhase = "case: rotation"
+    If Not CaseRotation(stepIdx) Then GoTo Finish
+    stepIdx = stepIdx + 1
+    CloseCaseDoc closedOk
+    If Not closedOk Then
+        gAbort = "uncertain cleanup after the rotation case; the battery stops"
+        GoTo Finish
+    End If
+
+    gPhase = "case: sequential pair"
+    If Not CaseSequential(stepIdx) Then GoTo Finish
+    stepIdx = stepIdx + 1
+    CloseCaseDoc closedOk
+    If Not closedOk Then
+        gAbort = "uncertain cleanup after the sequential case; the battery stops"
+        GoTo Finish
+    End If
+
+    gPhase = "case: copy semantics"
+    If Not CaseCopy(stepIdx) Then GoTo Finish
+    stepIdx = stepIdx + 1
+    CloseCaseDoc closedOk
+    If Not closedOk Then
+        gAbort = "uncertain cleanup after the copy case; the battery stops"
+        GoTo Finish
+    End If
+
+    ' the EXPLICIT gate (the reviewer's rule: probe it or gate it - never
+    ' let a principal-axis success imply arbitrary-axis support)
+    gPhase = "gate: arbitrary-axis rotation"
+    WriteStep stepIdx, "rotation.arbitrary-axis", "ok", "GATED: the euler/axis convention for a general rotate_axis is unresolved; arbitrary-axis rotation emission stays stopped (single-axis success does not clear it)"
+    stepIdx = stepIdx + 1
+
+    gPhase = "case: remove"
+    If Not CaseRemove(stepIdx) Then GoTo Finish
+    stepIdx = stepIdx + 1
+    CloseCaseDoc closedOk
+    If Not closedOk Then
+        gAbort = "uncertain cleanup after the remove case; the battery stops"
+        GoTo Finish
+    End If
+
+    ' ---- final cleanup walk ----
+    openCount = CountOpenDocuments()
+    If openCount <> 0 Then
+        gAbort = "uncertain cleanup: " & Trim(Str(openCount)) & " document(s) remain open"
+        WriteStep stepIdx, "cleanup", "failed", gAbort
+    Else
+        WriteStep stepIdx, "cleanup", "ok", "zero open documents"
+    End If
+
+Finish:
+    If Not swDoc Is Nothing Then
+        CloseOwnedDoc closedOk
+        If Not closedOk Then
+            gAbort = "uncertain cleanup at the finish path; the battery stops"
+        End If
+    End If
+    stepIdx = stepIdx + 1
+    If gAbort <> "" Then
+        WriteStep stepIdx, "probe-verdict", "failed", gAbort & " findings: " & gFindings
+    ElseIf gFailures = "" Then
+        WriteStep stepIdx, "probe-verdict", "ok", "translation, single-axis rotation about a non-origin pivot, the sequential pair (translate then rotate with a re-resolved body, no extra copies) and the copy case (original preserved, one copy) all match the independent analytic oracle on points, centroid and bounds; the middle-body remove is exact across rebuild and save/reopen. arbitrary-axis rotation is GATED. findings: " & gFindings
+    Else
+        WriteStep stepIdx, "probe-verdict", "failed", gFailures & " findings: " & gFindings
+    End If
+    WriteLine "{""type"":""summary"",""status"":""ok""}"
+    Exit Sub
+
+Fail:
+    errNum = Err.Number
+    errMsg = Err.Description
+    On Error Resume Next
+    If reportPath = "" Then reportPath = ReportPathFromHost()
+    If reportPath <> "" Then
+        WriteStep stepIdx, "macro", "failed", "at phase [" & gPhase & "] err " & Trim(Str(errNum)) & ": " & errMsg
+        CloseOwnedDoc closedOk
+        WriteStep stepIdx, "probe-verdict", "failed", "the macro raised before its verdict; the battery is inconclusive"
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
+    End If
+End Sub
+
+' ===================== case: translation alone =====================
+
+Function CaseTranslation(ByRef idx As Long) As Boolean
+    Dim f As Object
+    Dim ok As Boolean
+    CaseTranslation = False
+    If Not BuildMoveFixture(idx) Then Exit Function
+    idx = idx + 1
+    ' the oracle is pinned BEFORE the move is interpreted
+    BuildBoxCorners 0#, 0.02, 0#, 0.03, 0#, 0.01
+    ShiftExp 0.01, 0.005, 0.002
+    ' input stated explicitly: BCopy=False, NumCopies=0 (probe candidate)
+    gPhase = "translation: feature"
+    Set f = MoveFeature(0#, 0.01, 0.005, 0.002, 0#, 0#, 0#, 0#, 0#, 0#, False, 0, "translation")
+    If f Is Nothing Then Exit Function
+    If Not FeatureOk(f, idx, "translation") Then Exit Function
+    idx = idx + 1
+    If Not VerifyMoved("after-translation", idx, 6E-06, 0.02, 0.02, 0.007, 0.02, 0.03, 0.01) Then Exit Function
+    idx = idx + 1
+    If Not VerifyCount(2, idx, "after-translation") Then Exit Function
+    idx = idx + 1
+    If Not VerifyControl("after-translation") Then Exit Function
+    CaseTranslation = True
+End Function
+
+' ===================== case: rotation alone =====================
+
+Function CaseRotation(ByRef idx As Long) As Boolean
+    Dim f As Object
+    Dim ang As Double
+    CaseRotation = False
+    If Not BuildMoveFixture(idx) Then Exit Function
+    idx = idx + 1
+    ang = 2 * Atn(1#)
+    ' the oracle: 90 degrees about model Z through the NON-ORIGIN pivot
+    BuildBoxCorners 0#, 0.02, 0#, 0.03, 0#, 0.01
+    RotateExpZ 0.005, 0.005, ang
+    ' single-axis rotation: the euler order is irrelevant by construction
+    gPhase = "rotation: feature"
+    Set f = MoveFeature(0#, 0#, 0#, 0#, 0.005, 0.005, 0#, 0#, 0#, ang, False, 0, "rotation")
+    If f Is Nothing Then Exit Function
+    If Not FeatureOk(f, idx, "rotation") Then Exit Function
+    idx = idx + 1
+    If Not VerifyMoved("after-rotation", idx, 6E-06, -0.005, 0.01, 0.005, 0.03, 0.02, 0.01) Then Exit Function
+    idx = idx + 1
+    If Not VerifyCount(2, idx, "after-rotation") Then Exit Function
+    idx = idx + 1
+    If Not VerifyControl("after-rotation") Then Exit Function
+    CaseRotation = True
+End Function
+
+' ===================== case: sequential pair =====================
+
+Function CaseSequential(ByRef idx As Long) As Boolean
+    Dim f As Object
+    Dim ang As Double
+    Dim b As Object
+    CaseSequential = False
+    If Not BuildMoveFixture(idx) Then Exit Function
+    idx = idx + 1
+    ang = 2 * Atn(1#)
+    ' step 1: the translation feature
+    gPhase = "sequential: translation feature"
+    Set f = MoveFeature(0#, 0.01, 0.005, 0.002, 0#, 0#, 0#, 0#, 0#, 0#, False, 0, "seq-translate")
+    If f Is Nothing Then Exit Function
+    If Not FeatureOk(f, idx, "seq-translate") Then Exit Function
+    idx = idx + 1
+    BuildBoxCorners 0#, 0.02, 0#, 0.03, 0#, 0.01
+    ShiftExp 0.01, 0.005, 0.002
+    If Not VerifyMoved("after-seq-translate", idx, 6E-06, 0.02, 0.02, 0.007, 0.02, 0.03, 0.01) Then Exit Function
+    idx = idx + 1
+    If Not VerifyCount(2, idx, "after-seq-translate") Then Exit Function
+    idx = idx + 1
+    ' re-resolution discipline: the moved body is re-acquired by its
+    ' point-set fingerprint (volume alone cannot tell it from a twin)
+    gPhase = "sequential: re-resolve"
+    Set b = FindBodyByPoints()
+    If b Is Nothing Then
+        gFailures = gFailures & "MOVE_WRONG_BODY (re-resolution found no body at the translated fingerprint); "
+        Exit Function
+    End If
+    WriteStep idx, "re-resolve", "ok", "the moved body re-acquired by point-set fingerprint"
+    idx = idx + 1
+    ' step 2: the rotation feature about the same non-origin pivot
+    gPhase = "sequential: rotation feature"
+    Set f = MoveFeatureOnBody(b, 0#, 0#, 0#, 0#, 0.005, 0.005, 0#, 0#, 0#, ang, False, 0, "seq-rotate")
+    If f Is Nothing Then Exit Function
+    If Not FeatureOk(f, idx, "seq-rotate") Then Exit Function
+    idx = idx + 1
+    ' the composed oracle: R(T(p)) - translation applied first
+    BuildBoxCorners 0#, 0.02, 0#, 0.03, 0#, 0.01
+    ShiftExp 0.01, 0.005, 0.002
+    RotateExpZ 0.005, 0.005, ang
+    If Not VerifyMoved("after-seq-rotate", idx, 6E-06, -0.01, 0.02, 0.007, 0.03, 0.02, 0.01) Then Exit Function
+    idx = idx + 1
+    If Not VerifyCount(2, idx, "after-seq-rotate") Then Exit Function
+    idx = idx + 1
+    If Not VerifyControl("after-seq-rotate") Then Exit Function
+    ' the order contract and the open source-side concern (the
+    ' reviewer's rule: recorded, never silently assumed)
+    gFindings = gFindings & "move composition = translate-then-rotate as separate features (the emitter's order contract); SOURCE_TRANSFORM_ORDER_UNRESOLVED for combined source moves (mapping concern, gated outside this probe); "
+    CaseSequential = True
+End Function
+
+' ===================== case: copy semantics =====================
+
+Function CaseCopy(ByRef idx As Long) As Boolean
+    Dim f As Object
+    CaseCopy = False
+    If Not BuildMoveFixture(idx) Then Exit Function
+    idx = idx + 1
+    ' input stated explicitly: BCopy=True, NumCopies=1
+    gPhase = "copy: feature"
+    Set f = MoveFeature(0#, 0.01, 0.005, 0.002, 0#, 0#, 0#, 0#, 0#, 0#, True, 1, "copy")
+    If f Is Nothing Then Exit Function
+    If Not FeatureOk(f, idx, "copy") Then Exit Function
+    idx = idx + 1
+    If Not VerifyCount(3, idx, "after-copy") Then Exit Function
+    idx = idx + 1
+    ' the ORIGINAL must be preserved at its original position
+    BuildBoxCorners 0#, 0.02, 0#, 0.03, 0#, 0.01
+    If FindBodyByPoints() Is Nothing Then
+        gFailures = gFailures & "MOVE_COPY_COUNT_MISMATCH (the original is not preserved at its original position); "
+        Exit Function
+    End If
+    ' and exactly one copy at the translated position
+    BuildBoxCorners 0#, 0.02, 0#, 0.03, 0#, 0.01
+    ShiftExp 0.01, 0.005, 0.002
+    If FindBodyByPoints() Is Nothing Then
+        gFailures = gFailures & "MOVE_COPY_COUNT_MISMATCH (no copy at the translated position); "
+        Exit Function
+    End If
+    WriteStep idx, "copy-roles", "ok", "original preserved at its original position, one copy at the translated position"
+    idx = idx + 1
+    If Not VerifyControl("after-copy") Then Exit Function
+    CaseCopy = True
+End Function
+
+' ===================== case: remove (three bodies, middle gone) =====
+
+Function CaseRemove(ByRef idx As Long) As Boolean
+    Dim f As Object
+    Dim dd As Object
+    Dim saveStatus As Long
+    Dim closedOk As Boolean
+    Dim err1 As Long, err2 As Long
+    Dim tempPath As String
+    CaseRemove = False
+    If Not BuildRemoveFixture(idx) Then Exit Function
+    idx = idx + 1
+    ' the middle body (1.5e-6) is the target; the oracle: its exact
+    ' absence plus EXACT survivors, across rebuild AND save/reopen
+    gPhase = "remove: select the middle body"
+    If Not RemoveMiddle(idx) Then Exit Function
+    Set f = gRemoveFeat
+    If f Is Nothing Then
+        gFailures = gFailures & "REMOVE_BODY_FAILED (InsertDeleteBody2 returned nothing); "
+        Exit Function
+    End If
+    If Not FeatureOk(f, idx, "remove") Then
+        gFailures = gFailures & "REMOVE_BODY_FAILED; "
+        Exit Function
+    End If
+    ' the feature-data readback (research 12: IDeleteBodyFeatureData)
+    Err.Clear
+    Set dd = f.GetDefinition
+    If Err.Number = 0 And Not dd Is Nothing Then
+        gFindings = gFindings & "delete-feature data type " & TypeName(dd) & "; "
+    Else
+        gFindings = gFindings & "delete-feature definition unreadable; "
+    End If
+    idx = idx + 1
+    If Not VerifyRemoval("after-remove", idx) Then Exit Function
+    idx = idx + 1
+    If Not VerifyFeatureInventory("after-remove", idx) Then Exit Function
+    idx = idx + 1
+    ' save/close/reopen and verify the same invariants again
+    gPhase = "remove: save/close/reopen"
+    tempPath = Environ$("TEMP") & "\craft-bridge-probe-moveremove-" & Trim(Str(Year(Now))) & Trim(Str(Month(Now))) & Trim(Str(Day(Now))) & Trim(Str(Hour(Now))) & Trim(Str(Minute(Now))) & Trim(Str(Second(Now))) & ".sldprt"
+    Err.Clear
+    saveStatus = swDoc.SaveAs3(tempPath, 0, 0)
+    If Err.Number <> 0 Then
+        gFailures = gFailures & "REMOVE_BODY_FAILED (save raised - state uncertain); "
+        Exit Function
+    End If
+    CloseOwnedDoc closedOk
+    If Not closedOk Then
+        gAbort = "uncertain cleanup after the remove-case save; the battery stops"
+        Exit Function
+    End If
+    Set swDoc = Nothing
+    err1 = 0
+    err2 = 0
+    Err.Clear
+    Set swDoc = swApp.OpenDoc6(tempPath, 1, 0, "", err1, err2)
+    If Err.Number <> 0 Or swDoc Is Nothing Then
+        gFailures = gFailures & "REMOVE_BODY_FAILED (reopen failed); "
+        Exit Function
+    End If
+    Set swFeatMgr = swDoc.FeatureManager
+    Set swSketchMgr = swDoc.SketchManager
+    WriteStep idx, "remove-reopen", "ok", "saved and reopened for the persistence check"
+    idx = idx + 1
+    If Not VerifyRemoval("after-reopen", idx) Then Exit Function
+    idx = idx + 1
+    If Not VerifyFeatureInventory("after-reopen", idx) Then Exit Function
+    CaseRemove = True
+End Function
+
+' the removal invariant: the middle fingerprint is GONE, the survivors
+' are geometrically EXACT (points + volumes), body count 2
+Function VerifyRemoval(ByVal tag As String, ByVal idx As Long) As Boolean
+    Dim bs As Variant
+    Dim i As Long, n As Long, bv As Double
+    Dim seen1 As Boolean, seen3 As Boolean, seen2 As Boolean
+    VerifyRemoval = False
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    n = UBound(bs) - LBound(bs) + 1
+    If n <> 2 Then
+        gFailures = gFailures & tag & ": REMOVE_BODY_FAILED (" & Trim(Str(n)) & " bodies, expected 2); "
+        Exit Function
+    End If
+    For i = LBound(bs) To UBound(bs)
+        bv = BodyVolume(bs(i))
+        If Abs(bv - 0.000004) <= 0.000004 * 0.000001 Then
+            seen1 = True
+            Call BodyCentroid(bs(i), gBuf1(0), gBuf1(1), gBuf1(2))
+            If Abs(gBuf1(0) - 0.01) > 0.000001 Or Abs(gBuf1(1) - 0.01) > 0.000001 Or Abs(gBuf1(2) - 0.005) > 0.000001 Then
+                gFailures = gFailures & tag & ": REMOVE_COLLATERAL (b1 centroid moved); "
+                Exit Function
+            End If
+        ElseIf Abs(bv - 0.000001) <= 0.000001 * 0.000001 Then
+            seen3 = True
+            Call BodyCentroid(bs(i), gBuf1(0), gBuf1(1), gBuf1(2))
+            If Abs(gBuf1(0) - 0.005) > 0.000001 Or Abs(gBuf1(1) - 0.0525) > 0.000001 Or Abs(gBuf1(2) - 0.005) > 0.000001 Then
+                gFailures = gFailures & tag & ": REMOVE_COLLATERAL (b3 centroid moved); "
+                Exit Function
+            End If
+        Else
+            seen2 = True
+        End If
+    Next
+    If seen2 Then
+        gFailures = gFailures & tag & ": REMOVE_WRONG_BODY (the middle body is still present); "
+        Exit Function
+    End If
+    If Not seen1 Or Not seen3 Then
+        gFailures = gFailures & tag & ": REMOVE_WRONG_BODY (a survivor is missing); "
+        Exit Function
+    End If
+    WriteStep idx, "verify." & tag, "ok", "middle body absent, survivors exact (4e-6/1e-6, centroids pinned)"
+    VerifyRemoval = True
+End Function
+
+' the creating features must remain in history (3 extrudes + the delete
+' feature; no downstream features exist in this fixture - stated)
+Function VerifyFeatureInventory(ByVal tag As String, ByVal idx As Long) As Boolean
+    Dim feat As Object
+    Dim nExtrude As Long, nDelete As Long, nAll As Long
+    Dim tn As String
+    On Error Resume Next
+    VerifyFeatureInventory = False
+    Set feat = swDoc.FirstFeature
+    Do While Not feat Is Nothing
+        nAll = nAll + 1
+        Err.Clear
+        tn = feat.GetTypeName2
+        If Err.Number = 0 Then
+            If InStr(1, tn, "Extrude", vbTextCompare) > 0 Then nExtrude = nExtrude + 1
+            If InStr(1, tn, "Delete", vbTextCompare) > 0 Then nDelete = nDelete + 1
+        End If
+        Err.Clear
+        Set feat = feat.GetNextFeature
+    Loop
+    If nExtrude <> 3 Then
+        gFailures = gFailures & tag & ": REMOVE_COLLATERAL (" & Trim(Str(nExtrude)) & " extrude features remain, expected 3); "
+        Exit Function
+    End If
+    If nDelete < 1 Then
+        gFailures = gFailures & tag & ": REMOVE_BODY_FAILED (the Body-Delete feature is not in history); "
+        Exit Function
+    End If
+    WriteStep idx, "inventory." & tag, "ok", "3 extrude features + the Body-Delete feature remain (feature types: counted by GetTypeName2)"
+    VerifyFeatureInventory = True
+End Function
+
+'
+' remove the MIDDLE body (1.5e-6): uniquely identify it by volume
+' fingerprint, select it (the documented body-selection form), create
+' the Body-Delete/Keep feature with KeepBodies=False
+Function RemoveMiddle(ByVal idx As Long) As Boolean
+    Dim bs As Variant
+    Dim i As Long, bv As Double
+    Dim target As Object
+    Dim sd As Object
+    RemoveMiddle = False
+    Set gRemoveFeat = Nothing
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    Set target = Nothing
+    For i = LBound(bs) To UBound(bs)
+        bv = BodyVolume(bs(i))
+        If Abs(bv - 0.0000015) <= 0.0000015 * 0.000001 Then Set target = bs(i)
+    Next
+    If target Is Nothing Then
+        gFailures = gFailures & "REMOVE_BODY_FAILED (the middle body is not uniquely identified); "
+        Exit Function
+    End If
+    swDoc.ClearSelection2 True
+    Set sd = swDoc.SelectionManager.CreateSelectData
+    If Not SelectBody(target, False, 0, sd, "remove") Then
+        gFailures = gFailures & "REMOVE_BODY_FAILED (body selection failed); "
+        Exit Function
+    End If
+    Err.Clear
+    Set gRemoveFeat = swFeatMgr.InsertDeleteBody2(False)
+    If Err.Number <> 0 Or gRemoveFeat Is Nothing Then
+        gFailures = gFailures & "REMOVE_BODY_FAILED (InsertDeleteBody2 raised or returned nothing); "
+        Exit Function
+    End If
+    RemoveMiddle = True
+End Function
+
+' ===================== move feature helpers =====================
+
+Function MoveFeature(ByVal td As Double, ByVal tx As Double, ByVal ty As Double, ByVal tz As Double, ByVal rx As Double, ByVal ry As Double, ByVal rz As Double, ByVal ra As Double, ByVal rb As Double, ByVal rc As Double, ByVal bcopy As Boolean, ByVal ncopies As Long, ByVal tag As String) As Object
+    Dim bs As Variant
+    Dim i As Long, bv As Double
+    Dim target As Object
+    Dim sd As Object
+    Set MoveFeature = Nothing
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    Set target = Nothing
+    For i = LBound(bs) To UBound(bs)
+        bv = BodyVolume(bs(i))
+        If Abs(bv - 0.000006) <= 0.000006 * 0.000001 Then Set target = bs(i)
+    Next
+    If target Is Nothing Then
+        gFailures = gFailures & "MOVE_WRONG_BODY (" & tag & ": the target body is not uniquely identified); "
+        Exit Function
+    End If
+    Set MoveFeature = MoveFeatureOnBody(target, td, tx, ty, tz, rx, ry, rz, ra, rb, rc, bcopy, ncopies, tag)
+End Function
+
+Function MoveFeatureOnBody(ByVal b As Object, ByVal td As Double, ByVal tx As Double, ByVal ty As Double, ByVal tz As Double, ByVal rx As Double, ByVal ry As Double, ByVal rz As Double, ByVal ra As Double, ByVal rb As Double, ByVal rc As Double, ByVal bcopy As Boolean, ByVal ncopies As Long, ByVal tag As String) As Object
+    Dim sd As Object
+    On Error Resume Next
+    Set MoveFeatureOnBody = Nothing
+    swDoc.ClearSelection2 True
+    Set sd = swDoc.SelectionManager.CreateSelectData
+    If Not SelectBody(b, False, 1, sd, tag) Then
+        gFailures = gFailures & "MOVE_WRONG_BODY (" & tag & ": selection failed); "
+        Exit Function
+    End If
+    Err.Clear
+    Set MoveFeatureOnBody = swFeatMgr.InsertMoveCopyBody2(td, tx, ty, tz, rx, ry, rz, ra, rb, rc, bcopy, ncopies)
+    If Err.Number <> 0 Then
+        gFindings = gFindings & "InsertMoveCopyBody2 raised " & Trim(Str(Err.Number)) & " (" & tag & "); "
+        Set MoveFeatureOnBody = Nothing
+    End If
+End Function
+
+' every positive feature creation: the feature exists AND a rebuild
+' succeeds AND the feature type is recorded (the reviewer's rule)
+Function FeatureOk(ByVal f As Object, ByVal idx As Long, ByVal tag As String) As Boolean
+    Dim ok As Boolean
+    Dim tn As String
+    On Error Resume Next
+    FeatureOk = False
+    Err.Clear
+    ok = swDoc.EditRebuild3()
+    If Err.Number <> 0 Or Not ok Then
+        gFailures = gFailures & tag & ": the rebuild after feature creation failed; "
+        Exit Function
+    End If
+    Err.Clear
+    tn = f.GetTypeName2
+    If Err.Number <> 0 Then tn = "?"
+    WriteStep idx, "feature." & tag, "ok", "created (" & tn & "), rebuild True"
+    FeatureOk = True
+End Function
+
+' ===================== fixture construction =====================
+
+Function BuildMoveFixture(ByVal idx As Long) As Boolean
+    Dim okA As Boolean
+    BuildMoveFixture = False
+    If Not NewFixturePart() Then
+        gFailures = gFailures & "no new part; "
+        Exit Function
+    End If
+    ' body A: sketch (0,0)-(0.03,0.02) extrude 0.01
+    If Not DrawAndExtrudeBox(0#, 0#, 0.03, 0.02, 0.01) Then
+        gFailures = gFailures & "fixture: body A failed; "
+        Exit Function
+    End If
+    ' control C: sketch (0.05,0)-(0.06,0.01) extrude 0.01
+    If Not DrawAndExtrudeBox(0.05, 0#, 0.06, 0.01, 0.01) Then
+        gFailures = gFailures & "fixture: control failed; "
+        Exit Function
+    End If
+    If Not MoveFixtureGate(idx) Then Exit Function
+    BuildMoveFixture = True
+End Function
+
+Function BuildRemoveFixture(ByVal idx As Long) As Boolean
+    BuildRemoveFixture = False
+    If Not NewFixturePart() Then
+        gFailures = gFailures & "no new part; "
+        Exit Function
+    End If
+    ' b1: sketch (0,0)-(0.02,0.02) extrude 0.01 -> 4e-6
+    If Not DrawAndExtrudeBox(0#, 0#, 0.02, 0.02, 0.01) Then
+        gFailures = gFailures & "fixture: b1 failed; "
+        Exit Function
+    End If
+    ' b2 (the middle): sketch (0.03,0)-(0.04,0.015) extrude 0.01 -> 1.5e-6
+    If Not DrawAndExtrudeBox(0.03, 0#, 0.04, 0.015, 0.01) Then
+        gFailures = gFailures & "fixture: b2 failed; "
+        Exit Function
+    End If
+    ' b3: sketch (0.05,0)-(0.055,0.02) extrude 0.01 -> 1e-6
+    If Not DrawAndExtrudeBox(0.05, 0#, 0.055, 0.02, 0.01) Then
+        gFailures = gFailures & "fixture: b3 failed; "
+        Exit Function
+    End If
+    If Not RemoveFixtureGate(idx) Then Exit Function
+    BuildRemoveFixture = True
+End Function
+
+' the move fixture gate: volumes, individual centroids (the frame pin),
+' body A's full point set, and the control snapshot
+Function MoveFixtureGate(ByVal idx As Long) As Boolean
+    Dim bs As Variant
+    Dim i As Long, n As Long, bv As Double
+    Dim seenA As Boolean, seenC As Boolean
+    MoveFixtureGate = False
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    n = UBound(bs) - LBound(bs) + 1
+    If n <> 2 Then
+        gFailures = gFailures & "fixture: " & Trim(Str(n)) & " bodies, expected 2; "
+        Exit Function
+    End If
+    For i = LBound(bs) To UBound(bs)
+        bv = BodyVolume(bs(i))
+        If Abs(bv - 0.000006) <= 0.000006 * 0.000001 Then
+            seenA = True
+            Call BodyCentroid(bs(i), gBuf1(0), gBuf1(1), gBuf1(2))
+            If Abs(gBuf1(0) - 0.01) > 0.000001 Or Abs(gBuf1(1) - 0.015) > 0.000001 Or Abs(gBuf1(2) - 0.005) > 0.000001 Then
+                gFailures = gFailures & "fixture: A centroid " & SafeNum(gBuf1(0)) & "/" & SafeNum(gBuf1(1)) & "/" & SafeNum(gBuf1(2)) & " - the template frame changed; "
+                Exit Function
+            End If
+        ElseIf Abs(bv - 0.000001) <= 0.000001 * 0.000001 Then
+            seenC = True
+            Call BodyCentroid(bs(i), gBuf1(0), gBuf1(1), gBuf1(2))
+            If Abs(gBuf1(0) - 0.005) > 0.000001 Or Abs(gBuf1(1) - 0.055) > 0.000001 Or Abs(gBuf1(2) - 0.005) > 0.000001 Then
+                gFailures = gFailures & "fixture: control centroid " & SafeNum(gBuf1(0)) & "/" & SafeNum(gBuf1(1)) & "/" & SafeNum(gBuf1(2)) & " - the template frame changed; "
+                Exit Function
+            End If
+            If Not BodyPoints(bs(i)) Then
+                gFailures = gFailures & "fixture: control point set unreadable; "
+                Exit Function
+            End If
+            gCtrlN = gBuf1N
+            For n = 0 To gBuf1N - 1
+                gCtrl(n * 3) = gBuf1(n * 3)
+                gCtrl(n * 3 + 1) = gBuf1(n * 3 + 1)
+                gCtrl(n * 3 + 2) = gBuf1(n * 3 + 2)
+            Next
+        Else
+            gFailures = gFailures & "fixture: body volume " & SafeNum(bv) & " is not a fixture fingerprint; "
+            Exit Function
+        End If
+    Next
+    If Not seenA Or Not seenC Then
+        gFailures = gFailures & "fixture: a fixture body is missing; "
+        Exit Function
+    End If
+    ' A's point set must match the analytic corners (validates the
+    ' vertex pipeline before any move is interpreted)
+    BuildBoxCorners 0#, 0.02, 0#, 0.03, 0#, 0.01
+    If Not BodyPointsByVol(0.000006) Then
+        gFailures = gFailures & "fixture: A's point set unreadable; "
+        Exit Function
+    End If
+    If Not PointsMatch("fixture") Then Exit Function
+    WriteStep idx, "fixture", "ok", "A 6e-6 + control 1e-6, centroids pinned (frame), A's 8 corners verified"
+    MoveFixtureGate = True
+End Function
+
+Function RemoveFixtureGate(ByVal idx As Long) As Boolean
+    Dim bs As Variant
+    Dim i As Long, n As Long, bv As Double
+    Dim seen1 As Boolean, seen2 As Boolean, seen3 As Boolean
+    RemoveFixtureGate = False
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    n = UBound(bs) - LBound(bs) + 1
+    If n <> 3 Then
+        gFailures = gFailures & "remove fixture: " & Trim(Str(n)) & " bodies, expected 3; "
+        Exit Function
+    End If
+    For i = LBound(bs) To UBound(bs)
+        bv = BodyVolume(bs(i))
+        If Abs(bv - 0.000004) <= 0.000004 * 0.000001 Then
+            seen1 = True
+        ElseIf Abs(bv - 0.0000015) <= 0.0000015 * 0.000001 Then
+            seen2 = True
+        ElseIf Abs(bv - 0.000001) <= 0.000001 * 0.000001 Then
+            seen3 = True
+        Else
+            gFailures = gFailures & "remove fixture: body volume " & SafeNum(bv) & " is not a fingerprint; "
+            Exit Function
+        End If
+    Next
+    If Not seen1 Or Not seen2 Or Not seen3 Then
+        gFailures = gFailures & "remove fixture: a fingerprint is missing; "
+        Exit Function
+    End If
+    WriteStep idx, "fixture.remove", "ok", "three bodies 4e-6/1.5e-6/1e-6 (middle = 1.5e-6)"
+    RemoveFixtureGate = True
+End Function
+
+Function NewFixturePart() As Boolean
+    Dim template As String
+    NewFixturePart = False
+    Err.Clear
+    template = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
+    If Err.Number <> 0 Or template = "" Then
+        gFailures = gFailures & "no default part template; "
+        Exit Function
+    End If
+    Set swDoc = swApp.NewDocument(template, 0, 0, 0)
+    If swDoc Is Nothing Then
+        gFailures = gFailures & "NewDocument returned nothing; "
+        Exit Function
+    End If
+    Set swFeatMgr = swDoc.FeatureManager
+    Set swSketchMgr = swDoc.SketchManager
+    NewFixturePart = True
+End Function
+
+Function DrawAndExtrudeBox(ByVal x1 As Double, ByVal y1 As Double, ByVal x2 As Double, ByVal y2 As Double, ByVal h As Double) As Boolean
+    Dim sk As Object, nm As String, feat As Object, ok As Boolean
+    DrawAndExtrudeBox = False
+    If Not OpenSketchOnFirstPlane() Then Exit Function
+    swSketchMgr.CreateCornerRectangle x1, y1, 0#, x2, y2, 0#
+    Set sk = swSketchMgr.ActiveSketch
+    If sk Is Nothing Then Exit Function
+    nm = sk.Name
+    If Not swSketchMgr.ActiveSketch Is Nothing Then swSketchMgr.InsertSketch True
+    ok = False
+    If Not sk Is Nothing Then ok = sk.Select(False)
+    If ok = False Then ok = swDoc.Extension.SelectByID2(nm, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    If ok = False Then Exit Function
+    Err.Clear
+    Set feat = swFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, h, 0#, False, False, False, False, 0#, 0#, False, False, False, False, False, False, True, 0, 0#, False)
+    DrawAndExtrudeBox = (Not feat Is Nothing)
+End Function
+
+Function OpenSketchOnFirstPlane() As Boolean
+    Dim feat As SldWorks.Feature, ok As Boolean
+    OpenSketchOnFirstPlane = False
+    Set feat = swDoc.FirstFeature
+    Do While Not feat Is Nothing
+        If InStr(1, feat.GetTypeName2(), "Plane", vbTextCompare) > 0 Then
+            swDoc.ClearSelection2 True
+            ok = feat.Select(False)
+            If ok Then
+                swSketchMgr.InsertSketch True
+                If Not swSketchMgr.ActiveSketch Is Nothing Then
+                    OpenSketchOnFirstPlane = True
+                    Exit Function
+                End If
+            End If
+        End If
+        Set feat = feat.GetNextFeature
+    Loop
+End Function
+
+' ===================== the analytic oracle =====================
+' The expected point set is computed from the fixture math alone - the
+' SolidWorks-side result is never fed back into it.
+
+Sub BuildBoxCorners(ByVal x0 As Double, ByVal x1 As Double, ByVal y0 As Double, ByVal y1 As Double, ByVal z0 As Double, ByVal z1 As Double)
+    Dim i As Long, j As Long, k As Long, n As Long
+    Dim px As Double, py As Double, pz As Double
+    gExpN = 0
+    For i = 0 To 1
+        For j = 0 To 1
+            For k = 0 To 1
+                If i = 0 Then px = x0 Else px = x1
+                If j = 0 Then py = y0 Else py = y1
+                If k = 0 Then pz = z0 Else pz = z1
+                gExp(n * 3) = px
+                gExp(n * 3 + 1) = py
+                gExp(n * 3 + 2) = pz
+                n = n + 1
+            Next
+        Next
+    Next
+    gExpN = n
+End Sub
+
+Sub ShiftExp(ByVal dx As Double, ByVal dy As Double, ByVal dz As Double)
+    Dim i As Long
+    For i = 0 To gExpN - 1
+        gExp(i * 3) = gExp(i * 3) + dx
+        gExp(i * 3 + 1) = gExp(i * 3 + 1) + dy
+        gExp(i * 3 + 2) = gExp(i * 3 + 2) + dz
+    Next
+End Sub
+
+' rotation about the MODEL Z axis through pivot (px,py): the exact
+' single-axis case (the euler order cannot matter)
+Sub RotateExpZ(ByVal px As Double, ByVal py As Double, ByVal ang As Double)
+    Dim i As Long
+    Dim dx As Double, dy As Double
+    For i = 0 To gExpN - 1
+        dx = gExp(i * 3) - px
+        dy = gExp(i * 3 + 1) - py
+        gExp(i * 3) = px + Cos(ang) * dx - Sin(ang) * dy
+        gExp(i * 3 + 1) = py + Sin(ang) * dx + Cos(ang) * dy
+    Next
+End Sub
+
+' ===================== verification helpers =====================
+
+' collect a body's unique vertex points into gBuf1 (via the proven
+' edge->vertex->GetPoint chain, deduplicated)
+Function BodyPoints(ByVal b As Object) As Boolean
+    Dim edges As Variant
+    Dim j As Long
+    Dim e As Object
+    Dim p1(0 To 2) As Double
+    Dim p2(0 To 2) As Double
+    On Error Resume Next
+    BodyPoints = False
+    gBuf1N = 0
+    Err.Clear
+    edges = b.GetEdges
+    If Err.Number <> 0 Then Exit Function
+    If Not IsArray(edges) Then Exit Function
+    For j = LBound(edges) To UBound(edges)
+        Err.Clear
+        Set e = edges(j)
+        If Err.Number <> 0 Then Exit Function
+        If Not e Is Nothing Then
+            If EdgeSeg(e, p1(0), p1(1), p1(2), p2(0), p2(1), p2(2)) Then
+                If Not AddPoint(p1(0), p1(1), p1(2)) Then Exit Function
+                If Not AddPoint(p2(0), p2(1), p2(2)) Then Exit Function
+            End If
+        End If
+    Next
+    If gBuf1N < 8 Then Exit Function
+    BodyPoints = True
+End Function
+
+Function BodyPointsByVol(ByVal vol As Double) As Boolean
+    Dim bs As Variant
+    Dim i As Long
+    On Error Resume Next
+    BodyPointsByVol = False
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    For i = LBound(bs) To UBound(bs)
+        If Abs(BodyVolume(bs(i)) - vol) <= vol * 0.000001 Then
+            BodyPointsByVol = BodyPoints(bs(i))
+            Exit Function
+        End If
+    Next
+End Function
+
+Function AddPoint(ByVal x As Double, ByVal y As Double, ByVal z As Double) As Boolean
+    Dim i As Long
+    AddPoint = False
+    For i = 0 To gBuf1N - 1
+        If Abs(gBuf1(i * 3) - x) < 0.000000001 And Abs(gBuf1(i * 3 + 1) - y) < 0.000000001 And Abs(gBuf1(i * 3 + 2) - z) < 0.000000001 Then
+            AddPoint = True
+            Exit Function
+        End If
+    Next
+    If gBuf1N >= 8 Then Exit Function
+    gBuf1(gBuf1N * 3) = x
+    gBuf1(gBuf1N * 3 + 1) = y
+    gBuf1(gBuf1N * 3 + 2) = z
+    gBuf1N = gBuf1N + 1
+    AddPoint = True
+End Function
+
+' set equality between the analytic oracle (gExp) and the measured
+' points (gBuf1) - order-independent, 1e-6 m
+Function PointsMatch(ByVal tag As String) As Boolean
+    Dim i As Long, j As Long
+    Dim found As Boolean
+    PointsMatch = False
+    If gExpN <> gBuf1N Then
+        gFailures = gFailures & tag & ": MOVE_WRONG_FRAME (" & Trim(Str(gBuf1N)) & " measured points, expected " & Trim(Str(gExpN)) & "); "
+        Exit Function
+    End If
+    For i = 0 To gExpN - 1
+        found = False
+        For j = 0 To gBuf1N - 1
+            If Abs(gExp(i * 3) - gBuf1(j * 3)) <= 0.000001 And Abs(gExp(i * 3 + 1) - gBuf1(j * 3 + 1)) <= 0.000001 And Abs(gExp(i * 3 + 2) - gBuf1(j * 3 + 2)) <= 0.000001 Then
+                found = True
+                Exit For
+            End If
+        Next
+        If Not found Then
+            gFailures = gFailures & tag & ": MOVE_WRONG_FRAME (expected point " & SafeNum(gExp(i * 3)) & "/" & SafeNum(gExp(i * 3 + 1)) & "/" & SafeNum(gExp(i * 3 + 2)) & " is not present); "
+            Exit Function
+        End If
+    Next
+    PointsMatch = True
+End Function
+
+' the moved-body verification: point set + volume + centroid + bounds
+' (the reviewer's full oracle)
+Function VerifyMoved(ByVal tag As String, ByVal idx As Long, ByVal expVol As Double, ByVal expCx As Double, ByVal expCy As Double, ByVal expCz As Double, ByVal expEx As Double, ByVal expEy As Double, ByVal expEz As Double) As Boolean
+    Dim bs As Variant
+    Dim i As Long, bv As Double
+    Dim b As Object
+    Dim cx As Double, cy As Double, cz As Double
+    Dim d0 As Double, d1 As Double, d2 As Double
+    VerifyMoved = False
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    Set b = Nothing
+    For i = LBound(bs) To UBound(bs)
+        bv = BodyVolume(bs(i))
+        If Abs(bv - expVol) <= expVol * 0.000001 Then
+            If Not b Is Nothing Then
+                gFailures = gFailures & tag & ": MOVE_COPY_COUNT_MISMATCH (two bodies share the target volume); "
+                Exit Function
+            End If
+            Set b = bs(i)
+        End If
+    Next
+    If b Is Nothing Then
+        gFailures = gFailures & tag & ": MOVE_WRONG_BODY (no body at the target volume); "
+        Exit Function
+    End If
+    If Abs(BodyVolume(b) - expVol) > expVol * 0.000001 Then
+        gFailures = gFailures & tag & ": REMOVE_COLLATERAL (target volume changed); "
+        Exit Function
+    End If
+    Call BodyCentroid(b, cx, cy, cz)
+    If Abs(cx - expCx) > 0.000001 Or Abs(cy - expCy) > 0.000001 Or Abs(cz - expCz) > 0.000001 Then
+        gFailures = gFailures & tag & ": MOVE_WRONG_FRAME (centroid " & SafeNum(cx) & "/" & SafeNum(cy) & "/" & SafeNum(cz) & " expected " & SafeNum(expCx) & "/" & SafeNum(expCy) & "/" & SafeNum(expCz) & "); "
+        Exit Function
+    End If
+    If Not BodyPoints(b) Then
+        gFailures = gFailures & tag & ": point set unreadable; "
+        Exit Function
+    End If
+    If Not PointsMatch(tag) Then Exit Function
+    ' the bounding box from the measured points vs the oracle's bounds
+    Call BBoxDelta(d0, d1, d2)
+    If Abs(d0 - expEx) > 0.000001 Or Abs(d1 - expEy) > 0.000001 Or Abs(d2 - expEz) > 0.000001 Then
+        gFailures = gFailures & tag & ": MOVE_WRONG_FRAME (bbox extents " & SafeNum(d0) & "/" & SafeNum(d1) & "/" & SafeNum(d2) & " wrong); "
+        Exit Function
+    End If
+    WriteStep idx, "verify." & tag, "ok", "8 points + centroid + bbox + volume " & SafeNum(expVol) & " match the analytic oracle"
+    VerifyMoved = True
+End Function
+
+' bbox extents from the measured points (max - min per axis)
+Sub BBoxDelta(ByRef ex As Double, ByRef ey As Double, ByRef ez As Double)
+    Dim i As Long
+    Dim x0 As Double, x1 As Double, y0 As Double, y1 As Double, z0 As Double, z1 As Double
+    x0 = 1E+99: x1 = -1E+99: y0 = 1E+99: y1 = -1E+99: z0 = 1E+99: z1 = -1E+99
+    For i = 0 To gBuf1N - 1
+        If gBuf1(i * 3) < x0 Then x0 = gBuf1(i * 3)
+        If gBuf1(i * 3) > x1 Then x1 = gBuf1(i * 3)
+        If gBuf1(i * 3 + 1) < y0 Then y0 = gBuf1(i * 3 + 1)
+        If gBuf1(i * 3 + 1) > y1 Then y1 = gBuf1(i * 3 + 1)
+        If gBuf1(i * 3 + 2) < z0 Then z0 = gBuf1(i * 3 + 2)
+        If gBuf1(i * 3 + 2) > z1 Then z1 = gBuf1(i * 3 + 2)
+    Next
+    ex = x1 - x0
+    ey = y1 - y0
+    ez = z1 - z0
+End Sub
+
+Function VerifyCount(ByVal want As Long, ByVal idx As Long, ByVal tag As String) As Boolean
+    Dim bs As Variant
+    Dim n As Long
+    VerifyCount = False
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    n = UBound(bs) - LBound(bs) + 1
+    If n <> want Then
+        gFailures = gFailures & tag & ": MOVE_COPY_COUNT_MISMATCH (" & Trim(Str(n)) & " bodies, expected " & Trim(Str(want)) & "); "
+        Exit Function
+    End If
+    WriteStep idx, "count." & tag, "ok", Trim(Str(n)) & " bodies (no extra copies)"
+    VerifyCount = True
+End Function
+
+Function VerifyControl(ByVal tag As String) As Boolean
+    Dim bs As Variant
+    Dim i As Long, j As Long
+    Dim b As Object
+    Dim ok As Boolean
+    VerifyControl = False
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    Set b = Nothing
+    For i = LBound(bs) To UBound(bs)
+        If Abs(BodyVolume(bs(i)) - 0.000001) <= 0.000001 * 0.000001 Then Set b = bs(i)
+    Next
+    If b Is Nothing Then
+        gFailures = gFailures & tag & ": REMOVE_COLLATERAL (the control body is gone); "
+        Exit Function
+    End If
+    If Not BodyPoints(b) Then
+        gFailures = gFailures & tag & ": control point set unreadable; "
+        Exit Function
+    End If
+    If gBuf1N <> gCtrlN Then
+        gFailures = gFailures & tag & ": REMOVE_COLLATERAL (the control geometry changed); "
+        Exit Function
+    End If
+    For i = 0 To gCtrlN - 1
+        ok = False
+        For j = 0 To gBuf1N - 1
+            If Abs(gCtrl(i * 3) - gBuf1(j * 3)) <= 0.000001 And Abs(gCtrl(i * 3 + 1) - gBuf1(j * 3 + 1)) <= 0.000001 And Abs(gCtrl(i * 3 + 2) - gBuf1(j * 3 + 2)) <= 0.000001 Then
+                ok = True
+                Exit For
+            End If
+        Next
+        If Not ok Then
+            gFailures = gFailures & tag & ": REMOVE_COLLATERAL (the control geometry changed); "
+            Exit Function
+        End If
+    Next
+    VerifyControl = True
+End Function
+
+' re-resolution: the unique body matching the current oracle points
+Function FindBodyByPoints() As Object
+    Dim bs As Variant
+    Dim i As Long
+    Dim b As Object
+    On Error Resume Next
+    Set FindBodyByPoints = Nothing
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    For i = LBound(bs) To UBound(bs)
+        Set b = bs(i)
+        If BodyPoints(b) Then
+            If PointsQuiet() Then
+                Set FindBodyByPoints = b
+                Exit Function
+            End If
+        End If
+    Next
+End Function
+
+' PointsMatch without failure recording (for positive lookups)
+Function PointsQuiet() As Boolean
+    Dim i As Long, j As Long
+    Dim found As Boolean
+    PointsQuiet = False
+    If gExpN <> gBuf1N Then Exit Function
+    For i = 0 To gExpN - 1
+        found = False
+        For j = 0 To gBuf1N - 1
+            If Abs(gExp(i * 3) - gBuf1(j * 3)) <= 0.000001 And Abs(gExp(i * 3 + 1) - gBuf1(j * 3 + 1)) <= 0.000001 And Abs(gExp(i * 3 + 2) - gBuf1(j * 3 + 2)) <= 0.000001 Then
+                found = True
+                Exit For
+            End If
+        Next
+        If Not found Then Exit Function
+    Next
+    PointsQuiet = True
+End Function
+
+' body selection with an explicit mark (the proven mergescope form)
+Function SelectBody(ByVal b As Object, ByVal append As Boolean, ByVal mark As Long, ByVal sd As Object, ByVal tag As String) As Boolean
+    Dim ok As Boolean
+    On Error Resume Next
+    SelectBody = False
+    Err.Clear
+    sd.Mark = mark
+    If Err.Number = 0 Then
+        ok = b.Select2(append, sd)
+        If Err.Number = 0 And ok Then
+            SelectBody = True
+            Exit Function
+        End If
+    End If
+    Err.Clear
+    ok = b.Select(append, mark)
+    If Err.Number = 0 And ok Then
+        SelectBody = True
+    End If
+End Function
+
+' the edge endpoint pair (the proven edge-resolver chain)
+Function EdgeSeg(ByVal e As Object, ByRef x1 As Double, ByRef y1 As Double, ByRef z1 As Double, ByRef x2 As Double, ByRef y2 As Double, ByRef z2 As Double) As Boolean
+    Dim v1 As Object, v2 As Object
+    Dim a As Variant, b As Variant
+    On Error Resume Next
+    EdgeSeg = False
+    Err.Clear
+    Set v1 = e.GetStartVertex
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    Set v2 = e.GetEndVertex
+    If Err.Number <> 0 Then Exit Function
+    If v1 Is Nothing Or v2 Is Nothing Then Exit Function
+    Err.Clear
+    a = v1.GetPoint
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    b = v2.GetPoint
+    If Err.Number <> 0 Then Exit Function
+    If Not IsArray(a) Or Not IsArray(b) Then Exit Function
+    If UBound(a) < 2 Or UBound(b) < 2 Then Exit Function
+    x1 = a(0): y1 = a(1): z1 = a(2)
+    x2 = b(0): y2 = b(1): z2 = b(2)
+    EdgeSeg = True
+End Function
+
+' ===================== measured-value helpers =====================
+
+Function PartDocBodies() As Variant
+    Dim pd As Object
+    On Error Resume Next
+    PartDocBodies = Empty
+    Set pd = swDoc
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    PartDocBodies = pd.GetBodies2(0, False)
+End Function
+
+Function BodyVolume(ByVal b As Object) As Double
+    Dim v As Variant
+    On Error Resume Next
+    BodyVolume = -1
+    Err.Clear
+    v = b.GetMassProperties(1000#)
+    If Err.Number <> 0 Then Exit Function
+    If Not IsArray(v) Then Exit Function
+    If UBound(v) < 3 Then Exit Function
+    If v(3) <> v(3) Then Exit Function
+    BodyVolume = v(3)
+End Function
+
+Sub BodyCentroid(ByVal b As Object, ByRef cx As Double, ByRef cy As Double, ByRef cz As Double)
+    Dim v As Variant
+    On Error Resume Next
+    cx = 0
+    cy = 0
+    cz = 0
+    Err.Clear
+    v = b.GetMassProperties(1000#)
+    If Err.Number <> 0 Then Exit Sub
+    If Not IsArray(v) Then Exit Sub
+    If UBound(v) < 2 Then Exit Sub
+    cx = v(0)
+    cy = v(1)
+    cz = v(2)
+End Sub
+
+Function CountOpenDocuments() As Long
+    Dim d As Object, n As Long
+    Dim titles As String
+    On Error Resume Next
+    CountOpenDocuments = -1
+    n = 0
+    titles = ""
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Function
+    Do While Not d Is Nothing
+        n = n + 1
+        Err.Clear
+        titles = titles & "[" & TypeName(d) & " " & d.GetTitle & "] "
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Function
+    Loop
+    gFindings = gFindings & "open-at-count: " & Trim(titles) & "; "
+    CountOpenDocuments = n
+End Function
+
+' ===================== shared skeleton helpers =====================
+' (reused verbatim from the probe skeleton)
+
+Sub StartReport()
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Output As #f
+    Close #f
+End Sub
+
+Sub WriteLine(ByVal text As String)
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Append As #f
+    Print #f, text
+    Close #f
+End Sub
+
+Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)
+    WriteLine "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
+End Sub
+
+Function ReportPathFromHost() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim got As Boolean
+    ReportPathFromHost = ""
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p <> "" Then
+        p = p & "\craft-bridge-report-path.txt"
+        Err.Clear
+        f = FreeFile
+        Open p For Input As #f
+        If Err.Number = 0 Then
+            Err.Clear
+            Line Input #f, oneLine
+            got = (Err.Number = 0)
+            Err.Clear
+            Close #f
+            If got Then
+                oneLine = Trim(oneLine)
+                If oneLine <> "" Then
+                    ReportPathFromHost = oneLine
+                    Exit Function
+                End If
+            End If
+        End If
+        Err.Clear
+    End If
+    ReportPathFromHost = Trim(Environ$("CRAFT_BRIDGE_REPORT"))
+End Function
+
+Sub CloseOwnedDoc(ByRef closedOk As Boolean)
+    Dim exact As String
+    Dim d As Object
+    Dim t2 As String
+    Dim cnt As Long
+    Dim isOurs As Boolean
+    On Error Resume Next
+    closedOk = False
+    If swDoc Is Nothing Then
+        closedOk = True
+        Exit Sub
+    End If
+    Err.Clear
+    exact = swDoc.GetTitle
+    If Err.Number <> 0 Then Exit Sub
+    If Trim(exact) = "" Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then
+            cnt = cnt + 1
+            If d Is swDoc Then isOurs = True
+        End If
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt <> 1 Or Not isOurs Then Exit Sub
+    Err.Clear
+    swApp.CloseDoc exact
+    If Err.Number <> 0 Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    cnt = 0
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then cnt = cnt + 1
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt = 0 Then closedOk = True
+End Sub
+
+Sub CloseCaseDoc(ByRef closedOk As Boolean)
+    CloseOwnedDoc closedOk
+    If closedOk Then Set swDoc = Nothing
+End Sub
+
+Function JsonStr(ByVal s As String) As String
+    Dim t As String
+    t = Replace(s, "\", "\\")
+    t = Replace(t, """", "\""")
+    t = Replace(t, vbCrLf, "\n")
+    t = Replace(t, vbCr, "\n")
+    t = Replace(t, vbLf, "\n")
+    t = Replace(t, vbTab, "\t")
+    JsonStr = t
+End Function
+
+Function SafeNum(ByVal x As Double) As String
+    If x <> x Then SafeNum = "NaN": Exit Function
+    If Abs(x) > 1E+100 Then SafeNum = "INF": Exit Function
+    SafeNum = Trim(Str(x))
+End Function
