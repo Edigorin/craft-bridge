@@ -154,6 +154,14 @@ Sub main()
     End If
 
 Finish:
+    ' every path closes the document it opened (fixture failures
+    ' included): the leave-no-documents rule holds on guarded exits too
+    If Not swDoc Is Nothing Then
+        CloseOwnedDoc closedOk
+        If Not closedOk Then
+            gAbort = "uncertain cleanup at the finish path; the battery stops"
+        End If
+    End If
     stepIdx = stepIdx + 1
     If gAbort <> "" Then
         WriteStep stepIdx, "probe-verdict", "failed", gAbort
