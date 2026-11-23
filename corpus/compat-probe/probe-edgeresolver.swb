@@ -87,30 +87,36 @@ Sub main()
         GoTo Finish
     End If
 
+    gPhase = "er1: unique query"
     ' ---- ER1: the unique query must match EXACTLY ONE edge ----
     stepIdx = 1
     If Not ResolveUnique(0.03, 0.002, stepIdx, "baseline") Then GoTo Finish
 
+    gPhase = "er4: ownership"
     ' ---- ER4: checked body ownership on the matched edge ----
     stepIdx = 2
     If Not CheckOwnership(stepIdx, "baseline", 0.000003) Then GoTo Finish
 
+    gPhase = "er3: persist round-trip"
     ' ---- ER3: capture, resolve, and the garbage-ref negative ----
     stepIdx = 3
     If Not PersistRoundTrip(0.03, stepIdx, "baseline", 0.000003) Then GoTo Finish
     stepIdx = 4
     If Not PersistNegative(stepIdx) Then GoTo Finish
 
+    gPhase = "er2: ambiguous twin"
     ' ---- ER2: the ambiguous twin query must REFUSE ----
     stepIdx = 5
     If Not AmbiguousRefusal(0.03, stepIdx) Then GoTo Finish
 
+    gPhase = "rebuild: upstream dim edit"
     ' ---- the supported rebuild: the upstream dim edit 30mm -> 40mm ----
     stepIdx = 6
     If Not EditUpstreamDim(0.04, stepIdx) Then GoTo Finish
     stepIdx = 7
     If Not FixtureGateAfterEdit(stepIdx) Then GoTo Finish
 
+    gPhase = "er1/3/4: after rebuild"
     ' ---- ER1/ER3/ER4 again after the rebuild ----
     stepIdx = 8
     If Not ResolveUnique(0.04, 0.002, stepIdx, "after-rebuild") Then GoTo Finish
@@ -173,6 +179,7 @@ End Sub
 ' match is required; zero is EDGE_NOT_FOUND, more is EDGE_AMBIGUOUS.
 
 Function ResolveUnique(ByVal wantLen As Double, ByVal pickY As Double, ByVal idx As Long, ByVal tag As String) As Boolean
+    On Error Resume Next
     Dim matched As Object
     Dim n As Long
     ResolveUnique = False
@@ -194,6 +201,7 @@ Function ExpVolOf(ByVal wantLen As Double) As Double
 End Function
 
 Function CountEdgeMatches(ByVal dx As Double, ByVal dy As Double, ByVal dz As Double, ByVal wantLen As Double, ByVal pickX As Double, ByVal pickY As Double, ByVal pickZ As Double, ByVal tol As Double, ByVal expVol As Double, ByRef matched As Object) As Long
+    On Error Resume Next
     Dim bs As Variant
     Dim i As Long, bv As Double
     Dim target As Object
@@ -252,6 +260,7 @@ End Function
 ' The edge's endpoint pair through its vertices (documented members,
 ' guarded; a raise is a recorded finding, not a crash).
 Function EdgeSeg(ByVal e As Object, ByRef x1 As Double, ByRef y1 As Double, ByRef z1 As Double, ByRef x2 As Double, ByRef y2 As Double, ByRef z2 As Double) As Boolean
+    On Error Resume Next
     Dim v1 As Object, v2 As Object
     Dim a As Variant, b As Variant
     EdgeSeg = False
@@ -290,6 +299,7 @@ End Function
 ' ===================== ER2: the ambiguous negative =====================
 
 Function AmbiguousRefusal(ByVal wantLen As Double, ByVal idx As Long) As Boolean
+    On Error Resume Next
     Dim matched As Object
     Dim n As Long
     AmbiguousRefusal = False
@@ -312,6 +322,7 @@ End Function
 ' ===================== ER4: checked body ownership =====================
 
 Function CheckOwnership(ByVal idx As Long, ByVal tag As String, ByVal expVol As Double) As Boolean
+    On Error Resume Next
     Dim eb As Object
     Dim bv As Double
     CheckOwnership = False
@@ -340,6 +351,7 @@ End Function
 ' the reference and re-measuring the resolved entity's geometry.
 
 Function PersistRoundTrip(ByVal wantLen As Double, ByVal idx As Long, ByVal tag As String, ByVal expVol As Double) As Boolean
+    On Error Resume Next
     Dim raw As Variant
     Dim obj As Object
     Dim status As Long
@@ -390,6 +402,7 @@ Function PersistRoundTrip(ByVal wantLen As Double, ByVal idx As Long, ByVal tag 
 End Function
 
 Function PersistResolveAfterRebuild(ByVal wantLen As Double, ByVal idx As Long, ByVal expVol As Double) As Boolean
+    On Error Resume Next
     ' the reference captured at baseline must survive the supported
     ' rebuild and resolve to the UPDATED geometry
     Dim obj As Object
@@ -424,6 +437,7 @@ Function PersistResolveAfterRebuild(ByVal wantLen As Double, ByVal idx As Long, 
 End Function
 
 Function ResolvedOwnership(ByVal obj As Object, ByVal expVol As Double, ByVal tag As String) As Boolean
+    On Error Resume Next
     Dim eb As Object
     Dim bv As Double
     ResolvedOwnership = False
@@ -442,6 +456,7 @@ Function ResolvedOwnership(ByVal obj As Object, ByVal expVol As Double, ByVal ta
 End Function
 
 Function PersistNegative(ByVal idx As Long) As Boolean
+    On Error Resume Next
     Dim emptyRef As Variant
     Dim obj As Object
     Dim status As Long
@@ -471,6 +486,7 @@ End Function
 ' ===================== the upstream dimension edit =====================
 
 Function EditUpstreamDim(ByVal newVal As Double, ByVal idx As Long) As Boolean
+    On Error Resume Next
     Dim ok As Boolean
     EditUpstreamDim = False
     If gDim Is Nothing Then
