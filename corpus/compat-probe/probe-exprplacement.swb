@@ -519,17 +519,22 @@ End Function
 
 Function CountOpenDocuments() As Long
     Dim d As Object, n As Long
+    Dim titles As String
     On Error Resume Next
     CountOpenDocuments = -1
     n = 0
+    titles = ""
     Set d = swApp.GetFirstDocument
     If Err.Number <> 0 Then Exit Function
     Do While Not d Is Nothing
         n = n + 1
         Err.Clear
+        titles = titles & "[" & d.GetTitle & "] "
+        Err.Clear
         Set d = d.GetNext
         If Err.Number <> 0 Then Exit Function
     Loop
+    gFindings = gFindings & "open-at-count: " & Trim(titles) & "; "
     CountOpenDocuments = n
 End Function
 
