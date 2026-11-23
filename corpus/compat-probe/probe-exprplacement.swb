@@ -531,7 +531,7 @@ Function CountOpenDocuments() As Long
     Do While Not d Is Nothing
         n = n + 1
         Err.Clear
-        titles = titles & "[" & d.GetTitle & "] "
+        titles = titles & "[" & TypeName(d) & " " & d.GetTitle & "] "
         Err.Clear
         Set d = d.GetNext
         If Err.Number <> 0 Then Exit Function
