@@ -164,7 +164,7 @@ Finish:
     End If
     stepIdx = stepIdx + 1
     If gAbort <> "" Then
-        WriteStep stepIdx, "probe-verdict", "failed", gAbort
+        WriteStep stepIdx, "probe-verdict", "failed", gAbort & " findings: " & gFindings
     ElseIf gFailures = "" Then
         WriteStep stepIdx, "probe-verdict", "ok", "placement is parametric (the body follows the placement parameter), size edits leave the placement and the control untouched, and the dependency survives save/reopen. findings: " & gFindings
     Else
