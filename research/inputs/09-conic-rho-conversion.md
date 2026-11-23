@@ -5,7 +5,7 @@ and mirrored reference pages that `ISketchManager.CreateConic` takes
 **twelve doubles - focus XYZ, apex XYZ, start XYZ, end XYZ - and no rho
 argument**, and that the SOLIDWORKS user-interface conic command instead
 takes two endpoints, an apex, and a rho value. A real design gates on
-this: 854 conic curves in the Pierre design must be replayed exactly.
+this: 854 conic curves in the R1 design must be replayed exactly.
 The gap this brief asks you to close is the **representation conversion**:
 given a conic defined the way CAD sources store it (typically endpoints +
 apex + conic constant rho), produce the focus/apex/start/end quadruple

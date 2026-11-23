@@ -92,7 +92,7 @@ probes can be written against documented shapes instead of guesses.
 - `GetPersistReference3`/`GetObjectByPersistReference3` lifetimes across
   rebuild and save/reopen.
 
-## T6. Sketch curves: conics, arcs, splines (the Pierre blockers)
+## T6. Sketch curves: conics, arcs, splines (the R1 blockers)
 
 - `ISketchManager.CreateConic` - FULL signature and parameter meaning:
   how do the arguments map to start point, end point, apex/control, and

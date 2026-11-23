@@ -1,3 +1,8 @@
+> Publication note (2026-11-23): real design codenames were redacted
+> from the public tree; the mapping is recorded privately with the
+> untracked real-part manifests. The verbatim originals remain in git
+> history.
+
 # Source-engine probe evidence (owner's design agent)
 
 Probe results produced against the live SolidCraft engine by the owner's
@@ -386,7 +391,7 @@ volumes 3e-6 / 1e-6 m3 and analytic centroid distance 0.034003676 m.
 
 Named outcomes implemented: PLACEMENT_NOT_PARAMETRIC, DEPENDENCY_LOST.
 Consequence: the Phase B expression layer may treat primitive placement as
-parametric for equation-driven placement parameters in this form; Pierre's
+parametric for equation-driven placement parameters in this form; R1's
 first blocker (research 12 P0 row, cross-report observation C) is cleared.
 
 ### Probe-iteration lessons (VBA/COM on the seat)
@@ -460,7 +465,7 @@ IEdge.GetStartVertex/GetEndVertex + IVertex.GetPoint chain, length 1e-6 m,
 Consequence: the Phase B edge resolver contract (research 12 P0 row, T1)
 holds on this seat for this form: geometric matching with a hard
 exactly-one rule, refusal on ambiguity, and persistent references that
-survive supported rebuilds with entity-test identity. Pierre's fillet
+survive supported rebuilds with entity-test identity. R1's fillet
 gate (P1 D06) can build on this.
 
 ### Iteration lessons (edge probe)

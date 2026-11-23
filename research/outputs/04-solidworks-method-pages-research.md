@@ -10,7 +10,7 @@ equation reads back exactly; the offset-plane dimension name is `D1`
 d, 0,0,0,0)` with a pre-selected origin plane works and the transform
 origin is entries 9..11; bare equation numbers are DOCUMENT units. Still
 open from this report: the `Add2`/`Add3` recommendation, flip-bit
-semantics (256/8192), `CreateConic`'s signature (P0 blocker for Pierre),
+semantics (256/8192), `CreateConic`'s signature (P0 blocker for R1),
 move/copy precedence, combine tool preservation, and modal-dialog
 blocking.
 

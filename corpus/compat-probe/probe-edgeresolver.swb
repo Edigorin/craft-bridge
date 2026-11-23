@@ -1,5 +1,5 @@
 ' craft-bridge probe - probe-edgeresolver.swb (Phase B P0: the edge
-' resolver - one long edge among near-identical edges; Pierre's fillet
+' resolver - one long edge among near-identical edges; R1's fillet
 ' gate)
 ' Hand-written on the proven probe skeleton (lessons applied: reflected
 ' or documented-and-guarded members only, no inline Dims, single

@@ -628,7 +628,7 @@ A feature object from `CreateFeature`, `InsertCombineFeature`, `InsertMoveCopyBo
 
 ### E. The exact-conic gate remains independent
 
-Even if the body registry, fillets, Booleans and sweeps pass, the **Pierre design's 854 conics** still need the exact-representation gate from brief 09. A substituted ordinary spline or sampled polyline is not an exact conic replay unless the accepted representation and geometry equivalence are independently proved and the feature-type difference is explicitly allowed.
+Even if the body registry, fillets, Booleans and sweeps pass, the **R1 design's 854 conics** still need the exact-representation gate from brief 09. A substituted ordinary spline or sampled polyline is not an exact conic replay unless the accepted representation and geometry equivalence are independently proved and the feature-type difference is explicitly allowed.
 
 ---
 
@@ -663,7 +663,7 @@ The following probes use a **new disposable part** each time. Capture the model 
 | P1 | **D04 remove**: three bodies, remove only middle | `InsertDeleteBody2(False)` with marked body. Read `IDeleteBodyFeatureData`; rebuild/reopen | Deleted body absent, others present, creating feature remains, no hidden collateral change | `REMOVE_BODY_FAILED`, `REMOVE_WRONG_BODY`, `REMOVE_COLLATERAL` |
 | P1 | **D06 fillet**: unique edge and ambiguous twin-edge negative | Builder, mark 1; `GetDefinition`, `AccessSelections`, `Edges`, `DefaultRadius` | Unique intended edge and radius verified against source; resulting geometry and error state valid | `FILLET_EDGE_MISMATCH`, `FILLET_RADIUS_MISMATCH`, `FILLET_ACCESS_FAILED` |
 | P1 | **D07 cut**: subtract body/tool with `keep_tools=false/true` | Direct Combine cut; copy tool when requested; test resulting body names and volumes | Target cut, original tool retention matches source, unrelated bodies unchanged | `COMBINE_KEEP_TOOLS_UNSUPPORTED`, `CUT_TOOL_CONSUMED` |
-| P2 | **Sweep/Bikini**: straight and curved path | `CreateDefinition(swFmSweep)` with profile mark1, path4, optional guides2 | Correct profile, path, orientation, solid count and cross-sections | `SWEEP_UNSUPPORTED_ORIENTATION`, `SWEEP_WRONG_PATH` |
+| P2 | **Sweep/R2**: straight and curved path | `CreateDefinition(swFmSweep)` with profile mark1, path4, optional guides2 | Correct profile, path, orientation, solid count and cross-sections | `SWEEP_UNSUPPORTED_ORIENTATION`, `SWEEP_WRONG_PATH` |
 | P2 | **Torus**: ring torus with known `R`, `r` | Sketch circle + full revolve + `ISurface.TorusParams` | One toroidal solid, centre/axis/radii match, correct volume, rebuild stable | `TORUS_PARAMS_MISMATCH`, `TORUS_NOT_SOLID` |
 | P2 | **VBScript array samples** across every added readback | `VarType`, `IsArray`, bounds, `raw(i)`, `For Each` and all output params | All required objects and numerics are read without error, or a typed adapter returns equivalent checked values | `COM_ARRAY_ELEMENT_UNREADABLE`, `COM_BYREF_UNCALLABLE` |
 

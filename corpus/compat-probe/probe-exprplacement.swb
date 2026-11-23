@@ -1,5 +1,5 @@
 ' craft-bridge probe - probe-exprplacement.swb (Phase B P0: expression
-' prim placement - Pierre's first blocker)
+' prim placement - R1's first blocker)
 ' Hand-written on the proven probe-bodyregistry skeleton (lessons
 ' applied throughout: reflected signatures only, no inline Dims, single
 ' definitions, every outcome a step, ownership tracked across

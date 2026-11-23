@@ -1,10 +1,10 @@
 # Research brief 12 - Phase B feature APIs: persistent entity identity, fillets, booleans, move/remove
 
 Follow-up to briefs 10/11. D01 replays exact; the plaques and the
-Pierre design gate on Phase B (the project's own roadmap): "body
+R1 design gate on Phase B (the project's own roadmap): "body
 registry + merge/scope + edge-resolver + expression prim placement
 (unlocks D03 joins, D04 move/remove, D06 fillets, D07 cut, plaque full
-acceptance, Pierre)". This brief gathers the DOCUMENTED API contracts
+acceptance, R1)". This brief gathers the DOCUMENTED API contracts
 behind those four probes so the seat probes can be shaped against the
 real signatures instead of guesses.
 
@@ -91,11 +91,11 @@ SOLIDWORKS edge/face at macro time, across rebuilds.
    acceptance layer verifies absence (named refusal when a delete
    cannot be verified).
 
-## T4. Sweep and torus (Phase C input, Bikini)
+## T4. Sweep and torus (Phase C input, R2)
 
 1. `InsertProtrusionSweep`/`FeatureSweep` (current documented form):
    profile/path selection, thin/thick options, orientation control -
-   copy-ready. Bikini's `sweep` maps to it how?
+   copy-ready. R2's `sweep` maps to it how?
 2. Torus: no native primitive exists - the documented way to build one
    (revolve of a circle profile about a coplanar axis? sweep?). What
    are the minimal sketch requirements and the direction/angle

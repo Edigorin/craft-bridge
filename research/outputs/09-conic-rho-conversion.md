@@ -506,7 +506,7 @@ These equations and sample substitutions were independently checked with symboli
 }
 ```
 
-The indices in this sample are illustrative, not actual Pierre design identifiers. The actual point records have `id` and `pos:[x,y]` in millimetres. A `Curve` also has wrapper fields such as `construction`, `reversed`, `centerline`, `fixed`, `infinite`, and `link`. These fields may be defaulted or omitted depending on serializer settings. The sketch's fixed origin usually occupies `points[0]`.
+The indices in this sample are illustrative, not actual R1 design identifiers. The actual point records have `id` and `pos:[x,y]` in millimetres. A `Curve` also has wrapper fields such as `construction`, `reversed`, `centerline`, `fixed`, `infinite`, and `link`. These fields may be defaulted or omitted depending on serializer settings. The sketch's fixed origin usually occupies `points[0]`.
 
 A conic record does **not** store a focus, directrix, focal eccentricity, classical vertex, equation coefficients, or explicit NURBS control-point weights. Its `apex` field is a **point index**, not an inline XYZ vector. The exact curve is recovered from the three indexed points and scalar rho.
 
@@ -519,7 +519,7 @@ Validation before replay:
 5. Convert the sketch's 2D frame to the chosen SOLIDWORKS sketch coordinate system. Convert millimetres to metres exactly at the API boundary.
 6. Record source curve ID, feature ID, rho, indexed points, transform and expected sample coordinates. These form the verifier contract.
 
-The source reports describe serializer and curve-evaluator behavior at SolidCraft tag `v0.43.0`; they were not runtime export tests. No Pierre source design was supplied to this research pass, so the actual 854 records and their distributions remain uninspected.
+The source reports describe serializer and curve-evaluator behavior at SolidCraft tag `v0.43.0`; they were not runtime export tests. No R1 source design was supplied to this research pass, so the actual 854 records and their distributions remain uninspected.
 
 ---
 
