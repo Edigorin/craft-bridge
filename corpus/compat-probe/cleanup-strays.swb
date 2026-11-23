@@ -1,0 +1,171 @@
+' craft-bridge maintenance macro - cleanup-strays.swb
+' Closes the exact unsaved fixture parts left open by FAILED probe runs
+' (the guarded-exit gap those runs had before their finish-path close
+' existed). Safety discipline (seat hygiene on the owner's licensed
+' seat):
+'   - REFUSES ENTIRELY if any open document has a saved path (anything
+'     saved might be the owner's; nothing is touched then);
+'   - closes ONLY documents titled exactly one of the four observed
+'     stray names, and ONLY when their saved path is empty;
+'   - reports every document it saw and every close it made;
+'   - verifies the final walk and only then gives its verdict.
+' This macro is the maintenance companion of the probe battery; it never
+' runs as part of a probe and never closes a document a probe opened.
+
+Option Explicit
+
+Dim swApp As SldWorks.SldWorks
+Dim reportPath As String
+
+Sub main()
+    Dim stepIdx As Long
+    Dim errNum As Long, errMsg As String
+    Dim d As Object
+    Dim title As String, p As String
+    Dim sawSaved As Boolean
+    Dim closed As Long, i As Long
+    Dim left As Long
+    Dim targets As Variant
+    On Error GoTo Fail
+
+    reportPath = ReportPathFromHost()
+    If reportPath = "" Then Err.Raise vbObjectError + 513, "cleanup-strays.swb", "no report path"
+    StartReport
+    WriteLine "{""type"":""header"",""macro"":""tools/cleanup-strays.swb"",""bridge_version"":""0.1.0""}"
+    Set swApp = Application.SldWorks
+    targets = Array("Part46", "Part47", "Part48", "Part49")
+    stepIdx = 0
+
+    ' ---- guard 1: any saved document means stop, touch nothing ----
+    sawSaved = False
+    Set d = swApp.GetFirstDocument
+    Do While Not d Is Nothing
+        title = d.GetTitle
+        Err.Clear
+        p = d.GetPathName
+        If Err.Number <> 0 Then p = "?"
+        WriteStep stepIdx, "see", "ok", "title [" & title & "] savedpath [" & p & "]"
+        stepIdx = stepIdx + 1
+        If p <> "" And p <> "?" Then sawSaved = True
+        Err.Clear
+        Set d = d.GetNext
+    Loop
+    If sawSaved Then
+        WriteStep stepIdx, "cleanup-strays-verdict", "failed", "a SAVED document is open; refusing to close anything (the owner's work must never be touched)"
+        WriteLine "{""type"":""summary"",""status"":""ok""}"
+        Exit Sub
+    End If
+
+    ' ---- close only the exact unsaved target titles ----
+    For i = LBound(targets) To UBound(targets)
+        Set d = swApp.GetFirstDocument
+        Do While Not d Is Nothing
+            Err.Clear
+            title = d.GetTitle
+            Err.Clear
+            p = d.GetPathName
+            If Err.Number <> 0 Then p = "?"
+            Err.Clear
+            If title = CStr(targets(i)) And p = "" Then
+                swApp.CloseDoc title
+                closed = closed + 1
+                WriteStep stepIdx, "close-stray", "ok", "closed [" & title & "] (unsaved fixture of a failed probe run)"
+                stepIdx = stepIdx + 1
+                Exit Do
+            End If
+            Set d = d.GetNext
+        Loop
+    Next
+
+    ' ---- verify the final walk ----
+    left = 0
+    Set d = swApp.GetFirstDocument
+    Do While Not d Is Nothing
+        left = left + 1
+        Err.Clear
+        Set d = d.GetNext
+    Loop
+    If left = 0 Then
+        WriteStep stepIdx, "cleanup-strays-verdict", "ok", "closed " & Trim(Str(closed)) & " stray document(s); zero documents open"
+    Else
+        WriteStep stepIdx, "cleanup-strays-verdict", "failed", "closed " & Trim(Str(closed)) & " but " & Trim(Str(left)) & " document(s) remain; the probe battery stays blocked"
+    End If
+    WriteLine "{""type"":""summary"",""status"":""ok""}"
+    Exit Sub
+
+Fail:
+    errNum = Err.Number
+    errMsg = Err.Description
+    On Error Resume Next
+    If reportPath = "" Then reportPath = ReportPathFromHost()
+    If reportPath <> "" Then
+        WriteStep stepIdx, "macro", "failed", "err " & Trim(Str(errNum)) & ": " & errMsg
+        WriteStep stepIdx, "cleanup-strays-verdict", "failed", "the macro raised before its verdict"
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
+    End If
+End Sub
+
+' ===================== shared skeleton helpers =====================
+' (reused verbatim from the probe skeleton)
+
+Sub StartReport()
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Output As #f
+    Close #f
+End Sub
+
+Sub WriteLine(ByVal text As String)
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Append As #f
+    Print #f, text
+    Close #f
+End Sub
+
+Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)
+    WriteLine "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
+End Sub
+
+Function ReportPathFromHost() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim got As Boolean
+    ReportPathFromHost = ""
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p <> "" Then
+        p = p & "\craft-bridge-report-path.txt"
+        Err.Clear
+        f = FreeFile
+        Open p For Input As #f
+        If Err.Number = 0 Then
+            Err.Clear
+            Line Input #f, oneLine
+            got = (Err.Number = 0)
+            Err.Clear
+            Close #f
+            If got Then
+                oneLine = Trim(oneLine)
+                If oneLine <> "" Then
+                    ReportPathFromHost = oneLine
+                    Exit Function
+                End If
+            End If
+        End If
+        Err.Clear
+    End If
+    ReportPathFromHost = Trim(Environ$("CRAFT_BRIDGE_REPORT"))
+End Function
+
+Function JsonStr(ByVal s As String) As String
+    Dim t As String
+    t = Replace(s, "\", "\\")
+    t = Replace(t, """", "\""")
+    t = Replace(t, vbCrLf, "\n")
+    t = Replace(t, vbCr, "\n")
+    t = Replace(t, vbLf, "\n")
+    t = Replace(t, vbTab, "\t")
+    JsonStr = t
+End Function
