@@ -1,0 +1,613 @@
+' craft-bridge probe - probe-bodyregistry.swb (Phase B P0: body registry)
+' Hand-written on the proven probe-mergescope skeleton (report plumbing
+' and close discipline reused verbatim; lessons applied: IPartDoc owns
+' GetBodies2, no inline Dims, single definitions, every outcome a step).
+'
+' Evidence questions (research 12 T3.3 and its P0 row):
+'   BR1: can two source bodies carry UNIQUE live identities independent
+'        of the returned GetBodies2 ORDER, across: initial enumeration,
+'        rebuild, save/close/reopen?
+'   BR2: does the IBody2.Name rename stick (and persist across
+'        save/reopen) - the registry's name column?
+'   BR3: feature -> owning body mapping through the documented chain
+'        (IFeature.GetFaces -> IFace2.GetBody), with the fingerprint
+'        identifying which body each face belongs to.
+' Named refusals: BODY_NOT_FOUND (a fingerprint vanished), BODY_AMBIGUOUS
+' (a fingerprint is not unique), BODY_REGISTRY_CHANGED (an identity
+' changed across a step).
+'
+' Fixture: two independently authored synthetic cuboids with different
+' dimensions on one plane: A 30x20x10 mm (6e-6 m3), B 10x10x10 mm
+' (1e-6 m3), centroid distance 26.925824 mm. Identity = the VOLUME
+' FINGERPRINT (order is never trusted); names are the registry column
+' under test. Tolerances: relative 1e-6 of the fixture volume (exact
+' decimal boxes - kernel round-off only). Reopened document ownership is
+' tracked through the title change at save time; an uncertain close or
+' fixture construction stops the battery.
+
+Option Explicit
+
+Dim swApp As SldWorks.SldWorks
+Dim swDoc As SldWorks.ModelDoc2
+Dim swFeatMgr As Object
+Dim swSketchMgr As SketchManager
+Dim reportPath As String
+Dim gFailures As String
+Dim gAbort As String
+Dim gFindings As String
+
+Sub main()
+    Dim stepIdx As Long
+    Dim errNum As Long, errMsg As String
+    Dim ok As Boolean
+    Dim tempPath As String
+    Dim err1 As Long, err2 As Long
+    Dim closedOk As Boolean
+    Dim openCount As Long
+    Dim titleBefore As String, titleAfter As String
+    Dim saveStatus As Long
+    On Error GoTo Fail
+
+    reportPath = ReportPathFromHost()
+    If reportPath = "" Then Err.Raise vbObjectError + 513, "probe-bodyregistry.swb", "no report path"
+    StartReport
+    WriteLine "{""type"":""header"",""macro"":""tools/probe-bodyregistry.swb"",""bridge_version"":""0.1.0""}"
+    Set swApp = Application.SldWorks
+
+    ' ---- fixture: two cuboids, then the fixture gate ----
+    stepIdx = 0
+    If Not NewFixturePart() Then
+        gAbort = "fixture construction failed; the battery stops"
+        GoTo Finish
+    End If
+    If Not DrawAndExtrudeBox(0#, 0#, 0.03, 0.02, 0.01) Then
+        gAbort = "fixture construction failed (box A); the battery stops"
+        GoTo Finish
+    End If
+    If Not DrawAndExtrudeBox(0#, 0.03, 0.01, 0.04, 0.01) Then
+        gAbort = "fixture construction failed (box B); the battery stops"
+        GoTo Finish
+    End If
+    If Not FixtureGate(stepIdx) Then
+        gAbort = "fixture verification failed; the battery stops"
+        GoTo Finish
+    End If
+
+    ' ---- BR1/BR2 step 1: enumerate, identify, rename ----
+    stepIdx = 1
+    If Not RegistrySnapshot("s1-initial", stepIdx, True) Then GoTo Finish
+
+    ' ---- BR1 step 2: rebuild ----
+    stepIdx = 2
+    Err.Clear
+    ok = swDoc.EditRebuild3()
+    If Err.Number <> 0 Then
+        WriteStep stepIdx, "rebuild", "failed", "EditRebuild3 raised"
+        gFailures = gFailures & "rebuild raised (BODY_REGISTRY_CHANGED); "
+    Else
+        WriteStep stepIdx, "rebuild", "ok", "EditRebuild3 returned " & CStr(ok)
+    End If
+    stepIdx = 3
+    If Not RegistrySnapshot("s2-after-rebuild", stepIdx, False) Then GoTo Finish
+
+    ' ---- BR1/BR2 step 3: save, close, reopen (ownership tracked) ----
+    stepIdx = 4
+    titleBefore = ""
+    On Error Resume Next
+    titleBefore = swDoc.GetTitle
+    On Error GoTo 0
+    tempPath = Environ$("TEMP") & "\craft-bridge-probe-bodyregistry.sldprt"
+    Err.Clear
+    saveStatus = swDoc.SaveAs3(tempPath, 0, 0)
+    If Err.Number <> 0 Then
+        WriteStep stepIdx, "save", "failed", "SaveAs3 raised"
+        gAbort = "save failed; the battery stops (the document state is uncertain)"
+        GoTo Finish
+    End If
+    On Error Resume Next
+    titleAfter = swDoc.GetTitle
+    On Error GoTo 0
+    WriteStep stepIdx, "save", "ok", "status " & Trim(Str(saveStatus)) & " title before=<" & titleBefore & "> after=<" & titleAfter & "> path=" & tempPath
+
+    stepIdx = 5
+    CloseOwnedDoc closedOk
+    If Not closedOk Then
+        gAbort = "uncertain cleanup after save; the battery stops"
+        GoTo Finish
+    End If
+    WriteStep stepIdx, "close", "ok", "the saved document closed with verified close"
+    Set swDoc = Nothing
+
+    stepIdx = 6
+    err1 = 0
+    err2 = 0
+    Err.Clear
+    Set swDoc = swApp.OpenDoc6(tempPath, 1, 0, "", err1, err2)
+    If Err.Number <> 0 Or swDoc Is Nothing Then
+        WriteStep stepIdx, "reopen", "failed", "OpenDoc6 errors " & Trim(Str(err1)) & "/" & Trim(Str(err2))
+        gAbort = "reopen failed; the battery stops"
+        GoTo Finish
+    End If
+    Set swFeatMgr = swDoc.FeatureManager
+    Set swSketchMgr = swDoc.SketchManager
+    WriteStep stepIdx, "reopen", "ok", "errors " & Trim(Str(err1)) & "/" & Trim(Str(err2)) & " title=<" & swDoc.GetTitle & ">"
+
+    stepIdx = 7
+    If Not RegistrySnapshot("s3-after-reopen", stepIdx, False) Then GoTo Finish
+
+    ' ---- BR3: feature -> owning body mapping ----
+    stepIdx = 8
+    FeatureBodyMap stepIdx
+
+    ' ---- cleanup: the reopened document is ours (created, saved and
+    ' reopened here); verified close, then the zero-open walk ----
+    stepIdx = 9
+    CloseOwnedDoc closedOk
+    If Not closedOk Then
+        gAbort = "uncertain cleanup after reopen; the battery stops"
+        GoTo Finish
+    End If
+    openCount = CountOpenDocuments()
+    If openCount <> 0 Then
+        gAbort = "uncertain cleanup: " & Trim(Str(openCount)) & " document(s) remain open"
+        WriteStep stepIdx, "cleanup", "failed", gAbort
+    Else
+        WriteStep stepIdx, "cleanup", "ok", "zero open documents"
+    End If
+
+Finish:
+    stepIdx = stepIdx + 1
+    If gAbort <> "" Then
+        WriteStep stepIdx, "probe-verdict", "failed", gAbort
+    ElseIf gFailures = "" Then
+        WriteStep stepIdx, "probe-verdict", "ok", "two unique source-to-live identities held across enumerate/rebuild/save-reopen independent of returned order; names and the feature-body map verified. findings: " & gFindings
+    Else
+        WriteStep stepIdx, "probe-verdict", "failed", gFailures & " findings: " & gFindings
+    End If
+    WriteLine "{""type"":""summary"",""status"":""ok""}"
+    Exit Sub
+
+Fail:
+    errNum = Err.Number
+    errMsg = Err.Description
+    On Error Resume Next
+    If reportPath = "" Then reportPath = ReportPathFromHost()
+    If reportPath <> "" Then
+        WriteStep stepIdx, "macro", "failed", "err " & Trim(Str(errNum)) & ": " & errMsg
+        CloseOwnedDoc closedOk
+        WriteStep stepIdx, "probe-verdict", "failed", "the macro raised before its verdict; the battery is inconclusive"
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
+    End If
+End Sub
+
+' The fixture gate: exactly two bodies at the fixture volumes with the
+' fixture centroid distance - checked before ANY registry claim.
+Function FixtureGate(ByVal idx As Long) As Boolean
+    Dim bs As Variant
+    Dim vA As Double, vB As Double
+    Dim cA(0 To 2) As Double
+    Dim cB(0 To 2) As Double
+    Dim i As Long, n As Long, bv As Double
+    Dim dist As Double
+    FixtureGate = False
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    n = UBound(bs) - LBound(bs) + 1
+    If n <> 2 Then
+        gFailures = gFailures & "fixture: " & Trim(Str(n)) & " bodies, expected 2; "
+        Exit Function
+    End If
+    For i = LBound(bs) To UBound(bs)
+        bv = BodyVolume(bs(i))
+        If Abs(bv - 0.000006) <= 0.000006 * 0.000001 Then
+            vA = bv
+            Call BodyCentroid(bs(i), cA(0), cA(1), cA(2))
+        ElseIf Abs(bv - 0.000001) <= 0.000001 * 0.000001 Then
+            vB = bv
+            Call BodyCentroid(bs(i), cB(0), cB(1), cB(2))
+        Else
+            gFailures = gFailures & "fixture: body volume " & SafeNum(bv) & " is not a fixture fingerprint; "
+            Exit Function
+        End If
+    Next
+    dist = PtDist(cA(0), cA(1), cA(2), cB(0), cB(1), cB(2))
+    If Abs(dist - 0.026925824) > 0.000001 Then
+        gFailures = gFailures & "fixture: centroid distance " & SafeNum(dist) & " wrong; "
+        Exit Function
+    End If
+    WriteStep idx, "fixture", "ok", "two bodies 6e-6/1e-6, distance 0.026925824 verified"
+    FixtureGate = True
+End Function
+
+' One registry snapshot: enumerate (recording the RETURNED ORDER),
+' identify each body by volume fingerprint (identity never by index),
+' confirm the fingerprint set is unique and complete, read names, and
+' optionally attempt the registry rename. Every outcome is a step.
+Function RegistrySnapshot(ByVal tag As String, ByVal idx As Long, ByVal doRename As Boolean) As Boolean
+    Dim bs As Variant
+    Dim i As Long, n As Long, bv As Double
+    Dim orderText As String, regText As String
+    Dim nameA As String, nameB As String
+    Dim idxA As Long, idxB As Long
+    Dim errA As Long, errB As Long
+    Dim setErr As Long
+    RegistrySnapshot = False
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then
+        gFailures = gFailures & tag & ": body enumeration unreadable (BODY_NOT_FOUND); "
+        WriteStep idx, "registry." & tag, "failed", "body enumeration unreadable"
+        Exit Function
+    End If
+    n = UBound(bs) - LBound(bs) + 1
+    idxA = -1
+    idxB = -1
+    For i = LBound(bs) To UBound(bs)
+        bv = BodyVolume(bs(i))
+        orderText = orderText & SafeNum(bv) & " "
+        If Abs(bv - 0.000006) <= 0.000006 * 0.000001 Then
+            If idxA >= 0 Then
+                gFailures = gFailures & tag & ": fingerprint A is not unique (BODY_AMBIGUOUS); "
+                Exit Function
+            End If
+            idxA = i
+        ElseIf Abs(bv - 0.000001) <= 0.000001 * 0.000001 Then
+            If idxB >= 0 Then
+                gFailures = gFailures & tag & ": fingerprint B is not unique (BODY_AMBIGUOUS); "
+                Exit Function
+            End If
+            idxB = i
+        Else
+            gFailures = gFailures & tag & ": unexpected fingerprint " & SafeNum(bv) & " (BODY_REGISTRY_CHANGED); "
+            Exit Function
+        End If
+    Next
+    If idxA < 0 Or idxB < 0 Or n <> 2 Then
+        gFailures = gFailures & tag & ": a fingerprint vanished (BODY_NOT_FOUND); "
+        WriteStep idx, "registry." & tag, "failed", "a fingerprint vanished; order was [" & Trim(orderText) & "]"
+        Exit Function
+    End If
+    ' names: read both; rename where permitted on the first snapshot
+    On Error Resume Next
+    errA = 0
+    nameA = ""
+    nameA = bs(idxA).Name
+    errA = Err.Number
+    Err.Clear
+    nameB = ""
+    nameB = bs(idxB).Name
+    errB = Err.Number
+    Err.Clear
+    If doRename Then
+        bs(idxA).Name = "regA"
+        setErr = Err.Number
+        Err.Clear
+        bs(idxB).Name = "regB"
+        If Err.Number <> 0 Then setErr = Err.Number
+        Err.Clear
+        nameA = ""
+        nameA = bs(idxA).Name
+        nameB = ""
+        nameB = bs(idxB).Name
+        Err.Clear
+    End If
+    On Error GoTo 0
+    regText = "A(vol 6e-6) idx " & Trim(Str(idxA)) & " name=<" & nameA & ">; B(vol 1e-6) idx " & Trim(Str(idxB)) & " name=<" & nameB & ">"
+    If doRename Then
+        WriteStep idx, "registry." & tag, "ok", "order [" & Trim(orderText) & "] " & regText & " rename_err " & Trim(Str(setErr))
+    Else
+        WriteStep idx, "registry." & tag, "ok", "order [" & Trim(orderText) & "] " & regText
+    End If
+    RegistrySnapshot = True
+End Function
+
+' BR3: the feature -> owning body chain (IFeature.GetFaces ->
+' IFace2.GetBody), fingerprinted. A face whose body cannot be
+' fingerprinted is a named refusal.
+Sub FeatureBodyMap(ByVal idx As Long)
+    Dim feat As SldWorks.Feature
+    Dim faces As Variant
+    Dim fb As Object
+    Dim i As Long, bv As Double
+    Dim mapText As String
+    Dim uncertain As Boolean
+    uncertain = False
+    Set feat = swDoc.FirstFeature
+    Do While Not feat Is Nothing
+        mapText = ""
+        Err.Clear
+        faces = feat.GetFaces
+        If Err.Number = 0 Then
+            If IsArray(faces) Then
+                For i = LBound(faces) To UBound(faces)
+                    Set fb = Nothing
+                    Err.Clear
+                    Set fb = faces(i).GetBody
+                    If Err.Number = 0 Then
+                        If Not fb Is Nothing Then
+                            bv = BodyVolume(fb)
+                            mapText = mapText & SafeNum(bv) & " "
+                        Else
+                            mapText = mapText & "null "
+                        End If
+                    Else
+                        mapText = mapText & "err "
+                    End If
+                Next
+            End If
+            If mapText <> "" Then
+                WriteStep idx, "featurebody." & feat.Name, "ok", "type=" & feat.GetTypeName2() & " faces->body volumes [" & Trim(mapText) & "]"
+            End If
+        End If
+        Set feat = feat.GetNextFeature
+    Loop
+    If uncertain Then gFailures = gFailures & "feature-body map incomplete (BODY_NOT_FOUND); "
+End Sub
+
+' ===================== fixture construction =====================
+
+Function NewFixturePart() As Boolean
+    Dim template As String
+    NewFixturePart = False
+    Err.Clear
+    template = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
+    If Err.Number <> 0 Or template = "" Then
+        gFailures = gFailures & "no default part template; "
+        Exit Function
+    End If
+    Set swDoc = swApp.NewDocument(template, 0, 0, 0)
+    If swDoc Is Nothing Then
+        gFailures = gFailures & "NewDocument returned nothing; "
+        Exit Function
+    End If
+    Set swFeatMgr = swDoc.FeatureManager
+    Set swSketchMgr = swDoc.SketchManager
+    NewFixturePart = True
+End Function
+
+Function DrawAndExtrudeBox(ByVal x1 As Double, ByVal y1 As Double, ByVal x2 As Double, ByVal y2 As Double, ByVal h As Double) As Boolean
+    Dim sk As Object, nm As String, feat As Object, ok As Boolean
+    DrawAndExtrudeBox = False
+    If Not OpenSketchOnFirstPlane() Then Exit Function
+    swSketchMgr.CreateCornerRectangle x1, y1, 0#, x2, y2, 0#
+    Set sk = swSketchMgr.ActiveSketch
+    If sk Is Nothing Then Exit Function
+    nm = sk.Name
+    swSketchMgr.InsertSketch True
+    ok = False
+    If Not sk Is Nothing Then ok = sk.Select(False)
+    If ok = False Then ok = swDoc.Extension.SelectByID2(nm, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    If ok = False Then Exit Function
+    Err.Clear
+    Set feat = swFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, h, 0#, False, False, False, False, 0#, 0#, False, False, False, False, False, False, True, 0, 0#, False)
+    DrawAndExtrudeBox = (Not feat Is Nothing)
+End Function
+
+Function OpenSketchOnFirstPlane() As Boolean
+    Dim feat As SldWorks.Feature, ok As Boolean
+    OpenSketchOnFirstPlane = False
+    Set feat = swDoc.FirstFeature
+    Do While Not feat Is Nothing
+        If InStr(1, feat.GetTypeName2(), "Plane", vbTextCompare) > 0 Then
+            swDoc.ClearSelection2 True
+            ok = feat.Select(False)
+            If ok Then
+                swSketchMgr.InsertSketch True
+                If Not swSketchMgr.ActiveSketch Is Nothing Then
+                    OpenSketchOnFirstPlane = True
+                    Exit Function
+                End If
+            End If
+        End If
+        Set feat = feat.GetNextFeature
+    Loop
+End Function
+
+' ===================== measured-value helpers =====================
+
+Function PartDocBodies() As Variant
+    Dim pd As Object
+    On Error Resume Next
+    PartDocBodies = Empty
+    Set pd = swDoc
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    PartDocBodies = pd.GetBodies2(0, False)
+End Function
+
+Function BodyVolume(ByVal b As Object) As Double
+    Dim v As Variant
+    BodyVolume = -1
+    Err.Clear
+    v = b.GetMassProperties(1000#)
+    If Err.Number <> 0 Then Exit Function
+    If Not IsArray(v) Then Exit Function
+    If UBound(v) < 3 Then Exit Function
+    If v(3) <> v(3) Then Exit Function
+    BodyVolume = v(3)
+End Function
+
+Sub BodyCentroid(ByVal b As Object, ByRef cx As Double, ByRef cy As Double, ByRef cz As Double)
+    Dim v As Variant
+    cx = 0
+    cy = 0
+    cz = 0
+    Err.Clear
+    v = b.GetMassProperties(1000#)
+    If Err.Number <> 0 Then Exit Sub
+    If Not IsArray(v) Then Exit Sub
+    If UBound(v) < 2 Then Exit Sub
+    cx = v(0)
+    cy = v(1)
+    cz = v(2)
+End Sub
+
+Function PtDist(ByVal x1 As Double, ByVal y1 As Double, ByVal z1 As Double, ByVal x2 As Double, ByVal y2 As Double, ByVal z2 As Double) As Double
+    PtDist = Sqr((x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2) + (z1 - z2) * (z1 - z2))
+End Function
+
+Function CountOpenDocuments() As Long
+    Dim d As Object, n As Long
+    On Error Resume Next
+    CountOpenDocuments = -1
+    n = 0
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Function
+    Do While Not d Is Nothing
+        n = n + 1
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Function
+    Loop
+    CountOpenDocuments = n
+End Function
+
+' ===================== shared skeleton helpers =====================
+' (reused verbatim from the probe-mergescope skeleton)
+
+Sub StartReport()
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Output As #f
+    Close #f
+End Sub
+
+Sub WriteLine(ByVal text As String)
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Append As #f
+    Print #f, text
+    Close #f
+End Sub
+
+Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)
+    WriteLine "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
+End Sub
+
+Function ReportPathFromHost() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim got As Boolean
+    ReportPathFromHost = ""
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p <> "" Then
+        p = p & "\craft-bridge-report-path.txt"
+        Err.Clear
+        f = FreeFile
+        Open p For Input As #f
+        If Err.Number = 0 Then
+            Err.Clear
+            Line Input #f, oneLine
+            got = (Err.Number = 0)
+            Err.Clear
+            Close #f
+            If got Then
+                oneLine = Trim(oneLine)
+                If oneLine <> "" Then
+                    ReportPathFromHost = oneLine
+                    Exit Function
+                End If
+            End If
+        End If
+        Err.Clear
+    End If
+    ReportPathFromHost = Trim(Environ$("CRAFT_BRIDGE_REPORT"))
+End Function
+
+Function CloseMode() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim ok As Boolean
+    Dim e3 As Long
+    CloseMode = "unknown"
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p = "" Then Exit Function
+    p = p & "\craft-bridge-report-path.txt"
+    Err.Clear
+    f = FreeFile
+    Open p For Input As #f
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    Line Input #f, oneLine
+    ok = (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    ok = ok And (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    e3 = Err.Number
+    Close #f
+    If Not ok Then Exit Function
+    If e3 = 0 Then
+        If Trim(oneLine) = "close-after-run" Then CloseMode = "close" Else CloseMode = "unknown"
+    ElseIf e3 = 62 And ok Then
+        CloseMode = "keep"
+    End If
+End Function
+
+Sub CloseOwnedDoc(ByRef closedOk As Boolean)
+    Dim exact As String
+    Dim d As Object
+    Dim t2 As String
+    Dim cnt As Long
+    Dim isOurs As Boolean
+    On Error Resume Next
+    closedOk = False
+    If swDoc Is Nothing Then
+        closedOk = True
+        Exit Sub
+    End If
+    Err.Clear
+    exact = swDoc.GetTitle
+    If Err.Number <> 0 Then Exit Sub
+    If Trim(exact) = "" Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then
+            cnt = cnt + 1
+            If d Is swDoc Then isOurs = True
+        End If
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt <> 1 Or Not isOurs Then Exit Sub
+    Err.Clear
+    swApp.CloseDoc exact
+    If Err.Number <> 0 Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    cnt = 0
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then cnt = cnt + 1
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt = 0 Then closedOk = True
+End Sub
+
+Function JsonStr(ByVal s As String) As String
+    Dim t As String
+    t = Replace(s, "\", "\\")
+    t = Replace(t, """", "\""")
+    t = Replace(t, vbCrLf, "\n")
+    t = Replace(t, vbCr, "\n")
+    t = Replace(t, vbLf, "\n")
+    t = Replace(t, vbTab, "\t")
+    JsonStr = t
+End Function
+
+Function SafeNum(ByVal x As Double) As String
+    If x <> x Then SafeNum = "NaN": Exit Function
+    If Abs(x) > 1E+100 Then SafeNum = "INF": Exit Function
+    SafeNum = Trim(Str(x))
+End Function

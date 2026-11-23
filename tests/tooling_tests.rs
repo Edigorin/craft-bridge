@@ -895,7 +895,7 @@ fn merge_scope_probe_carries_its_contract() {
     // the terminal probe-verdict is written AFTER the verified cleanup
     let clean = PROBE_MERGESCOPE.find("cleanup").expect("no cleanup step");
     let verdict = PROBE_MERGESCOPE
-        .find("probe-verdict\", \"ok\", \"all cases met")
+        .find("probe-verdict\", \"ok\", \"the marks form carries")
         .expect("no terminal verdict");
     assert!(clean < verdict, "the verdict is not written after cleanup");
     // ownership: every case part is created here and closed with the
