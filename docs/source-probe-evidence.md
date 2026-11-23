@@ -291,6 +291,57 @@ mass-adapter path:
   defaulted-zero-triple adapter would wrongly pass the shifted case, so
   the pair qualifies the acquisition.
 
+## 2026-11-23 - probe-mergescope: Phase B P0 merge/scope (synthetic fixtures)
+
+Independently authored synthetic three-box fixtures (30x20x10 mm,
+20x20x10 mm overlapping, 10x10x10 mm control; volumes 6e-6/4e-6/1e-6
+m3, centroid distances 10/26.925824/32.015621 mm, analytic overlap
+3e-6 m3) on fresh parts per case, bodies identified by volume
+fingerprint. All measurements VBA-side through IPartDoc.GetBodies2 and
+IBody2.GetMassProperties; run through the provenance-checked seat-smoke
+runner.
+
+Measured semantics (all fixture gates passed first; controls invariant
+in every case):
+
+- **The marks form is THE combine form**: `Select2(append, SelectData)`
+  with the mark in the SelectData (the `Select(append, mark)` legacy
+  form also works; `Select2(append, mark)` raises err 13 - the reflected
+  signatures are `Select2(Append, SelectData)` / `Select(Append, Mark)`).
+  The mark roles: cut = target mark 1 + tool mark 2; add/intersect =
+  every operand as tool mark 2 (the companion to the documented
+  `MainBody = Nothing` rule).
+- **The enum families pair exactly**: creation `swBodyOperationType_e`
+  (add 15903 / cut 15902 / intersect 15901) reads back as
+  `swCombineBodiesOperationType_e` (0 / 1 / 2) through
+  ICombineBodiesFeatureData.OperationType under
+  AccessSelections/ReleaseSelectionAccess. Readback also confirms the
+  operand shape: cut carries MainBody=1 and BodiesToCombineCount=1;
+  add/intersect carry MainBody=0 and count 2.
+- **Volumes are exact per the fixture arithmetic**: add 7e-6
+  (6+4-3), cut 3e-6 (6-3), intersect 3e-6 (the overlap). Controls
+  invariant at 1e-6 everywhere.
+- **The array form is UNCALLABLE**: `InsertCombineFeature` with a
+  Variant array of Body2 returns Nothing for every operation (the
+  documented-by-research-12 but unverified marshaling path - confirmed
+  uncallable here). The emitter must use the marks form.
+- **Join extrude (the plaque's gate), FeatureExtrusion2 arg 18/19 =
+  Merge/UseFeatScope**: Merge=True into a single touched target is exact
+  (target 6e-6 + joined material 1e-6 = 7e-6, count 2, control
+  invariant); Merge=False yields a separate new body (count 3); with TWO
+  touched candidates and UseFeatScope=False, the merge COALESCES every
+  touched body into one result (only untouched controls stay separate) -
+  the measured semantics research 12 left open. The scoped variant
+  (UseFeatScope=True) answers the target-selectivity question directly.
+
+The probe also recorded two compile-layer lessons for hand-written probe
+VBA: typed VBA rejects `ModelDoc2.GetBodies2` (it is `IPartDoc`'s -
+the same owner correction research 12 carries), and an undefined helper
+call is a module-load compile error that RunMacro reports only as
+"invocation returned: failure" - the mechanical bisect (committed
+variants, single-definition proc scans, name-resolution lints) is the
+working discovery route.
+
 ## 2026-11-17 - `fixed: true` + `exprs` is creatable through the MCP
 
 Source-confirmed earlier (nested-schema research [S38]); the design

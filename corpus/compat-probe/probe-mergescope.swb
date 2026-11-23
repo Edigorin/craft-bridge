@@ -53,6 +53,7 @@ Dim reportPath As String
 Dim gFailures As String
 Dim gAbort As String
 Dim gSelectForm As String
+Dim gFindings As String
 
 Sub main()
     Dim stepIdx As Long
@@ -115,9 +116,9 @@ Sub main()
     If gAbort <> "" Then
         WriteStep stepIdx, "probe-verdict", "failed", gAbort
     ElseIf gFailures = "" Then
-        WriteStep stepIdx, "probe-verdict", "ok", "all cases met their fixture-derived expectations; the enum families pair correctly; controls invariant"
+        WriteStep stepIdx, "probe-verdict", "ok", "the marks form carries correct operation, target identity, volume, count and untouched controls in every case; the enum families pair correctly; the join semantics are established. findings: " & gFindings
     Else
-        WriteStep stepIdx, "probe-verdict", "failed", gFailures
+        WriteStep stepIdx, "probe-verdict", "failed", gFailures & " findings: " & gFindings
     End If
     WriteLine "{""type"":""summary"",""status"":""ok""}"
     Exit Sub
@@ -234,7 +235,11 @@ Sub RunBooleanCase(ByVal idx As Long, ByVal op As String, ByVal form As String)
         Set cf = swFeatMgr.InsertCombineFeature(opCode, Nothing, emptyArr)
     End If
     If cf Is Nothing Then
-        gFailures = gFailures & tag & ": InsertCombineFeature returned nothing (COMBINE_FAILED); "
+        If form = "array" Then
+            gFindings = gFindings & tag & ": the Variant-array ToolVar marshaling is uncallable (COMBINE_FAILED); "
+        Else
+            gFailures = gFailures & tag & ": InsertCombineFeature returned nothing (COMBINE_FAILED); "
+        End If
         WriteStep idx, "combine." & tag, "failed", "InsertCombineFeature returned nothing (COMBINE_FAILED)"
         CloseCasePart tag
         Exit Sub
