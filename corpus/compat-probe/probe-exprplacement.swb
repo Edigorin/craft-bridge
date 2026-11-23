@@ -98,7 +98,9 @@ Sub main()
 
     ' ---- EP3: save/close/reopen, then an independent placement edit ----
     stepIdx = 5
-    tempPath = Environ$("TEMP") & "\craft-bridge-probe-exprplacement.sldprt"
+    ' a UNIQUE save path per run (concurrent probe runs must never share
+    ' a save target - the racing-instance lesson)
+    tempPath = Environ$("TEMP") & "\craft-bridge-probe-exprplacement-" & Trim(Str(Year(Now))) & Trim(Str(Month(Now))) & Trim(Str(Day(Now))) & Trim(Str(Hour(Now))) & Trim(Str(Minute(Now))) & Trim(Str(Second(Now))) & ".sldprt"
     Dim saveStatus As Long
     Err.Clear
     saveStatus = swDoc.SaveAs3(tempPath, 0, 0)
