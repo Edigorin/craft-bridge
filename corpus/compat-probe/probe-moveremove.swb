@@ -42,7 +42,9 @@
 '        (REMOVE_BODY_FAILED / REMOVE_WRONG_BODY / REMOVE_COLLATERAL)
 '
 ' Fixture (independently authored synthetic; model frame pinned at the
-' gates - this template maps sketch (u,v) to model (y,x), extrude +z):
+' gates - this template maps sketch u->+y, v->+z, extrude blind
+' ->+x: the first plane is the YZ plane - the move case proved it on a
+' non-square section; the symmetric earlier fixtures could not):
 '   move fixture: body A = 20x30x10 mm box (6e-6 m3, centroid
 '   0.01/0.015/0.005), control C = 10mm cube at y=50..60mm (1e-6 m3,
 '   centroid 0.005/0.055/0.005).
@@ -189,7 +191,7 @@ Function CaseTranslation(ByRef idx As Long) As Boolean
     If Not BuildMoveFixture(idx) Then Exit Function
     idx = idx + 1
     ' the oracle is pinned BEFORE the move is interpreted
-    BuildBoxCorners 0#, 0.02, 0#, 0.03, 0#, 0.01
+    BuildBoxCorners 0#, 0.01, 0#, 0.03, 0#, 0.02
     ShiftExp 0.01, 0.005, 0.002
     ' input stated explicitly: BCopy=False, NumCopies=0 (probe candidate)
     gPhase = "translation: feature"
@@ -197,7 +199,7 @@ Function CaseTranslation(ByRef idx As Long) As Boolean
     If f Is Nothing Then Exit Function
     If Not FeatureOk(f, idx, "translation") Then Exit Function
     idx = idx + 1
-    If Not VerifyMoved("after-translation", idx, 6E-06, 0.02, 0.02, 0.007, 0.02, 0.03, 0.01) Then Exit Function
+    If Not VerifyMoved("after-translation", idx, 6E-06, 0.015, 0.02, 0.012, 0.01, 0.03, 0.02) Then Exit Function
     idx = idx + 1
     If Not VerifyCount(2, idx, "after-translation") Then Exit Function
     idx = idx + 1
@@ -215,7 +217,7 @@ Function CaseRotation(ByRef idx As Long) As Boolean
     idx = idx + 1
     ang = 2 * Atn(1#)
     ' the oracle: 90 degrees about model Z through the NON-ORIGIN pivot
-    BuildBoxCorners 0#, 0.02, 0#, 0.03, 0#, 0.01
+    BuildBoxCorners 0#, 0.01, 0#, 0.03, 0#, 0.02
     RotateExpZ 0.005, 0.005, ang
     ' single-axis rotation: the euler order is irrelevant by construction
     gPhase = "rotation: feature"
@@ -223,7 +225,7 @@ Function CaseRotation(ByRef idx As Long) As Boolean
     If f Is Nothing Then Exit Function
     If Not FeatureOk(f, idx, "rotation") Then Exit Function
     idx = idx + 1
-    If Not VerifyMoved("after-rotation", idx, 6E-06, -0.005, 0.01, 0.005, 0.03, 0.02, 0.01) Then Exit Function
+    If Not VerifyMoved("after-rotation", idx, 6E-06, -0.005, 0.005, 0.01, 0.03, 0.01, 0.02) Then Exit Function
     idx = idx + 1
     If Not VerifyCount(2, idx, "after-rotation") Then Exit Function
     idx = idx + 1
@@ -247,9 +249,9 @@ Function CaseSequential(ByRef idx As Long) As Boolean
     If f Is Nothing Then Exit Function
     If Not FeatureOk(f, idx, "seq-translate") Then Exit Function
     idx = idx + 1
-    BuildBoxCorners 0#, 0.02, 0#, 0.03, 0#, 0.01
+    BuildBoxCorners 0#, 0.01, 0#, 0.03, 0#, 0.02
     ShiftExp 0.01, 0.005, 0.002
-    If Not VerifyMoved("after-seq-translate", idx, 6E-06, 0.02, 0.02, 0.007, 0.02, 0.03, 0.01) Then Exit Function
+    If Not VerifyMoved("after-seq-translate", idx, 6E-06, 0.015, 0.02, 0.012, 0.01, 0.03, 0.02) Then Exit Function
     idx = idx + 1
     If Not VerifyCount(2, idx, "after-seq-translate") Then Exit Function
     idx = idx + 1
@@ -270,10 +272,10 @@ Function CaseSequential(ByRef idx As Long) As Boolean
     If Not FeatureOk(f, idx, "seq-rotate") Then Exit Function
     idx = idx + 1
     ' the composed oracle: R(T(p)) - translation applied first
-    BuildBoxCorners 0#, 0.02, 0#, 0.03, 0#, 0.01
+    BuildBoxCorners 0#, 0.01, 0#, 0.03, 0#, 0.02
     ShiftExp 0.01, 0.005, 0.002
     RotateExpZ 0.005, 0.005, ang
-    If Not VerifyMoved("after-seq-rotate", idx, 6E-06, -0.01, 0.02, 0.007, 0.03, 0.02, 0.01) Then Exit Function
+    If Not VerifyMoved("after-seq-rotate", idx, 6E-06, -0.01, 0.015, 0.012, 0.03, 0.01, 0.02) Then Exit Function
     idx = idx + 1
     If Not VerifyCount(2, idx, "after-seq-rotate") Then Exit Function
     idx = idx + 1
@@ -300,13 +302,13 @@ Function CaseCopy(ByRef idx As Long) As Boolean
     If Not VerifyCount(3, idx, "after-copy") Then Exit Function
     idx = idx + 1
     ' the ORIGINAL must be preserved at its original position
-    BuildBoxCorners 0#, 0.02, 0#, 0.03, 0#, 0.01
+    BuildBoxCorners 0#, 0.01, 0#, 0.03, 0#, 0.02
     If FindBodyByPoints() Is Nothing Then
         gFailures = gFailures & "MOVE_COPY_COUNT_MISMATCH (the original is not preserved at its original position); "
         Exit Function
     End If
     ' and exactly one copy at the translated position
-    BuildBoxCorners 0#, 0.02, 0#, 0.03, 0#, 0.01
+    BuildBoxCorners 0#, 0.01, 0#, 0.03, 0#, 0.02
     ShiftExp 0.01, 0.005, 0.002
     If FindBodyByPoints() Is Nothing Then
         gFailures = gFailures & "MOVE_COPY_COUNT_MISMATCH (no copy at the translated position); "
@@ -408,14 +410,14 @@ Function VerifyRemoval(ByVal tag As String, ByVal idx As Long) As Boolean
         If Abs(bv - 0.000004) <= 0.000004 * 0.000001 Then
             seen1 = True
             Call BodyCentroid(bs(i), gBuf1(0), gBuf1(1), gBuf1(2))
-            If Abs(gBuf1(0) - 0.01) > 0.000001 Or Abs(gBuf1(1) - 0.01) > 0.000001 Or Abs(gBuf1(2) - 0.005) > 0.000001 Then
+            If Abs(gBuf1(0) - 0.005) > 0.000001 Or Abs(gBuf1(1) - 0.01) > 0.000001 Or Abs(gBuf1(2) - 0.01) > 0.000001 Then
                 gFailures = gFailures & tag & ": REMOVE_COLLATERAL (b1 centroid moved); "
                 Exit Function
             End If
         ElseIf Abs(bv - 0.000001) <= 0.000001 * 0.000001 Then
             seen3 = True
             Call BodyCentroid(bs(i), gBuf1(0), gBuf1(1), gBuf1(2))
-            If Abs(gBuf1(0) - 0.005) > 0.000001 Or Abs(gBuf1(1) - 0.0525) > 0.000001 Or Abs(gBuf1(2) - 0.005) > 0.000001 Then
+            If Abs(gBuf1(0) - 0.005) > 0.000001 Or Abs(gBuf1(1) - 0.0525) > 0.000001 Or Abs(gBuf1(2) - 0.01) > 0.000001 Then
                 gFailures = gFailures & tag & ": REMOVE_COLLATERAL (b3 centroid moved); "
                 Exit Function
             End If
@@ -631,7 +633,7 @@ Function MoveFixtureGate(ByVal idx As Long) As Boolean
         If Abs(bv - 0.000006) <= 0.000006 * 0.000001 Then
             seenA = True
             Call BodyCentroid(bs(i), gBuf1(0), gBuf1(1), gBuf1(2))
-            If Abs(gBuf1(0) - 0.01) > 0.000001 Or Abs(gBuf1(1) - 0.015) > 0.000001 Or Abs(gBuf1(2) - 0.005) > 0.000001 Then
+            If Abs(gBuf1(0) - 0.005) > 0.000001 Or Abs(gBuf1(1) - 0.015) > 0.000001 Or Abs(gBuf1(2) - 0.01) > 0.000001 Then
                 gFailures = gFailures & "fixture: A centroid " & SafeNum(gBuf1(0)) & "/" & SafeNum(gBuf1(1)) & "/" & SafeNum(gBuf1(2)) & " - the template frame changed; "
                 Exit Function
             End If
@@ -663,7 +665,7 @@ Function MoveFixtureGate(ByVal idx As Long) As Boolean
     End If
     ' A's point set must match the analytic corners (validates the
     ' vertex pipeline before any move is interpreted)
-    BuildBoxCorners 0#, 0.02, 0#, 0.03, 0#, 0.01
+    BuildBoxCorners 0#, 0.01, 0#, 0.03, 0#, 0.02
     If Not BodyPointsByVol(0.000006) Then
         gFailures = gFailures & "fixture: A's point set unreadable; "
         Exit Function

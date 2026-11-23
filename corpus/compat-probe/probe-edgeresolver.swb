@@ -659,7 +659,9 @@ Function FixtureGate(ByVal idx As Long) As Boolean
         Exit Function
     End If
     ' the frame pin: the template's first plane maps sketch (u,v) to
-    ' model (y,x) here (long edges along model Y) - individual centroids
+    ' model (y,z) here (long edges along model Y; the true mapping -
+' u->+y, v->+z, extrude->+x - was proven later on a non-square
+' section) - individual centroids
     ' make any template change fail loudly at this gate
     If Abs(cA(0) - 0.005) > 0.000001 Or Abs(cA(1) - 0.015) > 0.000001 Or Abs(cA(2) - 0.005) > 0.000001 Then
         gFailures = gFailures & "fixture: main centroid " & SafeNum(cA(0)) & "/" & SafeNum(cA(1)) & "/" & SafeNum(cA(2)) & " - the template frame changed; "

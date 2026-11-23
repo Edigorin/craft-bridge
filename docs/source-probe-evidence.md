@@ -481,3 +481,16 @@ gate (P1 D06) can build on this.
 - Reflected IEdge surface confirms GetStartVertex/GetEndVertex/GetBody/
   GetCurve/GetCurveParams2/3/GetClosestPointOn (GetClosestPointOn is
   available for pick-point matching in production code).
+
+### Frame correction (2026-11-23, from probe-moveremove's gate)
+
+The template frame note above ("sketch (u,v) -> model (y,x)") was an
+UNDER-DETERMINED reading: the edge-resolver fixture's cross-section was
+square (10x10 mm), so v->x and v->z were indistinguishable there (the
+identical centroid pins and twin-query geometry held either way, so all
+edge-resolver results stand). The move fixture's non-square section
+(30x20 mm) settled it: the default template's first plane maps sketch
+u->+y, v->+z, extrude blind ->+x (the first plane is the YZ/Right
+plane). Every model-space query must follow the MEASURED frame; fixture
+gates pin individual centroids on NON-SQUARE sections so this class of
+ambiguity fails loudly at the gate.
