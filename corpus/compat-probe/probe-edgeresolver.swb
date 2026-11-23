@@ -1,0 +1,882 @@
+' craft-bridge probe - probe-edgeresolver.swb (Phase B P0: the edge
+' resolver - one long edge among near-identical edges; Pierre's fillet
+' gate)
+' Hand-written on the proven probe skeleton (lessons applied: reflected
+' or documented-and-guarded members only, no inline Dims, single
+' definitions, every outcome a step, ownership tracked, terminal verdict
+' after verified cleanup).
+'
+' Evidence questions (research 12 P0 row + T1):
+'   ER1: does the GEOMETRIC matcher (curve endpoints, length, direction,
+'        pick-point distance) find EXACTLY ONE edge for a unique query on
+'        a body full of near-identical edges? (EDGE_NOT_FOUND /
+'        EDGE_AMBIGUOUS otherwise; never the lowest index.)
+'   ER2: does the AMBIGUOUS twin query (a pick point equidistant from two
+'        twin edges) REFUSE with EDGE_AMBIGUOUS? Any single pick is a
+'        wrong answer here.
+'   ER3: does the persistent reference round-trip? Capture with
+'        GetPersistReference3 before any topology change, resolve with
+'        GetObjectByPersistReference3 (status code checked) - identity is
+'        established by RE-MEASURING the resolved entity's geometry;
+'        byte arrays are NEVER used as a raw equality oracle. A garbage
+'        reference must refuse (PERSIST_RESOLVE_FAILED). The reference
+'        must also survive a supported rebuild (the upstream dimension
+'        edit) and resolve to the UPDATED geometry.
+'   ER4: checked body ownership - the resolved entity must belong to the
+'        fingerprinted target body (EDGE_WRONG_BODY otherwise).
+'
+' Fixture (independently authored synthetic): the MAIN body is a
+' 30x10x10 mm box (3e-6 m3, centroid 0.015/0.005/0.005 exact) drawn as
+' four CreateLine segments; its four x-edges (length 30mm) are the
+' near-identical twins. The CONTROL body is a 10x10x10 mm box at
+' x=50..60mm (1e-6 m3, centroid 0.055/0.005/0.005); analytic centroid
+' distance A-B is 0.04 m exact. The driving sketch dimension (the 30mm
+' side) is the upstream parameter edited 30mm->40mm for the rebuild
+' test (the body grows to 4e-6, the target x-edge to 40mm). Matcher
+' tolerance: pick-point distance 0.006 m; length 1e-6 m; direction
+' |dot| > 0.999. Tolerances are project choices for exact-decimal
+' fixtures. Every claim is a step; nothing is inferred from counts
+' without element access (research 11's rule).
+
+Option Explicit
+
+Dim swApp As SldWorks.SldWorks
+Dim swDoc As SldWorks.ModelDoc2
+Dim swFeatMgr As Object
+Dim swSketchMgr As SketchManager
+Dim reportPath As String
+Dim gFailures As String
+Dim gAbort As String
+Dim gFindings As String
+Dim gPhase As String
+Dim gDim As Object
+Dim gMatched As Object
+Dim gPersistRef As Variant
+Dim gEdgeP1(0 To 2) As Double
+Dim gEdgeP2(0 To 2) As Double
+
+Sub main()
+    Dim stepIdx As Long
+    Dim errNum As Long, errMsg As String
+    Dim closedOk As Boolean
+    Dim openCount As Long
+    On Error GoTo Fail
+
+    reportPath = ReportPathFromHost()
+    If reportPath = "" Then Err.Raise vbObjectError + 513, "probe-edgeresolver.swb", "no report path"
+    StartReport
+    WriteLine "{""type"":""header"",""macro"":""tools/probe-edgeresolver.swb"",""bridge_version"":""0.1.0""}"
+    Set swApp = Application.SldWorks
+
+    ' ---- fixture: the twin-edged box + the control ----
+    stepIdx = 0
+    If Not NewFixturePart() Then
+        gAbort = "fixture construction failed; the battery stops"
+        GoTo Finish
+    End If
+    If Not BuildMainBox() Then
+        gAbort = "fixture construction failed (the main box) at [" & gPhase & "]; findings: " & gFindings
+        GoTo Finish
+    End If
+    If Not DrawAndExtrudeBox(0.05, 0#, 0.06, 0.01, 0.01) Then
+        gAbort = "fixture construction failed (the control box); the battery stops"
+        GoTo Finish
+    End If
+    If Not FixtureGate(stepIdx) Then
+        gAbort = "fixture verification failed; the battery stops"
+        GoTo Finish
+    End If
+
+    ' ---- ER1: the unique query must match EXACTLY ONE edge ----
+    stepIdx = 1
+    If Not ResolveUnique(0.03, 0.002, stepIdx, "baseline") Then GoTo Finish
+
+    ' ---- ER4: checked body ownership on the matched edge ----
+    stepIdx = 2
+    If Not CheckOwnership(stepIdx, "baseline", 0.000003) Then GoTo Finish
+
+    ' ---- ER3: capture, resolve, and the garbage-ref negative ----
+    stepIdx = 3
+    If Not PersistRoundTrip(0.03, stepIdx, "baseline", 0.000003) Then GoTo Finish
+    stepIdx = 4
+    If Not PersistNegative(stepIdx) Then GoTo Finish
+
+    ' ---- ER2: the ambiguous twin query must REFUSE ----
+    stepIdx = 5
+    If Not AmbiguousRefusal(0.03, stepIdx) Then GoTo Finish
+
+    ' ---- the supported rebuild: the upstream dim edit 30mm -> 40mm ----
+    stepIdx = 6
+    If Not EditUpstreamDim(0.04, stepIdx) Then GoTo Finish
+    stepIdx = 7
+    If Not FixtureGateAfterEdit(stepIdx) Then GoTo Finish
+
+    ' ---- ER1/ER3/ER4 again after the rebuild ----
+    stepIdx = 8
+    If Not ResolveUnique(0.04, 0.002, stepIdx, "after-rebuild") Then GoTo Finish
+    stepIdx = 9
+    If Not CheckOwnership(stepIdx, "after-rebuild", 0.000004) Then GoTo Finish
+    stepIdx = 10
+    If Not PersistResolveAfterRebuild(0.04, stepIdx, 0.000004) Then GoTo Finish
+
+    ' ---- cleanup: verified close + the zero-open walk ----
+    stepIdx = 11
+    CloseOwnedDoc closedOk
+    If Not closedOk Then
+        gAbort = "uncertain cleanup; the battery stops"
+        GoTo Finish
+    End If
+    Set swDoc = Nothing
+    openCount = CountOpenDocuments()
+    If openCount <> 0 Then
+        gAbort = "uncertain cleanup: " & Trim(Str(openCount)) & " document(s) remain open"
+        WriteStep stepIdx, "cleanup", "failed", gAbort
+    Else
+        WriteStep stepIdx, "cleanup", "ok", "zero open documents"
+    End If
+
+Finish:
+    If Not swDoc Is Nothing Then
+        CloseOwnedDoc closedOk
+        If Not closedOk Then
+            gAbort = "uncertain cleanup at the finish path; the battery stops"
+        End If
+    End If
+    stepIdx = stepIdx + 1
+    If gAbort <> "" Then
+        WriteStep stepIdx, "probe-verdict", "failed", gAbort & " findings: " & gFindings
+    ElseIf gFailures = "" Then
+        WriteStep stepIdx, "probe-verdict", "ok", "exactly one edge matches the geometric query before and after the supported rebuild, the ambiguous twin query refuses (EDGE_AMBIGUOUS), the persistent reference round-trips by entity re-measurement (never byte equality) and resolves to the fingerprinted body. findings: " & gFindings
+    Else
+        WriteStep stepIdx, "probe-verdict", "failed", gFailures & " findings: " & gFindings
+    End If
+    WriteLine "{""type"":""summary"",""status"":""ok""}"
+    Exit Sub
+
+Fail:
+    errNum = Err.Number
+    errMsg = Err.Description
+    On Error Resume Next
+    If reportPath = "" Then reportPath = ReportPathFromHost()
+    If reportPath <> "" Then
+        WriteStep stepIdx, "macro", "failed", "at phase [" & gPhase & "] err " & Trim(Str(errNum)) & ": " & errMsg
+        CloseOwnedDoc closedOk
+        WriteStep stepIdx, "probe-verdict", "failed", "the macro raised before its verdict; the battery is inconclusive"
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
+    End If
+End Sub
+
+' ===================== ER1: the geometric matcher =====================
+' Candidates are restricted to the fingerprinted target body; a match
+' needs length within 1e-6 m, |direction dot| > 0.999 (orientation-free),
+' and pick-point-to-segment distance under the tolerance. Exactly one
+' match is required; zero is EDGE_NOT_FOUND, more is EDGE_AMBIGUOUS.
+
+Function ResolveUnique(ByVal wantLen As Double, ByVal pickY As Double, ByVal idx As Long, ByVal tag As String) As Boolean
+    Dim matched As Object
+    Dim n As Long
+    ResolveUnique = False
+    n = CountEdgeMatches(1#, 0#, 0#, wantLen, 0.015, pickY, 0.002, 0.006, ExpVolOf(wantLen), matched)
+    If n = 1 Then
+        WriteStep idx, "resolve." & tag, "ok", "exactly one match; edge " & SafeNum(gEdgeP1(0)) & "/" & SafeNum(gEdgeP1(1)) & "/" & SafeNum(gEdgeP1(2)) & " -> " & SafeNum(gEdgeP2(0)) & "/" & SafeNum(gEdgeP2(1)) & "/" & SafeNum(gEdgeP2(2))
+        Set gMatched = matched
+        ResolveUnique = True
+    ElseIf n = 0 Then
+        gFailures = gFailures & tag & ": EDGE_NOT_FOUND (no candidate matched); "
+    Else
+        gFailures = gFailures & tag & ": EDGE_AMBIGUOUS (" & Trim(Str(n)) & " candidates matched); "
+    End If
+End Function
+
+Function ExpVolOf(ByVal wantLen As Double) As Double
+    ' the main box volume for the given length (10x10 mm section)
+    ExpVolOf = wantLen * 0.0001
+End Function
+
+Function CountEdgeMatches(ByVal dx As Double, ByVal dy As Double, ByVal dz As Double, ByVal wantLen As Double, ByVal pickX As Double, ByVal pickY As Double, ByVal pickZ As Double, ByVal tol As Double, ByVal expVol As Double, ByRef matched As Object) As Long
+    Dim bs As Variant
+    Dim i As Long, bv As Double
+    Dim target As Object
+    Dim edges As Variant
+    Dim j As Long
+    Dim e As Object
+    Dim p1(0 To 2) As Double
+    Dim p2(0 To 2) As Double
+    Dim elen As Double, dprod As Double
+    Dim pd As Double
+    Dim n As Long
+    CountEdgeMatches = -1
+    n = 0
+    Set matched = Nothing
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    Set target = Nothing
+    For i = LBound(bs) To UBound(bs)
+        bv = BodyVolume(bs(i))
+        If Abs(bv - expVol) <= expVol * 0.000001 Then Set target = bs(i)
+    Next
+    If target Is Nothing Then Exit Function
+    Err.Clear
+    edges = target.GetEdges
+    If Err.Number <> 0 Then Exit Function
+    If Not IsArray(edges) Then Exit Function
+    For j = LBound(edges) To UBound(edges)
+        Err.Clear
+        Set e = edges(j)
+        If Err.Number <> 0 Then
+            gFindings = gFindings & "edge element access raised; "
+            Exit Function
+        End If
+        If e Is Nothing Then
+            gFindings = gFindings & "edge element is Nothing; "
+        ElseIf EdgeSeg(e, p1(0), p1(1), p1(2), p2(0), p2(1), p2(2)) Then
+            elen = PtDist(p1(0), p1(1), p1(2), p2(0), p2(1), p2(2))
+            dprod = (p2(0) - p1(0)) * dx + (p2(1) - p1(1)) * dy + (p2(2) - p1(2)) * dz
+            If elen > 0 Then dprod = dprod / (elen * Sqr(dx * dx + dy * dy + dz * dz))
+            pd = PtSegDist(pickX, pickY, pickZ, p1(0), p1(1), p1(2), p2(0), p2(1), p2(2))
+            If Abs(elen - wantLen) <= 0.000001 And Abs(dprod) > 0.999 And pd < tol Then
+                n = n + 1
+                If n = 1 Then
+                    Set matched = e
+                    gEdgeP1(0) = p1(0): gEdgeP1(1) = p1(1): gEdgeP1(2) = p1(2)
+                    gEdgeP2(0) = p2(0): gEdgeP2(1) = p2(1): gEdgeP2(2) = p2(2)
+                End If
+            End If
+        Else
+            gFindings = gFindings & "edge without a usable endpoint pair; "
+        End If
+    Next
+    CountEdgeMatches = n
+End Function
+
+' The edge's endpoint pair through its vertices (documented members,
+' guarded; a raise is a recorded finding, not a crash).
+Function EdgeSeg(ByVal e As Object, ByRef x1 As Double, ByRef y1 As Double, ByRef z1 As Double, ByRef x2 As Double, ByRef y2 As Double, ByRef z2 As Double) As Boolean
+    Dim v1 As Object, v2 As Object
+    Dim a As Variant, b As Variant
+    EdgeSeg = False
+    Err.Clear
+    Set v1 = e.GetStartVertex
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    Set v2 = e.GetEndVertex
+    If Err.Number <> 0 Then Exit Function
+    If v1 Is Nothing Or v2 Is Nothing Then Exit Function
+    Err.Clear
+    a = v1.GetPoint3
+    If Err.Number <> 0 Then
+        gFindings = gFindings & "GetPoint3 raised " & Trim(Str(Err.Number)) & "; "
+        Exit Function
+    End If
+    Err.Clear
+    b = v2.GetPoint3
+    If Err.Number <> 0 Then
+        gFindings = gFindings & "GetPoint3 raised " & Trim(Str(Err.Number)) & "; "
+        Exit Function
+    End If
+    If Not IsArray(a) Or Not IsArray(b) Then
+        gFindings = gFindings & "GetPoint3 did not return an array; "
+        Exit Function
+    End If
+    If UBound(a) < 2 Or UBound(b) < 2 Then
+        gFindings = gFindings & "GetPoint3 array too small; "
+        Exit Function
+    End If
+    x1 = a(0): y1 = a(1): z1 = a(2)
+    x2 = b(0): y2 = b(1): z2 = b(2)
+    EdgeSeg = True
+End Function
+
+' ===================== ER2: the ambiguous negative =====================
+
+Function AmbiguousRefusal(ByVal wantLen As Double, ByVal idx As Long) As Boolean
+    Dim matched As Object
+    Dim n As Long
+    AmbiguousRefusal = False
+    ' the pick point sits exactly between the twin x-edges at y=0 and
+    ' y=10mm (both 5mm away, inside the 6mm tolerance): two candidates
+    ' match equally and the resolver must refuse to choose
+    n = CountEdgeMatches(1#, 0#, 0#, wantLen, 0.015, 0.005, 0#, 0.006, ExpVolOf(wantLen), matched)
+    If n = 2 Then
+        WriteStep idx, "resolve.ambiguous-twin", "ok", "EDGE_AMBIGUOUS enforced: 2 twin candidates matched and none was chosen"
+        AmbiguousRefusal = True
+    ElseIf n = 1 Then
+        gFailures = gFailures & "the ambiguous twin query resolved to ONE edge (EDGE_AMBIGUOUS not enforced - an index guess); "
+    ElseIf n = 0 Then
+        gFailures = gFailures & "the ambiguous twin query found no candidate at all (fixture/tolerance wrong - expected 2); "
+    Else
+        gFailures = gFailures & "the ambiguous twin query matched " & Trim(Str(n)) & " candidates (expected 2); "
+    End If
+End Function
+
+' ===================== ER4: checked body ownership =====================
+
+Function CheckOwnership(ByVal idx As Long, ByVal tag As String, ByVal expVol As Double) As Boolean
+    Dim eb As Object
+    Dim bv As Double
+    CheckOwnership = False
+    If gMatched Is Nothing Then
+        gFailures = gFailures & tag & ": no matched edge to check ownership of (EDGE_WRONG_BODY); "
+        Exit Function
+    End If
+    Err.Clear
+    Set eb = gMatched.GetBody
+    If Err.Number <> 0 Or eb Is Nothing Then
+        gFailures = gFailures & tag & ": EDGE_WRONG_BODY (GetBody unavailable); "
+        Exit Function
+    End If
+    bv = BodyVolume(eb)
+    If Abs(bv - expVol) > expVol * 0.000001 Then
+        gFailures = gFailures & tag & ": EDGE_WRONG_BODY (owner body volume " & SafeNum(bv) & " expected " & SafeNum(expVol) & "); "
+        Exit Function
+    End If
+    WriteStep idx, "ownership." & tag, "ok", "matched edge belongs to the target body (volume " & SafeNum(bv) & ")"
+    CheckOwnership = True
+End Function
+
+' ===================== ER3: persistent references =====================
+' The raw byte array is captured and its SHAPE recorded as a finding,
+' but NEVER compared for equality: identity is established by resolving
+' the reference and re-measuring the resolved entity's geometry.
+
+Function PersistRoundTrip(ByVal wantLen As Double, ByVal idx As Long, ByVal tag As String, ByVal expVol As Double) As Boolean
+    Dim raw As Variant
+    Dim obj As Object
+    Dim status As Long
+    Dim p1(0 To 2) As Double
+    Dim p2(0 To 2) As Double
+    Dim elen As Double
+    PersistRoundTrip = False
+    If gMatched Is Nothing Then
+        gFailures = gFailures & tag & ": no matched edge to capture (PERSIST_RESOLVE_FAILED); "
+        Exit Function
+    End If
+    Err.Clear
+    raw = swDoc.Extension.GetPersistReference3(gMatched)
+    If Err.Number <> 0 Or Not IsArray(raw) Then
+        gFailures = gFailures & tag & ": PERSIST_RESOLVE_FAILED (capture did not return an array); "
+        Exit Function
+    End If
+    gFindings = gFindings & "persist-ref shape: vartype " & Trim(Str(VarType(raw))) & " bounds " & Trim(Str(LBound(raw))) & ".." & Trim(Str(UBound(raw))) & " (recorded only, never compared); "
+    gPersistRef = raw
+    Err.Clear
+    status = -1
+    Set obj = swDoc.Extension.GetObjectByPersistReference3(raw, status)
+    If Err.Number <> 0 Then
+        gFailures = gFailures & tag & ": PERSIST_RESOLVE_FAILED (resolve raised); "
+        Exit Function
+    End If
+    If status <> 0 Then
+        gFailures = gFailures & tag & ": PERSIST_RESOLVE_FAILED (status " & Trim(Str(status)) & "); "
+        Exit Function
+    End If
+    If obj Is Nothing Then
+        gFailures = gFailures & tag & ": PERSIST_RESOLVE_FAILED (empty result); "
+        Exit Function
+    End If
+    gFindings = gFindings & "resolved entity type " & TypeName(obj) & "; "
+    If Not EdgeSeg(obj, p1(0), p1(1), p1(2), p2(0), p2(1), p2(2)) Then
+        gFailures = gFailures & tag & ": PERSIST_RESOLVE_FAILED (resolved entity has no measurable endpoints); "
+        Exit Function
+    End If
+    elen = PtDist(p1(0), p1(1), p1(2), p2(0), p2(1), p2(2))
+    If Abs(elen - wantLen) > 0.000001 Then
+        gFailures = gFailures & tag & ": PERSIST_RESOLVE_FAILED (resolved edge length " & SafeNum(elen) & " expected " & SafeNum(wantLen) & " - entity re-measurement disagrees); "
+        Exit Function
+    End If
+    If Not ResolvedOwnership(obj, expVol, tag) Then Exit Function
+    WriteStep idx, "persist." & tag, "ok", "captured, resolved (status 0), entity re-measured length " & SafeNum(elen) & " on the fingerprinted body"
+    PersistRoundTrip = True
+End Function
+
+Function PersistResolveAfterRebuild(ByVal wantLen As Double, ByVal idx As Long, ByVal expVol As Double) As Boolean
+    ' the reference captured at baseline must survive the supported
+    ' rebuild and resolve to the UPDATED geometry
+    Dim obj As Object
+    Dim status As Long
+    Dim p1(0 To 2) As Double
+    Dim p2(0 To 2) As Double
+    Dim elen As Double
+    PersistResolveAfterRebuild = False
+    If Not IsArray(gPersistRef) Then
+        gFailures = gFailures & "after-rebuild: no baseline reference captured (PERSIST_RESOLVE_FAILED); "
+        Exit Function
+    End If
+    Err.Clear
+    status = -1
+    Set obj = swDoc.Extension.GetObjectByPersistReference3(gPersistRef, status)
+    If Err.Number <> 0 Or status <> 0 Or obj Is Nothing Then
+        gFailures = gFailures & "after-rebuild: PERSIST_RESOLVE_FAILED (status " & Trim(Str(status)) & "); "
+        Exit Function
+    End If
+    If Not EdgeSeg(obj, p1(0), p1(1), p1(2), p2(0), p2(1), p2(2)) Then
+        gFailures = gFailures & "after-rebuild: PERSIST_RESOLVE_FAILED (no measurable endpoints); "
+        Exit Function
+    End If
+    elen = PtDist(p1(0), p1(1), p1(2), p2(0), p2(1), p2(2))
+    If Abs(elen - wantLen) > 0.000001 Then
+        gFailures = gFailures & "after-rebuild: PERSIST_RESOLVE_FAILED (stale geometry: length " & SafeNum(elen) & " expected " & SafeNum(wantLen) & "); "
+        Exit Function
+    End If
+    If Not ResolvedOwnership(obj, expVol, "after-rebuild") Then Exit Function
+    WriteStep idx, "persist.after-rebuild", "ok", "baseline reference survives the rebuild and re-measures " & SafeNum(elen) & " on the fingerprinted body"
+    PersistResolveAfterRebuild = True
+End Function
+
+Function ResolvedOwnership(ByVal obj As Object, ByVal expVol As Double, ByVal tag As String) As Boolean
+    Dim eb As Object
+    Dim bv As Double
+    ResolvedOwnership = False
+    Err.Clear
+    Set eb = obj.GetBody
+    If Err.Number <> 0 Or eb Is Nothing Then
+        gFailures = gFailures & tag & ": EDGE_WRONG_BODY (resolved entity's body unavailable); "
+        Exit Function
+    End If
+    bv = BodyVolume(eb)
+    If Abs(bv - expVol) > expVol * 0.000001 Then
+        gFailures = gFailures & tag & ": EDGE_WRONG_BODY (resolved entity on volume " & SafeNum(bv) & " expected " & SafeNum(expVol) & "); "
+        Exit Function
+    End If
+    ResolvedOwnership = True
+End Function
+
+Function PersistNegative(ByVal idx As Long) As Boolean
+    Dim emptyRef As Variant
+    Dim obj As Object
+    Dim status As Long
+    PersistNegative = False
+    emptyRef = Array(9, 9, 9)
+    Err.Clear
+    status = -1
+    Set obj = swDoc.Extension.GetObjectByPersistReference3(emptyRef, status)
+    If Err.Number <> 0 Then
+        WriteStep idx, "persist.garbage-ref", "ok", "refused by raise (the garbage reference was not resolved)"
+        PersistNegative = True
+        Exit Function
+    End If
+    If status <> 0 Then
+        WriteStep idx, "persist.garbage-ref", "ok", "refused with status " & Trim(Str(status)) & " (PERSIST_RESOLVE_FAILED as required)"
+        PersistNegative = True
+        Exit Function
+    End If
+    If obj Is Nothing Then
+        WriteStep idx, "persist.garbage-ref", "ok", "refused with an empty result (PERSIST_RESOLVE_FAILED as required)"
+        PersistNegative = True
+        Exit Function
+    End If
+    gFailures = gFailures & "the garbage reference RESOLVED (PERSIST_RESOLVE_FAILED not enforced); "
+End Function
+
+' ===================== the upstream dimension edit =====================
+
+Function EditUpstreamDim(ByVal newVal As Double, ByVal idx As Long) As Boolean
+    Dim ok As Boolean
+    EditUpstreamDim = False
+    If gDim Is Nothing Then
+        gAbort = "the driving dimension handle is lost; the battery stops"
+        Exit Function
+    End If
+    Err.Clear
+    gDim.SystemValue = newVal
+    If Err.Number <> 0 Then
+        gFailures = gFailures & "the upstream dimension edit raised (the rebuild is not supported); "
+        Exit Function
+    End If
+    Err.Clear
+    ok = swDoc.EditRebuild3()
+    WriteStep idx, "edit.upstream-dim", "ok", "length 30mm->40mm; rebuild " & CStr(ok)
+    EditUpstreamDim = True
+End Function
+
+' ===================== fixture construction =====================
+
+Function NewFixturePart() As Boolean
+    Dim template As String
+    NewFixturePart = False
+    Err.Clear
+    template = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
+    If Err.Number <> 0 Or template = "" Then
+        gFailures = gFailures & "no default part template; "
+        Exit Function
+    End If
+    Set swDoc = swApp.NewDocument(template, 0, 0, 0)
+    If swDoc Is Nothing Then
+        gFailures = gFailures & "NewDocument returned nothing; "
+        Exit Function
+    End If
+    Set swFeatMgr = swDoc.FeatureManager
+    Set swSketchMgr = swDoc.SketchManager
+    NewFixturePart = True
+End Function
+
+' The main box: four CreateLine segments (known coordinates by
+' construction), coincidence-closed, the 30mm side dimensioned as the
+' upstream parameter. The four x-edges of the resulting box are the
+' near-identical twins the resolver must distinguish.
+Function BuildMainBox() As Boolean
+    Dim sk As Object, nm As String, feat As Object, ok As Boolean
+    Dim l0 As Object, l1 As Object, l2 As Object, l3 As Object
+    Dim dd As Object, dm As Object
+    BuildMainBox = False
+    gPhase = "build: open sketch"
+    If Not OpenSketchOnFirstPlane() Then Exit Function
+    gPhase = "build: four lines"
+    Set l0 = swSketchMgr.CreateLine(0#, 0#, 0#, 0.03, 0#, 0#)
+    Set l1 = swSketchMgr.CreateLine(0.03, 0#, 0#, 0.03, 0.01, 0#)
+    Set l2 = swSketchMgr.CreateLine(0.03, 0.01, 0#, 0#, 0.01, 0#)
+    Set l3 = swSketchMgr.CreateLine(0#, 0.01, 0#, 0#, 0#, 0#)
+    If l0 Is Nothing Or l1 Is Nothing Or l2 Is Nothing Or l3 Is Nothing Then Exit Function
+    gPhase = "build: coincidences"
+    If Not JoinSegs(l0, l1) Then Exit Function
+    If Not JoinSegs(l1, l2) Then Exit Function
+    If Not JoinSegs(l2, l3) Then Exit Function
+    If Not JoinSegs(l3, l0) Then Exit Function
+    gPhase = "build: the upstream dim"
+    swDoc.ClearSelection2 True
+    ok = l0.GetStartPoint2.Select(False)
+    If ok Then ok = l0.GetEndPoint2.Select(True)
+    If Not ok Then Exit Function
+    Set dd = swDoc.AddDimension2(0.015, -0.005, 0#)
+    If dd Is Nothing Then Exit Function
+    Set dm = dd.GetDimension2(0)
+    If dm Is Nothing Then Exit Function
+    Set gDim = dm
+    gPhase = "build: extrude"
+    Set sk = swSketchMgr.ActiveSketch
+    If Not swSketchMgr.ActiveSketch Is Nothing Then swSketchMgr.InsertSketch True
+    nm = sk.Name
+    swDoc.ClearSelection2 True
+    ok = sk.Select(False)
+    If ok = False Then ok = swDoc.Extension.SelectByID2(nm, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    If ok = False Then Exit Function
+    Err.Clear
+    Set feat = swFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.01, 0#, False, False, False, False, 0#, 0#, False, False, False, False, False, False, True, 0, 0#, False)
+    BuildMainBox = (Not feat Is Nothing)
+End Function
+
+Function JoinSegs(ByVal a As Object, ByVal b As Object) As Boolean
+    Dim ok As Boolean
+    JoinSegs = False
+    swDoc.ClearSelection2 True
+    ok = a.GetEndPoint2.Select(False)
+    If ok Then ok = b.GetStartPoint2.Select(True)
+    If Not ok Then Exit Function
+    swDoc.SketchAddConstraints "sgCOINCIDENT"
+    JoinSegs = True
+End Function
+
+Function DrawAndExtrudeBox(ByVal x1 As Double, ByVal y1 As Double, ByVal x2 As Double, ByVal y2 As Double, ByVal h As Double) As Boolean
+    Dim sk As Object, nm As String, feat As Object, ok As Boolean
+    DrawAndExtrudeBox = False
+    If Not OpenSketchOnFirstPlane() Then Exit Function
+    swSketchMgr.CreateCornerRectangle x1, y1, 0#, x2, y2, 0#
+    Set sk = swSketchMgr.ActiveSketch
+    If sk Is Nothing Then Exit Function
+    nm = sk.Name
+    swSketchMgr.InsertSketch True
+    ok = False
+    If Not sk Is Nothing Then ok = sk.Select(False)
+    If ok = False Then ok = swDoc.Extension.SelectByID2(nm, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    If ok = False Then Exit Function
+    Err.Clear
+    Set feat = swFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, h, 0#, False, False, False, False, 0#, 0#, False, False, False, False, False, False, True, 0, 0#, False)
+    DrawAndExtrudeBox = (Not feat Is Nothing)
+End Function
+
+Function OpenSketchOnFirstPlane() As Boolean
+    Dim feat As SldWorks.Feature, ok As Boolean
+    OpenSketchOnFirstPlane = False
+    Set feat = swDoc.FirstFeature
+    Do While Not feat Is Nothing
+        If InStr(1, feat.GetTypeName2(), "Plane", vbTextCompare) > 0 Then
+            swDoc.ClearSelection2 True
+            ok = feat.Select(False)
+            If ok Then
+                swSketchMgr.InsertSketch True
+                If Not swSketchMgr.ActiveSketch Is Nothing Then
+                    OpenSketchOnFirstPlane = True
+                    Exit Function
+                End If
+            End If
+        End If
+        Set feat = feat.GetNextFeature
+    Loop
+End Function
+
+' The fixture gate: main 3e-6 m3 (centroid 0.015/0.005/0.005), control
+' 1e-6 m3 (centroid 0.055/0.005/0.005), distance 0.04 m exact.
+Function FixtureGate(ByVal idx As Long) As Boolean
+    Dim bs As Variant
+    Dim vA As Double, vB As Double
+    Dim cA(0 To 2) As Double
+    Dim cB(0 To 2) As Double
+    Dim i As Long, n As Long, bv As Double
+    Dim dist As Double
+    FixtureGate = False
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    n = UBound(bs) - LBound(bs) + 1
+    If n <> 2 Then
+        gFailures = gFailures & "fixture: " & Trim(Str(n)) & " bodies, expected 2; "
+        Exit Function
+    End If
+    For i = LBound(bs) To UBound(bs)
+        bv = BodyVolume(bs(i))
+        If Abs(bv - 0.000003) <= 0.000003 * 0.000001 Then
+            vA = bv
+            Call BodyCentroid(bs(i), cA(0), cA(1), cA(2))
+        ElseIf Abs(bv - 0.000001) <= 0.000001 * 0.000001 Then
+            vB = bv
+            Call BodyCentroid(bs(i), cB(0), cB(1), cB(2))
+        Else
+            gFailures = gFailures & "fixture: body volume " & SafeNum(bv) & " is not a fixture fingerprint; "
+            Exit Function
+        End If
+    Next
+    dist = PtDist(cA(0), cA(1), cA(2), cB(0), cB(1), cB(2))
+    If Abs(dist - 0.04) > 0.000001 Then
+        gFailures = gFailures & "fixture: centroid distance " & SafeNum(dist) & " wrong; "
+        Exit Function
+    End If
+    If Abs(gDim.SystemValue - 0.03) > 0.000001 Then
+        gFailures = gFailures & "fixture: the driving dim is " & SafeNum(gDim.SystemValue) & " expected 0.03; "
+        Exit Function
+    End If
+    WriteStep idx, "fixture", "ok", "main 3e-6 + control 1e-6, distance 0.04, dim 0.03 verified"
+    FixtureGate = True
+End Function
+
+Function FixtureGateAfterEdit(ByVal idx As Long) As Boolean
+    Dim bs As Variant
+    Dim i As Long, n As Long, bv As Double
+    Dim okA As Boolean
+    FixtureGateAfterEdit = False
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    n = UBound(bs) - LBound(bs) + 1
+    If n <> 2 Then
+        gFailures = gFailures & "after-edit fixture: " & Trim(Str(n)) & " bodies, expected 2 (REMOVE_COLLATERAL); "
+        Exit Function
+    End If
+    For i = LBound(bs) To UBound(bs)
+        bv = BodyVolume(bs(i))
+        If Abs(bv - 0.000004) <= 0.000004 * 0.000001 Then okA = True
+        If Abs(bv - 0.000001) > 0.000001 * 0.000001 And Abs(bv - 0.000004) > 0.000004 * 0.000001 Then
+            gFailures = gFailures & "after-edit fixture: body volume " & SafeNum(bv) & " unexpected (the control changed?); "
+            Exit Function
+        End If
+    Next
+    If Not okA Then
+        gFailures = gFailures & "after-edit fixture: the grown body (4e-6) is missing; "
+        Exit Function
+    End If
+    If Abs(gDim.SystemValue - 0.04) > 0.000001 Then
+        gFailures = gFailures & "after-edit fixture: the driving dim is " & SafeNum(gDim.SystemValue) & " expected 0.04; "
+        Exit Function
+    End If
+    WriteStep idx, "fixture.after-edit", "ok", "main 4e-6 + control 1e-6 invariant, dim 0.04 verified"
+    FixtureGateAfterEdit = True
+End Function
+
+' ===================== measured-value helpers =====================
+
+Function PartDocBodies() As Variant
+    Dim pd As Object
+    On Error Resume Next
+    PartDocBodies = Empty
+    Set pd = swDoc
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    PartDocBodies = pd.GetBodies2(0, False)
+End Function
+
+Function BodyVolume(ByVal b As Object) As Double
+    Dim v As Variant
+    BodyVolume = -1
+    Err.Clear
+    v = b.GetMassProperties(1000#)
+    If Err.Number <> 0 Then Exit Function
+    If Not IsArray(v) Then Exit Function
+    If UBound(v) < 3 Then Exit Function
+    If v(3) <> v(3) Then Exit Function
+    BodyVolume = v(3)
+End Function
+
+Sub BodyCentroid(ByVal b As Object, ByRef cx As Double, ByRef cy As Double, ByRef cz As Double)
+    Dim v As Variant
+    cx = 0
+    cy = 0
+    cz = 0
+    Err.Clear
+    v = b.GetMassProperties(1000#)
+    If Err.Number <> 0 Then Exit Sub
+    If Not IsArray(v) Then Exit Sub
+    If UBound(v) < 2 Then Exit Sub
+    cx = v(0)
+    cy = v(1)
+    cz = v(2)
+End Sub
+
+Function PtDist(ByVal x1 As Double, ByVal y1 As Double, ByVal z1 As Double, ByVal x2 As Double, ByVal y2 As Double, ByVal z2 As Double) As Double
+    PtDist = Sqr((x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2) + (z1 - z2) * (z1 - z2))
+End Function
+
+' distance from a point to a segment (projection clamped to the ends)
+Function PtSegDist(ByVal px As Double, ByVal py As Double, ByVal pz As Double, ByVal x1 As Double, ByVal y1 As Double, ByVal z1 As Double, ByVal x2 As Double, ByVal y2 As Double, ByVal z2 As Double) As Double
+    Dim dx As Double, dy As Double, dz As Double
+    Dim l2 As Double, t As Double
+    dx = x2 - x1
+    dy = y2 - y1
+    dz = z2 - z1
+    l2 = dx * dx + dy * dy + dz * dz
+    If l2 <= 0 Then
+        PtSegDist = PtDist(px, py, pz, x1, y1, z1)
+        Exit Function
+    End If
+    t = ((px - x1) * dx + (py - y1) * dy + (pz - z1) * dz) / l2
+    If t < 0 Then t = 0
+    If t > 1 Then t = 1
+    PtSegDist = PtDist(px, py, pz, x1 + t * dx, y1 + t * dy, z1 + t * dz)
+End Function
+
+Function CountOpenDocuments() As Long
+    Dim d As Object, n As Long
+    Dim titles As String
+    On Error Resume Next
+    CountOpenDocuments = -1
+    n = 0
+    titles = ""
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Function
+    Do While Not d Is Nothing
+        n = n + 1
+        Err.Clear
+        titles = titles & "[" & TypeName(d) & " " & d.GetTitle & "] "
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Function
+    Loop
+    gFindings = gFindings & "open-at-count: " & Trim(titles) & "; "
+    CountOpenDocuments = n
+End Function
+
+' ===================== shared skeleton helpers =====================
+' (reused verbatim from the probe skeleton)
+
+Sub StartReport()
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Output As #f
+    Close #f
+End Sub
+
+Sub WriteLine(ByVal text As String)
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Append As #f
+    Print #f, text
+    Close #f
+End Sub
+
+Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)
+    WriteLine "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
+End Sub
+
+Function ReportPathFromHost() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim got As Boolean
+    ReportPathFromHost = ""
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p <> "" Then
+        p = p & "\craft-bridge-report-path.txt"
+        Err.Clear
+        f = FreeFile
+        Open p For Input As #f
+        If Err.Number = 0 Then
+            Err.Clear
+            Line Input #f, oneLine
+            got = (Err.Number = 0)
+            Err.Clear
+            Close #f
+            If got Then
+                oneLine = Trim(oneLine)
+                If oneLine <> "" Then
+                    ReportPathFromHost = oneLine
+                    Exit Function
+                End If
+            End If
+        End If
+        Err.Clear
+    End If
+    ReportPathFromHost = Trim(Environ$("CRAFT_BRIDGE_REPORT"))
+End Function
+
+Sub CloseOwnedDoc(ByRef closedOk As Boolean)
+    Dim exact As String
+    Dim d As Object
+    Dim t2 As String
+    Dim cnt As Long
+    Dim isOurs As Boolean
+    On Error Resume Next
+    closedOk = False
+    If swDoc Is Nothing Then
+        closedOk = True
+        Exit Sub
+    End If
+    Err.Clear
+    exact = swDoc.GetTitle
+    If Err.Number <> 0 Then Exit Sub
+    If Trim(exact) = "" Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then
+            cnt = cnt + 1
+            If d Is swDoc Then isOurs = True
+        End If
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt <> 1 Or Not isOurs Then Exit Sub
+    Err.Clear
+    swApp.CloseDoc exact
+    If Err.Number <> 0 Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    cnt = 0
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then cnt = cnt + 1
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt = 0 Then closedOk = True
+End Sub
+
+Function JsonStr(ByVal s As String) As String
+    Dim t As String
+    t = Replace(s, "\", "\\")
+    t = Replace(t, """", "\""")
+    t = Replace(t, vbCrLf, "\n")
+    t = Replace(t, vbCr, "\n")
+    t = Replace(t, vbLf, "\n")
+    t = Replace(t, vbTab, "\t")
+    JsonStr = t
+End Function
+
+Function SafeNum(ByVal x As Double) As String
+    If x <> x Then SafeNum = "NaN": Exit Function
+    If Abs(x) > 1E+100 Then SafeNum = "INF": Exit Function
+    SafeNum = Trim(Str(x))
+End Function
