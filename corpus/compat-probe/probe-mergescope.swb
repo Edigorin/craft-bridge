@@ -47,7 +47,7 @@ Option Explicit
 
 Dim swApp As SldWorks.SldWorks
 Dim swDoc As SldWorks.ModelDoc2
-Dim swFeatMgr As FeatureManager
+Dim swFeatMgr As Object
 Dim swSketchMgr As SketchManager
 Dim reportPath As String
 Dim gFailures As String
@@ -141,7 +141,7 @@ End Sub
 ' ================================================================
 Sub RunBooleanCase(ByVal idx As Long, ByVal op As String, ByVal form As String)
     Dim tag As String
-    Dim bodyA As SldWorks.Body2, bodyB As SldWorks.Body2, bodyC As SldWorks.Body2
+    Dim bodyA As Object, bodyB As Object, bodyC As Object
     Dim vA As Double, vB As Double, vC As Double
     Dim dAB As Double, dAC As Double, dBC As Double
     Dim overlap As Double, expMain As Double, expCount As Long
@@ -200,7 +200,7 @@ Sub RunBooleanCase(ByVal idx As Long, ByVal op As String, ByVal form As String)
             Set cf = swFeatMgr.InsertCombineFeature(opCode, Nothing, toolsArr)
         End If
     Else
-        Dim emptyArr As Variant, sd As SldWorks.SelectData
+        Dim emptyArr As Variant, sd As Object
         emptyArr = Array()
         swDoc.ClearSelection2 True
         Set sd = swDoc.SelectionManager.CreateSelectData
@@ -226,7 +226,7 @@ Sub RunBooleanCase(ByVal idx As Long, ByVal op As String, ByVal form As String)
 
     ' ---- operand readback under the selection-access protocol (SM3/SM2) ----
     readOp = -1: readCount = -1: readMain = 0
-    Dim cfd As SldWorks.CombineBodiesFeatureData
+    Dim cfd As Object
     Err.Clear
     Set cfd = cf.GetDefinition
     If Err.Number = 0 And Not cfd Is Nothing Then
@@ -288,7 +288,7 @@ End Sub
 ' must land in exactly one body; with Merge=False a new body appears.
 ' ================================================================
 Sub RunJoinExtrudeCase(ByVal idx As Long, ByVal tag As String, ByVal mergeFlag As Boolean, ByVal twoCandidates As Boolean)
-    Dim targetBody As SldWorks.Body2, ctrlBody As SldWorks.Body2, secondBody As SldWorks.Body2
+    Dim targetBody As Object, ctrlBody As Object, secondBody As Object
     Dim vT As Double, vC As Double, vS As Double
     Dim expCount As Long, afterBodies As Variant, i As Long
     Dim grownVol As Double, ctrlVol As Double, freeVol As Double, countAfter As Long
@@ -444,7 +444,7 @@ End Function
 ' Identify A/B/C by VOLUME FINGERPRINT (returned order is never
 ' trusted - the body-registry lesson) and measure the pairwise centroid
 ' distances as the fixture gate.
-Function IdentifyBodies(ByVal tag As String, ByRef bodyA As SldWorks.Body2, ByRef bodyB As SldWorks.Body2, ByRef bodyC As SldWorks.Body2, ByRef vA As Double, ByRef vB As Double, ByRef vC As Double, ByRef dAB As Double, ByRef dAC As Double, ByRef dBC As Double) As Boolean
+Function IdentifyBodies(ByVal tag As String, ByRef bodyA As Object, ByRef bodyB As Object, ByRef bodyC As Object, ByRef vA As Double, ByRef vB As Double, ByRef vC As Double, ByRef dAB As Double, ByRef dAC As Double, ByRef dBC As Double) As Boolean
     Dim bs As Variant, i As Long, n As Long
     Dim bv As Double, c(0 To 2, 0 To 2) As Double
     IdentifyBodies = False
@@ -483,7 +483,7 @@ End Function
 ' candidate (1e-6 - the 10x10x10 box). The second candidate's volume
 ' equals the control's, so identify by POSITION: the control is the
 ' body whose centroid is farthest from the target's.
-Function IdentifyJoinBodies(ByVal tag As String, ByRef targetBody As SldWorks.Body2, ByRef ctrlBody As SldWorks.Body2, ByRef secondBody As SldWorks.Body2, ByRef vT As Double, ByRef vC As Double, ByRef vS As Double, ByVal twoCandidates As Boolean) As Boolean
+Function IdentifyJoinBodies(ByVal tag As String, ByRef targetBody As Object, ByRef ctrlBody As Object, ByRef secondBody As Object, ByRef vT As Double, ByRef vC As Double, ByRef vS As Double, ByVal twoCandidates As Boolean) As Boolean
     Dim bs As Variant, i As Long, n As Long
     Dim bv As Double, cc(0 To 2, 0 To 2) As Double, have(0 To 2) As Boolean
     Dim d0 As Double, d1 As Double
@@ -517,7 +517,7 @@ Function IdentifyJoinBodies(ByVal tag As String, ByRef targetBody As SldWorks.Bo
         d0 = PtDist(cc(0, 0), cc(0, 1), cc(0, 2), cc(1, 0), cc(1, 1), cc(1, 2))
         d1 = PtDist(cc(0, 0), cc(0, 1), cc(0, 2), cc(2, 0), cc(2, 1), cc(2, 2))
         If d0 < d1 Then
-            Dim tmpB As SldWorks.Body2, tmpV As Double
+            Dim tmpB As Object, tmpV As Double
             Set tmpB = ctrlBody: Set ctrlBody = secondBody: Set secondBody = tmpB
             tmpV = vC: vC = vS: vS = tmpV
         End If
@@ -528,7 +528,7 @@ End Function
 ' Body selection with an explicit mark: the documented body selection
 ' members (IBody2.Select2(append, mark); the Select form as the
 ' fallback) - both attempts recorded in the tag on failure.
-Function SelectBody(ByVal b As SldWorks.Body2, ByVal append As Boolean, ByVal mark As Long, ByVal sd As SldWorks.SelectData, ByVal tag As String) As Boolean
+Function SelectBody(ByVal b As Object, ByVal append As Boolean, ByVal mark As Long, ByVal sd As Object, ByVal tag As String) As Boolean
     Dim ok As Boolean
     SelectBody = False
     sd.Mark = mark
@@ -550,7 +550,7 @@ End Function
 ' (research 12 [S12] - ModelDoc2 does not carry it; typed VBA refuses the
 ' call otherwise). Returns the Variant of Body2 array or Empty.
 Function PartDocBodies() As Variant
-    Dim pd As SldWorks.PartDoc
+    Dim pd As Object
     On Error Resume Next
     PartDocBodies = Empty
     Set pd = swDoc
@@ -559,7 +559,7 @@ Function PartDocBodies() As Variant
     PartDocBodies = pd.GetBodies2(0, False)
 End Function
 
-Function BodyVolume(ByVal b As SldWorks.Body2) As Double
+Function BodyVolume(ByVal b As Object) As Double
     Dim v As Variant
     BodyVolume = -1
     Err.Clear
@@ -571,7 +571,7 @@ Function BodyVolume(ByVal b As SldWorks.Body2) As Double
     BodyVolume = v(3)
 End Function
 
-Sub BodyCentroid(ByVal b As SldWorks.Body2, ByRef cx As Double, ByRef cy As Double, ByRef cz As Double)
+Sub BodyCentroid(ByVal b As Object, ByRef cx As Double, ByRef cy As Double, ByRef cz As Double)
     Dim v As Variant
     cx = 0: cy = 0: cz = 0
     Err.Clear
