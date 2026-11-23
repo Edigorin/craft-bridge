@@ -183,7 +183,7 @@ Function ResolveUnique(ByVal wantLen As Double, ByVal pickY As Double, ByVal idx
     Dim matched As Object
     Dim n As Long
     ResolveUnique = False
-    n = CountEdgeMatches(1#, 0#, 0#, wantLen, 0.015, pickY, 0.002, 0.006, ExpVolOf(wantLen), matched)
+    n = CountEdgeMatches(0#, 1#, 0#, wantLen, 0.002, 0.015, 0.002, 0.006, ExpVolOf(wantLen), matched)
     If n = 1 Then
         WriteStep idx, "resolve." & tag, "ok", "exactly one match; edge " & SafeNum(gEdgeP1(0)) & "/" & SafeNum(gEdgeP1(1)) & "/" & SafeNum(gEdgeP1(2)) & " -> " & SafeNum(gEdgeP2(0)) & "/" & SafeNum(gEdgeP2(1)) & "/" & SafeNum(gEdgeP2(2))
         Set gMatched = matched
@@ -306,10 +306,10 @@ Function AmbiguousRefusal(ByVal wantLen As Double, ByVal idx As Long) As Boolean
     Dim matched As Object
     Dim n As Long
     AmbiguousRefusal = False
-    ' the pick point sits exactly between the twin x-edges at y=0 and
-    ' y=10mm (both 5mm away, inside the 6mm tolerance): two candidates
+    ' the pick point sits exactly between the twin long edges at x=0 and
+    ' x=10mm (both 5mm away, inside the 6mm tolerance): two candidates
     ' match equally and the resolver must refuse to choose
-    n = CountEdgeMatches(1#, 0#, 0#, wantLen, 0.015, 0.005, 0#, 0.006, ExpVolOf(wantLen), matched)
+    n = CountEdgeMatches(0#, 1#, 0#, wantLen, 0.005, 0.015, 0#, 0.006, ExpVolOf(wantLen), matched)
     If n = 2 Then
         WriteStep idx, "resolve.ambiguous-twin", "ok", "EDGE_AMBIGUOUS enforced: 2 twin candidates matched and none was chosen"
         AmbiguousRefusal = True
@@ -656,6 +656,17 @@ Function FixtureGate(ByVal idx As Long) As Boolean
     dist = PtDist(cA(0), cA(1), cA(2), cB(0), cB(1), cB(2))
     If Abs(dist - 0.04) > 0.000001 Then
         gFailures = gFailures & "fixture: centroid distance " & SafeNum(dist) & " wrong; "
+        Exit Function
+    End If
+    ' the frame pin: the template's first plane maps sketch (u,v) to
+    ' model (y,x) here (long edges along model Y) - individual centroids
+    ' make any template change fail loudly at this gate
+    If Abs(cA(0) - 0.005) > 0.000001 Or Abs(cA(1) - 0.015) > 0.000001 Or Abs(cA(2) - 0.005) > 0.000001 Then
+        gFailures = gFailures & "fixture: main centroid " & SafeNum(cA(0)) & "/" & SafeNum(cA(1)) & "/" & SafeNum(cA(2)) & " - the template frame changed; "
+        Exit Function
+    End If
+    If Abs(cB(0) - 0.005) > 0.000001 Or Abs(cB(1) - 0.055) > 0.000001 Or Abs(cB(2) - 0.005) > 0.000001 Then
+        gFailures = gFailures & "fixture: control centroid " & SafeNum(cB(0)) & "/" & SafeNum(cB(1)) & "/" & SafeNum(cB(2)) & " - the template frame changed; "
         Exit Function
     End If
     If Abs(gDim.SystemValue - 0.03) > 0.000001 Then
