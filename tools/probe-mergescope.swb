@@ -1,0 +1,759 @@
+' craft-bridge probe - probe-mergescope.swb (Phase B P0: merge/scope)
+' Hand-written on the reviewed probe-dimkind.swb skeleton (report
+' plumbing and close discipline reused verbatim; main replaced).
+'
+' Evidence questions (research 12 T3.1/T3.2 and its probe table):
+'   SM1: InsertCombineFeature for add/cut/intersect in BOTH documented
+'        forms - the direct Body2 array (MainBody target for cut,
+'        Nothing for add/intersect) and the selection-mark form (mark 1
+'        main, mark 2 tools, empty array argument). Do both forms agree?
+'   SM2: the enum families pair correctly: creation codes
+'        (swBodyOperationType_e: add 15903, cut 15902, intersect 15901)
+'        vs the feature-data READBACK (swCombineBodiesOperationType_e:
+'        add 0, subtract 1, common 2). Both are recorded, never assumed.
+'   SM3: operand readback through ICombineBodiesFeatureData under the
+'        AccessSelections/ReleaseSelectionAccess protocol: MainBody
+'        (cut only), BodiesToCombine count.
+'   SM4: target identity and scope: the result is exactly one body, the
+'        non-target/control bodies are bit-for-bit invariant (volume
+'        fingerprint), and for a two-candidate join extrude exactly one
+'        body absorbs the material (COMBINE_SCOPE_MISMATCH otherwise).
+'   SM5: the join EXTRUDE case (the plaque's gate): FeatureExtrusion2's
+'        Merge/UseFeatScope flags (arg 18/19 in the reflected 23-arg
+'        layout) - merge into the touched body vs a new body, and which
+'        body absorbs when two candidates are touched. Extrude merge and
+'        combine merge are DIFFERENT contracts (research 12 T3.2) and
+'        are measured separately.
+'
+' Fixture: independently authored synthetic boxes on one plane
+' (30x20x10 mm = 6000 mm3, 20x20x10 mm = 4000 mm3, 10x10x10 mm = 1000 mm3
+' control), never copied from any client design. Every case runs on a
+' FRESH part. Expectations are fixture-derived: the analytic overlap is
+' 3000 mm3 and the fixture gate verifies volumes AND the pairwise
+' centroid distances (10, 26.926, 32.016 mm) before any expectation is
+' interpreted. Volumes in m3 (API convention); per-body volume via
+' IBody2.GetMassProperties(density)(3); bodies identified by VOLUME
+' FINGERPRINT (returned order is never trusted). Tolerances: volume
+' equality at relative 1e-6 of the fixture volume (a project choice for
+' exact-decimal boxes - kernel round-off only).
+'
+' The probe never edits any existing document: each case creates its own
+' part and closes it with the verified-close discipline. An uncertain
+' close or fixture construction STOPS the battery immediately (named).
+' The terminal probe-verdict line is written after the final cleanup
+' walk proves zero open documents.
+
+Option Explicit
+
+Dim swApp As SldWorks.SldWorks
+Dim swDoc As SldWorks.ModelDoc2
+Dim swFeatMgr As FeatureManager
+Dim swSketchMgr As SketchManager
+Dim reportPath As String
+Dim gFailures As String
+Dim gAbort As String
+
+Sub main()
+    Dim stepIdx As Long
+    Dim oi As Long, fi As Long
+    Dim ops(0 To 2) As String, forms(0 To 1) As String
+    Dim errNum As Long, errMsg As String
+    Dim cleanupMode As String, closedOk As Boolean
+    stepIdx = -1
+    On Error GoTo Fail
+
+    ' ---- report setup (before any model mutation) ----
+    reportPath = ReportPathFromHost()
+    If reportPath = "" Then Err.Raise vbObjectError + 513, "probe-mergescope.swb", "no report path: CRAFT_BRIDGE_REPORT is unset and no path file exists in TEMP"
+    StartReport
+    WriteLine "{""type"":""header"",""macro"":""tools/probe-mergescope.swb"",""bridge_version"":""0.1.0""}"
+    Set swApp = Application.SldWorks
+
+    ops(0) = "add": ops(1) = "cut": ops(2) = "intersect"
+    forms(0) = "array": forms(1) = "marks"
+    For oi = 0 To 2
+        For fi = 0 To 1
+            If gAbort <> "" Then Exit For
+            stepIdx = stepIdx + 1
+            RunBooleanCase stepIdx, ops(oi), forms(fi)
+        Next
+        If gAbort <> "" Then Exit For
+    Next
+
+    ' ---- join-extrude cases (SM5; the plaque's gate) ----
+    If gAbort = "" Then
+        stepIdx = stepIdx + 1
+        RunJoinExtrudeCase stepIdx, "join-merge-into-target", True, False
+    End If
+    If gAbort = "" Then
+        stepIdx = stepIdx + 1
+        RunJoinExtrudeCase stepIdx, "new-body-no-merge", False, False
+    End If
+    If gAbort = "" Then
+        stepIdx = stepIdx + 1
+        RunJoinExtrudeCase stepIdx, "join-two-candidates", True, True
+    End If
+
+    ' ---- final cleanup: the leave-no-documents rule, verified ----
+    stepIdx = stepIdx + 1
+    Dim openCount As Long
+    openCount = CountOpenDocuments()
+    If openCount <> 0 Then
+        gAbort = "uncertain cleanup: " & Trim(Str(openCount)) & " document(s) remain open after the cases"
+        WriteStep stepIdx, "cleanup", "failed", gAbort
+    Else
+        WriteStep stepIdx, "cleanup", "ok", "zero open documents after the cases"
+    End If
+
+    ' ---- terminal verdict, after verified cleanup ----
+    stepIdx = stepIdx + 1
+    If gAbort <> "" Then
+        WriteStep stepIdx, "probe-verdict", "failed", gAbort
+    ElseIf gFailures = "" Then
+        WriteStep stepIdx, "probe-verdict", "ok", "all cases met their fixture-derived expectations; the enum families pair correctly; controls invariant"
+    Else
+        WriteStep stepIdx, "probe-verdict", "failed", gFailures
+    End If
+    WriteLine "{""type"":""summary"",""status"":""ok""}"
+    Exit Sub
+
+Fail:
+    errNum = Err.Number
+    errMsg = Err.Description
+    On Error Resume Next
+    If reportPath = "" Then reportPath = ReportPathFromHost()
+    If reportPath <> "" Then
+        WriteStep stepIdx, "macro", "failed", "err " & Trim(Str(errNum)) & ": " & errMsg
+    End If
+    cleanupMode = CloseMode()
+    If cleanupMode = "close" Then
+        CloseOwnedDoc closedOk
+    End If
+    If reportPath <> "" Then
+        WriteStep stepIdx, "probe-verdict", "failed", "the macro raised before its verdict; the battery is inconclusive"
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
+    End If
+End Sub
+
+' ================================================================
+' One Boolean case on a fresh part: build the three-body fixture,
+' verify it, run ONE combine in ONE form, measure everything.
+' ================================================================
+Sub RunBooleanCase(ByVal idx As Long, ByVal op As String, ByVal form As String)
+    Dim tag As String
+    Dim bodyA As SldWorks.Body2, bodyB As SldWorks.Body2, bodyC As SldWorks.Body2
+    Dim vA As Double, vB As Double, vC As Double
+    Dim dAB As Double, dAC As Double, dBC As Double
+    Dim overlap As Double, expMain As Double, expCount As Long
+    Dim opCode As Long, expRead As Long
+    Dim afterBodies As Variant, i As Long
+    Dim mergedVol As Double, ctrlVol As Double, mergedCount As Long
+    Dim cf As SldWorks.Feature, ok As Boolean
+    Dim readOp As Long, readCount As Long, readMain As Long
+    tag = op & "-" & form
+
+    If Not NewFixturePart(tag) Then
+        gAbort = "fixture construction failed for " & tag & "; the battery stops"
+        Exit Sub
+    End If
+    If Not BuildThreeBoxes(tag) Then
+        gAbort = "fixture construction failed for " & tag & "; the battery stops"
+        CloseCasePart tag
+        Exit Sub
+    End If
+    If Not IdentifyBodies(tag, bodyA, bodyB, bodyC, vA, vB, vC, dAB, dAC, dBC) Then
+        gAbort = "fixture verification failed for " & tag & "; the battery stops"
+        CloseCasePart tag
+        Exit Sub
+    End If
+    ' fixture gate: volumes AND centroid distances must match the drawn
+    ' fixture before any expectation is interpreted
+    If Abs(vA - 0.000006) > 0.000006 * 0.000001 Or Abs(vB - 0.000004) > 0.000004 * 0.000001 Or Abs(vC - 0.000001) > 0.000001 * 0.000001 Then
+        gFailures = gFailures & tag & ": fixture volumes wrong (" & SafeNum(vA) & "," & SafeNum(vB) & "," & SafeNum(vC) & "); "
+        CloseCasePart tag
+        Exit Sub
+    End If
+    If Abs(dAB - 0.01) > 0.000001 Or Abs(dAC - 0.026925824) > 0.000001 Or Abs(dBC - 0.032015621) > 0.000001 Then
+        gFailures = gFailures & tag & ": fixture centroid distances wrong (" & SafeNum(dAB) & "," & SafeNum(dAC) & "," & SafeNum(dBC) & "); "
+        CloseCasePart tag
+        Exit Sub
+    End If
+    WriteStep idx, "fixture." & tag, "ok", "volumes 6e-6/4e-6/1e-6, distances 0.01/0.026925824/0.032015621 verified"
+
+    overlap = 0.000003
+    Select Case op
+        Case "add": opCode = 15903: expRead = 0: expMain = vA + vB - overlap: expCount = 2
+        Case "cut": opCode = 15902: expRead = 1: expMain = vA - overlap: expCount = 2
+        Case "intersect": opCode = 15901: expRead = 2: expMain = overlap: expCount = 2
+    End Select
+
+    ' ---- the combine, in exactly one form ----
+    Set cf = Nothing
+    Err.Clear
+    If form = "array" Then
+        Dim toolsArr As Variant
+        If op = "cut" Then
+            toolsArr = Array(bodyB)
+            Set cf = swFeatMgr.InsertCombineFeature(opCode, bodyA, toolsArr)
+        Else
+            toolsArr = Array(bodyA, bodyB)
+            Set cf = swFeatMgr.InsertCombineFeature(opCode, Nothing, toolsArr)
+        End If
+    Else
+        Dim emptyArr As Variant, sd As SldWorks.SelectData
+        emptyArr = Array()
+        swDoc.ClearSelection2 True
+        Set sd = swDoc.SelectionManager.CreateSelectData
+        If op = "cut" Then
+            ok = SelectBody(bodyA, False, 1, sd, tag)
+            If ok Then ok = SelectBody(bodyB, True, 2, sd, tag)
+        Else
+            ok = SelectBody(bodyA, False, 1, sd, tag)
+            If ok Then ok = SelectBody(bodyB, True, 2, sd, tag)
+        End If
+        If Not ok Then
+            gFailures = gFailures & tag & ": body selection failed (COMBINE_FAILED); "
+            CloseCasePart tag
+            Exit Sub
+        End If
+        Set cf = swFeatMgr.InsertCombineFeature(opCode, Nothing, emptyArr)
+    End If
+    If cf Is Nothing Then
+        gFailures = gFailures & tag & ": InsertCombineFeature returned nothing (COMBINE_FAILED); "
+        CloseCasePart tag
+        Exit Sub
+    End If
+
+    ' ---- operand readback under the selection-access protocol (SM3/SM2) ----
+    readOp = -1: readCount = -1: readMain = 0
+    Dim cfd As SldWorks.CombineBodiesFeatureData
+    Err.Clear
+    Set cfd = cf.GetDefinition
+    If Err.Number = 0 And Not cfd Is Nothing Then
+        If cfd.AccessSelections(swDoc, Nothing) Then
+            readOp = cfd.OperationType
+            readCount = cfd.GetBodiesToCombineCount
+            If Not cfd.MainBody Is Nothing Then readMain = 1
+            cfd.ReleaseSelectionAccess
+        Else
+            gFailures = gFailures & tag & ": AccessSelections refused (COMBINE_FAILED); "
+        End If
+    Else
+        gFailures = gFailures & tag & ": no combine feature definition (COMBINE_FAILED); "
+    End If
+    WriteStep idx, "definition." & tag, "ok", "readback OperationType=" & Trim(Str(readOp)) & " bodies=" & Trim(Str(readCount)) & " mainbody=" & Trim(Str(readMain))
+    If readOp <> expRead Then
+        gFailures = gFailures & tag & ": enum-family pairing wrong (creation " & Trim(Str(opCode)) & " readback " & Trim(Str(readOp)) & " expected " & Trim(Str(expRead)) & "); "
+    End If
+    If op = "cut" And readMain <> 1 Then
+        gFailures = gFailures & tag & ": cut definition carries no MainBody (COMBINE_WRONG_TARGET); "
+    End If
+
+    ' ---- post-state: counts, volumes, control invariance (SM4) ----
+    mergedVol = 0: ctrlVol = 0: mergedCount = 0
+    afterBodies = swDoc.GetBodies2(0, False)
+    If IsArray(afterBodies) Then
+        mergedCount = UBound(afterBodies) - LBound(afterBodies) + 1
+        For i = LBound(afterBodies) To UBound(afterBodies)
+            Dim bv As Double
+            bv = BodyVolume(afterBodies(i))
+            If Abs(bv - vC) <= vC * 0.000001 Then
+                ctrlVol = ctrlVol + bv
+            Else
+                mergedVol = mergedVol + bv
+            End If
+        Next
+    End If
+    WriteStep idx, "result." & tag, "ok", "bodies=" & Trim(Str(mergedCount)) & " merged=" & SafeNum(mergedVol) & " control=" & SafeNum(ctrlVol)
+    If mergedCount <> expCount Then
+        gFailures = gFailures & tag & ": body count " & Trim(Str(mergedCount)) & " expected " & Trim(Str(expCount)) & " (COMBINE_SCOPE_MISMATCH); "
+    End If
+    If Abs(mergedVol - expMain) > expMain * 0.000001 Then
+        gFailures = gFailures & tag & ": result volume " & SafeNum(mergedVol) & " expected " & SafeNum(expMain) & " (COMBINE_WRONG_TARGET); "
+    End If
+    If Abs(ctrlVol - vC) > vC * 0.000001 Then
+        gFailures = gFailures & tag & ": control body changed (" & SafeNum(ctrlVol) & " vs " & SafeNum(vC) & ") (COMBINE_SCOPE_MISMATCH); "
+    End If
+
+    CloseCasePart tag
+End Sub
+
+' ================================================================
+' One join-extrude case (SM5): the Merge/UseFeatScope flags - the
+' DISTINCT contract the plaque's reliefs need. Fixture: target body
+' (30x20x10), control body (10x10x10 far away), and for the scope case
+' a SECOND candidate body under the profile. The join profile
+' (5x5)-(15x15) mm extruded 20 mm crosses the target's 10 mm depth:
+' with Merge=True the material outside the target (10x10x10 = 1000 mm3)
+' must land in exactly one body; with Merge=False a new body appears.
+' ================================================================
+Sub RunJoinExtrudeCase(ByVal idx As Long, ByVal tag As String, ByVal mergeFlag As Boolean, ByVal twoCandidates As Boolean)
+    Dim targetBody As SldWorks.Body2, ctrlBody As SldWorks.Body2, secondBody As SldWorks.Body2
+    Dim vT As Double, vC As Double, vS As Double
+    Dim expCount As Long, afterBodies As Variant, i As Long
+    Dim grownVol As Double, ctrlVol As Double, freeVol As Double, countAfter As Long
+    Dim skName As String, ok As Boolean, feat As Object
+
+    If Not NewFixturePart(tag) Then
+        gAbort = "fixture construction failed for " & tag & "; the battery stops"
+        Exit Sub
+    End If
+    ' target A at (0,0)-(30,20) x 10; control C at (0,30)-(10,40) x 10;
+    ' for the scope case a second candidate B2 at (10,5)-(20,15) x 10
+    If Not DrawAndExtrudeBox(tag, 0#, 0#, 0.03, 0.02, 0.01) Then GoTo JoinFixtureFail
+    If Not DrawAndExtrudeBox(tag, 0#, 0.03, 0.01, 0.04, 0.01) Then GoTo JoinFixtureFail
+    If twoCandidates Then
+        If Not DrawAndExtrudeBox(tag, 0.01, 0.005, 0.02, 0.015, 0.01) Then GoTo JoinFixtureFail
+    End If
+    If Not IdentifyJoinBodies(tag, targetBody, ctrlBody, secondBody, vT, vC, vS, twoCandidates) Then GoTo JoinFixtureFail
+
+    ' the join profile: (5,5)-(15,15) mm, extruded 20 mm (through and
+    ' 10 mm beyond the target's depth)
+    swDoc.ClearSelection2 True
+    ok = OpenSketchOnFirstPlane(tag)
+    If Not ok Then GoTo JoinFixtureFail
+    swSketchMgr.CreateCornerRectangle 0.005, 0.005, 0#, 0.015, 0.015, 0#
+    Set feat = swSketchMgr.ActiveSketch
+    skName = feat.Name
+    swSketchMgr.InsertSketch True
+    ok = False
+    If Not feat Is Nothing Then ok = feat.Select(False)
+    If ok = False Then ok = swDoc.Extension.SelectByID2(skName, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    If ok = False Then GoTo JoinFixtureFail
+    Err.Clear
+    Set feat = swFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, 0.02, 0#, False, False, False, False, 0#, 0#, False, False, False, False, mergeFlag, False, True, 0, 0#, False)
+    If feat Is Nothing Then GoTo JoinFixtureFail
+
+    ' post-state: exactly one body must carry the joined material (merge)
+    ' or a new body must appear (no merge); the control never moves
+    countAfter = 0: grownVol = 0: ctrlVol = 0: freeVol = 0
+    afterBodies = swDoc.GetBodies2(0, False)
+    If IsArray(afterBodies) Then
+        countAfter = UBound(afterBodies) - LBound(afterBodies) + 1
+        For i = LBound(afterBodies) To UBound(afterBodies)
+            Dim vb2 As Double
+            vb2 = BodyVolume(afterBodies(i))
+            If Abs(vb2 - vC) <= vC * 0.000001 Then
+                ctrlVol = ctrlVol + vb2
+            ElseIf Abs(vb2 - vT - 0.000001) <= (vT + 0.000001) * 0.000001 Then
+                grownVol = grownVol + vb2
+            ElseIf Abs(vb2 - vS) <= vS * 0.000001 And twoCandidates Then
+                grownVol = grownVol + vb2
+            Else
+                freeVol = freeVol + vb2
+            End If
+        Next
+    End If
+    If mergeFlag Then
+        expCount = 2
+        If twoCandidates Then expCount = 3
+    Else
+        expCount = 3
+        If twoCandidates Then expCount = 4
+    End If
+    WriteStep idx, "join." & tag, "ok", "merge=" & CStr(mergeFlag) & " scope2=" & CStr(twoCandidates) & " bodies=" & Trim(Str(countAfter)) & " grown=" & SafeNum(grownVol) & " control=" & SafeNum(ctrlVol) & " free=" & SafeNum(freeVol)
+    If mergeFlag Then
+        If countAfter <> expCount Then
+            gFailures = gFailures & tag & ": body count " & Trim(Str(countAfter)) & " expected " & Trim(Str(expCount)) & " (COMBINE_SCOPE_MISMATCH); "
+        End If
+        If freeVol > 0.000001 * 0.000001 Then
+            gFailures = gFailures & tag & ": merge=True produced a free body " & SafeNum(freeVol) & " (COMBINE_WRONG_TARGET); "
+        End If
+    Else
+        If countAfter <> expCount Then
+            gFailures = gFailures & tag & ": body count " & Trim(Str(countAfter)) & " expected " & Trim(Str(expCount)) & " (COMBINE_SCOPE_MISMATCH); "
+        End If
+    End If
+    If Abs(ctrlVol - vC) > vC * 0.000001 Then
+        gFailures = gFailures & tag & ": control body changed (" & SafeNum(ctrlVol) & ") (COMBINE_SCOPE_MISMATCH); "
+    End If
+    CloseCasePart tag
+    Exit Sub
+
+JoinFixtureFail:
+    gAbort = "fixture construction failed for " & tag & "; the battery stops"
+    CloseCasePart tag
+End Sub
+
+' ================================================================
+' Fixture construction helpers (independently authored synthetic
+' boxes; VBA geometric acquisition per the review fold-in)
+' ================================================================
+
+Function NewFixturePart(ByVal tag As String) As Boolean
+    Dim template As String
+    NewFixturePart = False
+    Err.Clear
+    template = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
+    If Err.Number <> 0 Or template = "" Then
+        gFailures = gFailures & tag & ": no default part template; "
+        Exit Function
+    End If
+    Set swDoc = swApp.NewDocument(template, 0, 0, 0)
+    If swDoc Is Nothing Then
+        gFailures = gFailures & tag & ": NewDocument returned nothing; "
+        Exit Function
+    End If
+    Set swFeatMgr = swDoc.FeatureManager
+    Set swSketchMgr = swDoc.SketchManager
+    NewFixturePart = True
+End Function
+
+' A box built as its own sketch rectangle + Merge=False extrude: a NEW
+' body every time (the three-box fixture).
+Function DrawAndExtrudeBox(ByVal tag As String, ByVal x1 As Double, ByVal y1 As Double, ByVal x2 As Double, ByVal y2 As Double, ByVal h As Double) As Boolean
+    Dim sk As Object, nm As String, feat As Object, ok As Boolean
+    DrawAndExtrudeBox = False
+    If Not OpenSketchOnFirstPlane(tag) Then Exit Function
+    swSketchMgr.CreateCornerRectangle x1, y1, 0#, x2, y2, 0#
+    Set sk = swSketchMgr.ActiveSketch
+    If sk Is Nothing Then Exit Function
+    nm = sk.Name
+    swSketchMgr.InsertSketch True
+    ok = False
+    If Not sk Is Nothing Then ok = sk.Select(False)
+    If ok = False Then ok = swDoc.Extension.SelectByID2(nm, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    If ok = False Then Exit Function
+    Err.Clear
+    Set feat = swFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, h, 0#, False, False, False, False, 0#, 0#, False, False, False, False, False, False, True, 0, 0#, False)
+    DrawAndExtrudeBox = (Not feat Is Nothing)
+End Function
+
+' The first plane-like feature in the tree (the probe fixture never
+' trusts a plane NAME - the probe-dimkind lesson).
+Function OpenSketchOnFirstPlane(ByVal tag As String) As Boolean
+    Dim feat As SldWorks.Feature, ok As Boolean
+    OpenSketchOnFirstPlane = False
+    Set feat = swDoc.FirstFeature
+    Do While Not feat Is Nothing
+        If InStr(1, feat.GetTypeName2(), "Plane", vbTextCompare) > 0 Then
+            swDoc.ClearSelection2 True
+            ok = feat.Select(False)
+            If ok Then
+                swSketchMgr.InsertSketch True
+                If Not swSketchMgr.ActiveSketch Is Nothing Then
+                    OpenSketchOnFirstPlane = True
+                    Exit Function
+                End If
+            End If
+        End If
+        Set feat = feat.GetNextFeature
+    Loop
+End Function
+
+' Identify A/B/C by VOLUME FINGERPRINT (returned order is never
+' trusted - the body-registry lesson) and measure the pairwise centroid
+' distances as the fixture gate.
+Function IdentifyBodies(ByVal tag As String, ByRef bodyA As SldWorks.Body2, ByRef bodyB As SldWorks.Body2, ByRef bodyC As SldWorks.Body2, ByRef vA As Double, ByRef vB As Double, ByRef vC As Double, ByRef dAB As Double, ByRef dAC As Double, ByRef dBC As Double) As Boolean
+    Dim bs As Variant, i As Long, n As Long
+    Dim bv As Double, c(0 To 2, 0 To 2) As Double
+    IdentifyBodies = False
+    Err.Clear
+    bs = swDoc.GetBodies2(0, False)
+    If Err.Number <> 0 Or Not IsArray(bs) Then Exit Function
+    n = UBound(bs) - LBound(bs) + 1
+    If n <> 3 Then
+        gFailures = gFailures & tag & ": fixture built " & Trim(Str(n)) & " bodies, expected 3; "
+        Exit Function
+    End If
+    For i = LBound(bs) To UBound(bs)
+        bv = BodyVolume(bs(i))
+        If Abs(bv - 0.000006) <= 0.000006 * 0.000001 Then
+            Set bodyA = bs(i): vA = bv: Call BodyCentroid(bs(i), c(0, 0), c(0, 1), c(0, 2))
+        ElseIf Abs(bv - 0.000004) <= 0.000004 * 0.000001 Then
+            Set bodyB = bs(i): vB = bv: Call BodyCentroid(bs(i), c(1, 0), c(1, 1), c(1, 2))
+        ElseIf Abs(bv - 0.000001) <= 0.000001 * 0.000001 Then
+            Set bodyC = bs(i): vC = bv: Call BodyCentroid(bs(i), c(2, 0), c(2, 1), c(2, 2))
+        Else
+            gFailures = gFailures & tag & ": fixture body volume " & SafeNum(bv) & " is not a fixture fingerprint; "
+            Exit Function
+        End If
+    Next
+    If bodyA Is Nothing Or bodyB Is Nothing Or bodyC Is Nothing Then
+        gFailures = gFailures & tag & ": fixture fingerprints incomplete; "
+        Exit Function
+    End If
+    dAB = PtDist(c(0, 0), c(0, 1), c(0, 2), c(1, 0), c(1, 1), c(1, 2))
+    dAC = PtDist(c(0, 0), c(0, 1), c(0, 2), c(2, 0), c(2, 1), c(2, 2))
+    dBC = PtDist(c(1, 0), c(1, 1), c(1, 2), c(2, 0), c(2, 1), c(2, 2))
+    IdentifyBodies = True
+End Function
+
+' The join-case fixture: target (6e-6), control (1e-6), optional second
+' candidate (1e-6 - the 10x10x10 box). The second candidate's volume
+' equals the control's, so identify by POSITION: the control is the
+' body whose centroid is farthest from the target's.
+Function IdentifyJoinBodies(ByVal tag As String, ByRef targetBody As SldWorks.Body2, ByRef ctrlBody As SldWorks.Body2, ByRef secondBody As SldWorks.Body2, ByRef vT As Double, ByRef vC As Double, ByRef vS As Double, ByVal twoCandidates As Boolean) As Boolean
+    Dim bs As Variant, i As Long, n As Long
+    Dim bv As Double, cc(0 To 2, 0 To 2) As Double, have(0 To 2) As Boolean
+    Dim d0 As Double, d1 As Double
+    IdentifyJoinBodies = False
+    Err.Clear
+    bs = swDoc.GetBodies2(0, False)
+    If Err.Number <> 0 Or Not IsArray(bs) Then Exit Function
+    n = UBound(bs) - LBound(bs) + 1
+    If twoCandidates And n <> 3 Then
+        gFailures = gFailures & tag & ": join fixture built " & Trim(Str(n)) & " bodies, expected 3; "
+        Exit Function
+    End If
+    If (Not twoCandidates) And n <> 2 Then
+        gFailures = gFailures & tag & ": join fixture built " & Trim(Str(n)) & " bodies, expected 2; "
+        Exit Function
+    End If
+    For i = LBound(bs) To UBound(bs)
+        bv = BodyVolume(bs(i))
+        If Abs(bv - 0.000006) <= 0.000006 * 0.000001 Then
+            Set targetBody = bs(i): vT = bv: Call BodyCentroid(bs(i), cc(0, 0), cc(0, 1), cc(0, 2)): have(0) = True
+        ElseIf have(1) = False Then
+            Set ctrlBody = bs(i): vC = bv: Call BodyCentroid(bs(i), cc(1, 0), cc(1, 1), cc(1, 2)): have(1) = True
+        Else
+            Set secondBody = bs(i): vS = bv: Call BodyCentroid(bs(i), cc(2, 0), cc(2, 1), cc(2, 2)): have(2) = True
+        End If
+    Next
+    If targetBody Is Nothing Or ctrlBody Is Nothing Then Exit Function
+    If twoCandidates Then
+        If secondBody Is Nothing Then Exit Function
+        ' the control is the far one from the target: swap if needed
+        d0 = PtDist(cc(0, 0), cc(0, 1), cc(0, 2), cc(1, 0), cc(1, 1), cc(1, 2))
+        d1 = PtDist(cc(0, 0), cc(0, 1), cc(0, 2), cc(2, 0), cc(2, 1), cc(2, 2))
+        If d0 < d1 Then
+            Dim tmpB As SldWorks.Body2, tmpV As Double
+            Set tmpB = ctrlBody: Set ctrlBody = secondBody: Set secondBody = tmpB
+            tmpV = vC: vC = vS: vS = tmpV
+        End If
+    End If
+    IdentifyJoinBodies = True
+End Function
+
+' Body selection with an explicit mark: the documented body selection
+' members (IBody2.Select2(append, mark); the Select form as the
+' fallback) - both attempts recorded in the tag on failure.
+Function SelectBody(ByVal b As SldWorks.Body2, ByVal append As Boolean, ByVal mark As Long, ByVal sd As SldWorks.SelectData, ByVal tag As String) As Boolean
+    Dim ok As Boolean
+    SelectBody = False
+    sd.Mark = mark
+    Err.Clear
+    ok = b.Select2(append, mark)
+    If Err.Number = 0 And ok Then
+        SelectBody = True
+        Exit Function
+    End If
+    Err.Clear
+    ok = b.Select(append, mark)
+    If Err.Number = 0 And ok Then SelectBody = True
+End Function
+
+' Per-body volume and centroid through IBody2.GetMassProperties(density):
+' the 12-entry array (center 3, volume at index 3), VBA-indexed. Values
+' checked finite before use.
+Function BodyVolume(ByVal b As SldWorks.Body2) As Double
+    Dim v As Variant
+    BodyVolume = -1
+    Err.Clear
+    v = b.GetMassProperties(1000#)
+    If Err.Number <> 0 Then Exit Function
+    If Not IsArray(v) Then Exit Function
+    If UBound(v) < 3 Then Exit Function
+    If v(3) <> v(3) Then Exit Function
+    BodyVolume = v(3)
+End Function
+
+Sub BodyCentroid(ByVal b As SldWorks.Body2, ByRef cx As Double, ByRef cy As Double, ByRef cz As Double)
+    Dim v As Variant
+    cx = 0: cy = 0: cz = 0
+    Err.Clear
+    v = b.GetMassProperties(1000#)
+    If Err.Number <> 0 Then Exit Sub
+    If Not IsArray(v) Then Exit Sub
+    If UBound(v) < 2 Then Exit Sub
+    cx = v(0): cy = v(1): cz = v(2)
+End Sub
+
+Function PtDist(ByVal x1 As Double, ByVal y1 As Double, ByVal z1 As Double, ByVal x2 As Double, ByVal y2 As Double, ByVal z2 As Double) As Double
+    PtDist = Sqr((x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2) + (z1 - z2) * (z1 - z2))
+End Function
+
+' Close THIS case's part with the verified-close discipline. An
+' uncertain close aborts the battery (the fold-in: stop on uncertain
+' cleanup).
+Sub CloseCasePart(ByVal tag As String)
+    Dim closedOk As Boolean
+    Dim cleanupMode As String
+    cleanupMode = CloseMode()
+    If cleanupMode = "close" Then
+        CloseOwnedDoc closedOk
+        If Not closedOk Then gAbort = "uncertain cleanup after " & tag & "; the battery stops"
+    Else
+        gAbort = "the close mode is not close-after-run (" & cleanupMode & ") after " & tag & "; the battery stops"
+    End If
+    Set swDoc = Nothing
+    Set swFeatMgr = Nothing
+    Set swSketchMgr = Nothing
+End Sub
+
+Function CountOpenDocuments() As Long
+    Dim d As Object, n As Long
+    On Error Resume Next
+    CountOpenDocuments = -1
+    n = 0
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Function
+    Do While Not d Is Nothing
+        n = n + 1
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Function
+    Loop
+    CountOpenDocuments = n
+End Function
+
+' ===================== shared skeleton helpers =====================
+' (reused verbatim from the probe-dimkind skeleton)
+
+Sub StartReport()
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Output As #f
+    Close #f
+End Sub
+
+Sub WriteLine(ByVal text As String)
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Append As #f
+    Print #f, text
+    Close #f
+End Sub
+
+Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)
+    WriteLine "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
+End Sub
+
+Function ReportPathFromHost() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim got As Boolean
+    ReportPathFromHost = ""
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p <> "" Then
+        p = p & "\craft-bridge-report-path.txt"
+        Err.Clear
+        f = FreeFile
+        Open p For Input As #f
+        If Err.Number = 0 Then
+            Err.Clear
+            Line Input #f, oneLine
+            got = (Err.Number = 0)
+            Err.Clear
+            Close #f
+            If got Then
+                oneLine = Trim(oneLine)
+                If oneLine <> "" Then
+                    ReportPathFromHost = oneLine
+                    Exit Function
+                End If
+            End If
+        End If
+        Err.Clear
+    End If
+    ReportPathFromHost = Trim(Environ$("CRAFT_BRIDGE_REPORT"))
+End Function
+
+Function CloseMode() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim ok As Boolean
+    Dim e3 As Long
+    CloseMode = "unknown"
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p = "" Then Exit Function
+    p = p & "\craft-bridge-report-path.txt"
+    Err.Clear
+    f = FreeFile
+    Open p For Input As #f
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    Line Input #f, oneLine
+    ok = (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    ok = ok And (Err.Number = 0)
+    Err.Clear
+    If ok Then Line Input #f, oneLine
+    e3 = Err.Number
+    Close #f
+    If Not ok Then Exit Function
+    If e3 = 0 Then
+        If Trim(oneLine) = "close-after-run" Then CloseMode = "close" Else CloseMode = "unknown"
+    ElseIf e3 = 62 And ok Then
+        CloseMode = "keep"
+    End If
+End Function
+
+Sub CloseOwnedDoc(ByRef closedOk As Boolean)
+    Dim exact As String
+    Dim d As Object
+    Dim t2 As String
+    Dim cnt As Long
+    Dim isOurs As Boolean
+    On Error Resume Next
+    closedOk = False
+    If swDoc Is Nothing Then
+        closedOk = True
+        Exit Sub
+    End If
+    Err.Clear
+    exact = swDoc.GetTitle
+    If Err.Number <> 0 Then Exit Sub
+    If Trim(exact) = "" Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then
+            cnt = cnt + 1
+            If d Is swDoc Then isOurs = True
+        End If
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt <> 1 Or Not isOurs Then Exit Sub
+    Err.Clear
+    swApp.CloseDoc exact
+    If Err.Number <> 0 Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    cnt = 0
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then cnt = cnt + 1
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt = 0 Then closedOk = True
+End Sub
+
+Function JsonStr(ByVal s As String) As String
+    Dim t As String
+    t = Replace(s, "\", "\\")
+    t = Replace(t, """", "\""")
+    t = Replace(t, vbCrLf, "\n")
+    t = Replace(t, vbCr, "\n")
+    t = Replace(t, vbLf, "\n")
+    t = Replace(t, vbTab, "\t")
+    JsonStr = t
+End Function
+
+Function SafeNum(ByVal x As Double) As String
+    If x <> x Then SafeNum = "NaN": Exit Function
+    If Abs(x) > 1E+100 Then SafeNum = "INF": Exit Function
+    SafeNum = Trim(Str(x))
+End Function

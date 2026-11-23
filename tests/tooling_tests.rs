@@ -14,6 +14,7 @@ const RUNNER: &str = include_str!("../tools/seat-run-real.ps1");
 const RUNNER_TESTS: &str = include_str!("../tools/seat-run-real.tests.ps1");
 const LOGIC_TESTS: &str = include_str!("../tools/check-part-logic.tests.vbs");
 const MASS_ADAPTER: &str = include_str!("../tools/mass-adapter.ps1");
+const PROBE_MERGESCOPE: &str = include_str!("../tools/probe-mergescope.swb");
 
 // ---- the decision logic, mirrored ----
 // Mirrors tools/check-part-logic.vbs exactly; the pins below tie the two
@@ -875,4 +876,77 @@ fn solid_none_is_verified_two_way() {
             "{item} lost its solid=none declaration"
         );
     }
+}
+
+// ---- the Phase B merge/scope probe: STRUCTURAL CONTRACT PINS ONLY ----
+// These assertions pin the probe script's shape (envelope, discipline,
+// naming). They prove nothing about VBA compilation or seat behavior -
+// every behavioral claim in this area is seat evidence, recorded in
+// docs/source-probe-evidence.md after the battery runs.
+
+#[test]
+fn merge_scope_probe_carries_its_contract() {
+    // the supported runner envelope: JSONL steps and a terminal summary
+    assert!(
+        PROBE_MERGESCOPE.contains("WriteStep")
+            && PROBE_MERGESCOPE.contains("\"\"type\"\":\"\"summary\"\""),
+        "the probe does not write the runner envelope"
+    );
+    // the terminal probe-verdict is written AFTER the verified cleanup
+    let clean = PROBE_MERGESCOPE.find("cleanup").expect("no cleanup step");
+    let verdict = PROBE_MERGESCOPE
+        .find("probe-verdict\", \"ok\", \"all cases met")
+        .expect("no terminal verdict");
+    assert!(clean < verdict, "the verdict is not written after cleanup");
+    // ownership: every case part is created here and closed with the
+    // verified-close discipline; uncertain cleanup stops the battery
+    assert!(
+        PROBE_MERGESCOPE.contains("CloseOwnedDoc")
+            && PROBE_MERGESCOPE.contains("uncertain cleanup after ")
+            && PROBE_MERGESCOPE.contains("the battery stops"),
+        "the probe lost its ownership/cleanup discipline"
+    );
+    // the fixture gate is checked before any expectation is interpreted
+    // (fixture-derived expectations: volumes AND centroid distances)
+    assert!(
+        PROBE_MERGESCOPE.contains("fixture volumes wrong")
+            && PROBE_MERGESCOPE.contains("fixture centroid distances wrong"),
+        "the probe lost its fixture gate"
+    );
+    // both creation enum codes are used and paired against the readback
+    // family (creation 15901..15903 vs readback 0..2) - never assumed
+    for code in ["15903", "15902", "15901"] {
+        assert!(
+            PROBE_MERGESCOPE.contains(code),
+            "missing creation code {code}"
+        );
+    }
+    assert!(
+        PROBE_MERGESCOPE.contains("enum-family pairing wrong"),
+        "the enum pairing is not verified"
+    );
+    // the named refusals research 12 requires
+    for name in [
+        "COMBINE_FAILED",
+        "COMBINE_WRONG_TARGET",
+        "COMBINE_SCOPE_MISMATCH",
+    ] {
+        assert!(
+            PROBE_MERGESCOPE.contains(name),
+            "missing named refusal {name}"
+        );
+    }
+    // the control-body invariance and the distinct join-extrude contract
+    assert!(
+        PROBE_MERGESCOPE.contains("control body changed")
+            && PROBE_MERGESCOPE.contains("RunJoinExtrudeCase")
+            && PROBE_MERGESCOPE.contains("mergeFlag"),
+        "the probe lost its control invariants or the join-extrude cases"
+    );
+    // the readback runs under the documented selection-access protocol
+    assert!(
+        PROBE_MERGESCOPE.contains("AccessSelections")
+            && PROBE_MERGESCOPE.contains("ReleaseSelectionAccess"),
+        "the operand readback lost its selection-access protocol"
+    );
 }
