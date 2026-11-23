@@ -308,7 +308,7 @@ Function BuildDrivenBox(ByRef posIdx As Long, ByRef widIdx As Long) As Boolean
     If Not ok Then Exit Function
     swDoc.SketchAddConstraints "sgFIXED"
     ' the rect from the carried corner
-    Set rectSegs = swSketchMgr.CreateCornerRectangle(0.015, 0#, 0#, 0.035, 0.015, 0#)
+    rectSegs = swSketchMgr.CreateCornerRectangle(0.015, 0#, 0#, 0.035, 0.015, 0#)
     If rectSegs Is Nothing Then Exit Function
     ' share the corner: the rect's first line start == the carrier end
     swDoc.ClearSelection2 True
