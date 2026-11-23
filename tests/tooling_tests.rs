@@ -14,7 +14,7 @@ const RUNNER: &str = include_str!("../tools/seat-run-real.ps1");
 const RUNNER_TESTS: &str = include_str!("../tools/seat-run-real.tests.ps1");
 const LOGIC_TESTS: &str = include_str!("../tools/check-part-logic.tests.vbs");
 const MASS_ADAPTER: &str = include_str!("../tools/mass-adapter.ps1");
-const PROBE_MERGESCOPE: &str = include_str!("../tools/probe-mergescope.swb");
+const PROBE_MERGESCOPE: &str = include_str!("../corpus/compat-probe/probe-mergescope.swb");
 
 // ---- the decision logic, mirrored ----
 // Mirrors tools/check-part-logic.vbs exactly; the pins below tie the two
