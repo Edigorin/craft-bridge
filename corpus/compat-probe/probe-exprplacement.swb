@@ -40,6 +40,7 @@ Dim gFailures As String
 Dim gAbort As String
 Dim gFindings As String
 Dim gSketchName As String
+Dim gPhase As String
 
 Sub main()
     Dim stepIdx As Long
@@ -170,7 +171,7 @@ Fail:
     On Error Resume Next
     If reportPath = "" Then reportPath = ReportPathFromHost()
     If reportPath <> "" Then
-        WriteStep stepIdx, "macro", "failed", "err " & Trim(Str(errNum)) & ": " & errMsg
+        WriteStep stepIdx, "macro", "failed", "at phase [" & gPhase & "] err " & Trim(Str(errNum)) & ": " & errMsg
         CloseOwnedDoc closedOk
         WriteStep stepIdx, "probe-verdict", "failed", "the macro raised before its verdict; the battery is inconclusive"
         WriteLine "{""type"":""summary"",""status"":""failed""}"
@@ -295,10 +296,13 @@ Function BuildDrivenBox(ByRef posIdx As Long, ByRef widIdx As Long) As Boolean
     Dim eqMgr As SldWorks.EquationMgr
     Dim idx As Long
     BuildDrivenBox = False
+    gPhase = "build: open sketch"
     If Not OpenSketchOnFirstPlane() Then Exit Function
+    gPhase = "build: carrier line"
     ' the carrier line: origin -> corner (15mm along x)
     Set seg = swSketchMgr.CreateLine(0#, 0#, 0#, 0.015, 0#, 0#)
     If seg Is Nothing Then Exit Function
+    gPhase = "build: carrier handles"
     Set endp = seg.GetEndPoint2
     Set corner = seg.GetStartPoint2
     ' fix the start point at the origin (the proven sgFIXED handle form)
@@ -307,15 +311,18 @@ Function BuildDrivenBox(ByRef posIdx As Long, ByRef widIdx As Long) As Boolean
     ok = corner.Select(False)
     If Not ok Then Exit Function
     swDoc.SketchAddConstraints "sgFIXED"
+    gPhase = "build: fix the origin"
     ' the rect from the carried corner
     rectSegs = swSketchMgr.CreateCornerRectangle(0.015, 0#, 0#, 0.035, 0.015, 0#)
     If rectSegs Is Nothing Then Exit Function
+    gPhase = "build: share the corner"
     ' share the corner: the rect's first line start == the carrier end
     swDoc.ClearSelection2 True
     ok = endp.Select(False)
     If ok Then ok = rectSegs(0).GetStartPoint2.Select(True)
     If Not ok Then Exit Function
     swDoc.SketchAddConstraints "sgCOINCIDENT"
+    gPhase = "build: placement dim"
     ' the PLACEMENT dimension: carrier length (both endpoint handles)
     swDoc.ClearSelection2 True
     ok = corner.Select(False)
@@ -327,6 +334,7 @@ Function BuildDrivenBox(ByRef posIdx As Long, ByRef widIdx As Long) As Boolean
     If dm Is Nothing Then Exit Function
     nm = swSketchMgr.ActiveSketch.Name
     gSketchName = nm
+    gPhase = "build: size dim"
     ' the SIZE dimension: the rect's first line length (its two handles)
     swDoc.ClearSelection2 True
     ok = rectSegs(0).GetStartPoint2.Select(False)
@@ -336,6 +344,7 @@ Function BuildDrivenBox(ByRef posIdx As Long, ByRef widIdx As Long) As Boolean
     If dd Is Nothing Then Exit Function
     Set dm = dd.GetDimension2(0)
     If dm Is Nothing Then Exit Function
+    gPhase = "build: equations"
     ' the equation layer: two globals driving the two dims (the
     ' emitter's own equation discipline: quoted qualified LHS, stored
     ' text read back)
@@ -352,6 +361,7 @@ Function BuildDrivenBox(ByRef posIdx As Long, ByRef widIdx As Long) As Boolean
     If idx < 0 Then Exit Function
     idx = eqMgr.Add(-1, """D2@" & nm & """ = ""myW""")
     If idx < 0 Then Exit Function
+    gPhase = "build: extrude"
     ' close the sketch and extrude the driven rect
     swSketchMgr.InsertSketch True
     swDoc.ClearSelection2 True
