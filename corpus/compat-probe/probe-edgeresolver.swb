@@ -272,23 +272,23 @@ Function EdgeSeg(ByVal e As Object, ByRef x1 As Double, ByRef y1 As Double, ByRe
     If Err.Number <> 0 Then Exit Function
     If v1 Is Nothing Or v2 Is Nothing Then Exit Function
     Err.Clear
-    a = v1.GetPoint3
+    a = v1.GetPoint
     If Err.Number <> 0 Then
-        gFindings = gFindings & "GetPoint3 raised " & Trim(Str(Err.Number)) & "; "
+        gFindings = gFindings & "GetPoint raised " & Trim(Str(Err.Number)) & "; "
         Exit Function
     End If
     Err.Clear
-    b = v2.GetPoint3
+    b = v2.GetPoint
     If Err.Number <> 0 Then
-        gFindings = gFindings & "GetPoint3 raised " & Trim(Str(Err.Number)) & "; "
+        gFindings = gFindings & "GetPoint raised " & Trim(Str(Err.Number)) & "; "
         Exit Function
     End If
     If Not IsArray(a) Or Not IsArray(b) Then
-        gFindings = gFindings & "GetPoint3 did not return an array; "
+        gFindings = gFindings & "GetPoint did not return an array; "
         Exit Function
     End If
     If UBound(a) < 2 Or UBound(b) < 2 Then
-        gFindings = gFindings & "GetPoint3 array too small; "
+        gFindings = gFindings & "GetPoint array too small; "
         Exit Function
     End If
     x1 = a(0): y1 = a(1): z1 = a(2)
