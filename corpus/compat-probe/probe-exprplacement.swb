@@ -290,7 +290,7 @@ End Function
 ' and ends at the rect corner (shared by coincidence).
 Function BuildDrivenBox(ByRef posIdx As Long, ByRef widIdx As Long) As Boolean
     Dim sk As Object, nm As String, feat As Object, ok As Boolean
-    Dim seg As Object, corner As Object, endp As Object
+    Dim seg As Object, corner As Object, endp As Object, sk As Object
     Dim rectSegs As Variant
     Dim dd As Object, dm As Object
     Dim eqMgr As SldWorks.EquationMgr
@@ -335,7 +335,8 @@ Function BuildDrivenBox(ByRef posIdx As Long, ByRef widIdx As Long) As Boolean
     If dd Is Nothing Then Exit Function
     Set dm = dd.GetDimension2(0)
     If dm Is Nothing Then Exit Function
-    nm = swSketchMgr.ActiveSketch.Name
+    Set sk = swSketchMgr.ActiveSketch
+    nm = sk.Name
     gSketchName = nm
     gPhase = "build: size dim"
     ' the SIZE dimension: the rect's first line length (its two handles)
@@ -369,7 +370,7 @@ Function BuildDrivenBox(ByRef posIdx As Long, ByRef widIdx As Long) As Boolean
     swSketchMgr.InsertSketch True
     swDoc.ClearSelection2 True
     ok = False
-    ok = rectSegs(0).Select(False)
+    If Not sk Is Nothing Then ok = sk.Select(False)
     If ok = False Then ok = swDoc.Extension.SelectByID2(nm, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
     If ok = False Then Exit Function
     Err.Clear
