@@ -366,8 +366,10 @@ Function BuildDrivenBox(ByRef posIdx As Long, ByRef widIdx As Long) As Boolean
     idx = eqMgr.Add(-1, """D2@" & nm & """ = ""myW""")
     If idx < 0 Then Exit Function
     gPhase = "build: extrude"
-    ' close the sketch and extrude the driven rect
-    swSketchMgr.InsertSketch True
+    ' close the sketch IF open (InsertSketch toggles; the equation adds
+    ' may already have exited sketch edit - a blind call would OPEN a
+    ' new empty sketch and the extrude would find no profile)
+    If Not swSketchMgr.ActiveSketch Is Nothing Then swSketchMgr.InsertSketch True
     swDoc.ClearSelection2 True
     ok = False
     If Not sk Is Nothing Then ok = sk.Select(False)
