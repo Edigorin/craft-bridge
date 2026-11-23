@@ -327,7 +327,7 @@ Sub RunJoinExtrudeCase(ByVal idx As Long, ByVal tag As String, ByVal mergeFlag A
     ' post-state: exactly one body must carry the joined material (merge)
     ' or a new body must appear (no merge); the control never moves
     countAfter = 0: grownVol = 0: ctrlVol = 0: freeVol = 0
-    afterBodies = swDoc.GetBodies2(0, False)
+    afterBodies = PartDocBodies()
     If IsArray(afterBodies) Then
         countAfter = UBound(afterBodies) - LBound(afterBodies) + 1
         For i = LBound(afterBodies) To UBound(afterBodies)
@@ -449,7 +449,7 @@ Function IdentifyBodies(ByVal tag As String, ByRef bodyA As SldWorks.Body2, ByRe
     Dim bv As Double, c(0 To 2, 0 To 2) As Double
     IdentifyBodies = False
     Err.Clear
-    bs = swDoc.GetBodies2(0, False)
+    bs = PartDocBodies()
     If Err.Number <> 0 Or Not IsArray(bs) Then Exit Function
     n = UBound(bs) - LBound(bs) + 1
     If n <> 3 Then
@@ -489,7 +489,7 @@ Function IdentifyJoinBodies(ByVal tag As String, ByRef targetBody As SldWorks.Bo
     Dim d0 As Double, d1 As Double
     IdentifyJoinBodies = False
     Err.Clear
-    bs = swDoc.GetBodies2(0, False)
+    bs = PartDocBodies()
     If Err.Number <> 0 Or Not IsArray(bs) Then Exit Function
     n = UBound(bs) - LBound(bs) + 1
     If twoCandidates And n <> 3 Then
@@ -546,6 +546,19 @@ End Function
 ' Per-body volume and centroid through IBody2.GetMassProperties(density):
 ' the 12-entry array (center 3, volume at index 3), VBA-indexed. Values
 ' checked finite before use.
+' The body enumeration through its DOCUMENTED owner: IPartDoc.GetBodies2
+' (research 12 [S12] - ModelDoc2 does not carry it; typed VBA refuses the
+' call otherwise). Returns the Variant of Body2 array or Empty.
+Function PartDocBodies() As Variant
+    Dim pd As SldWorks.PartDoc
+    On Error Resume Next
+    PartDocBodies = Empty
+    Set pd = swDoc
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    PartDocBodies = pd.GetBodies2(0, False)
+End Function
+
 Function BodyVolume(ByVal b As SldWorks.Body2) As Double
     Dim v As Variant
     BodyVolume = -1
