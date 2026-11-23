@@ -302,6 +302,15 @@ Function BuildDrivenBox(ByRef posIdx As Long, ByRef widIdx As Long) As Boolean
     ' the carrier line: origin -> corner (15mm along x)
     Set seg = swSketchMgr.CreateLine(0#, 0#, 0#, 0.015, 0#, 0#)
     If seg Is Nothing Then Exit Function
+    ' the carrier is CONSTRUCTION geometry: it must not join the extrude
+    ' profile (a stray line gives the profile detector two contours and
+    ' the extrude finds none) - the proven ConstructionGeometry member
+    Err.Clear
+    seg.ConstructionGeometry = True
+    If Err.Number <> 0 Then
+        gFindings = gFindings & "carrier construction flag failed; "
+        Exit Function
+    End If
     gPhase = "build: carrier handles"
     Set endp = seg.GetEndPoint2
     Set corner = seg.GetStartPoint2
