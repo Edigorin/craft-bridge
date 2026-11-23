@@ -198,40 +198,6 @@ End Function
 ' Identify A/B/C by VOLUME FINGERPRINT (returned order is never
 ' trusted - the body-registry lesson) and measure the pairwise centroid
 ' distances as the fixture gate.
-Function IdentifyBodies(ByVal tag As String, ByRef bodyA As Object, ByRef bodyB As Object, ByRef bodyC As Object, ByRef vA As Double, ByRef vB As Double, ByRef vC As Double, ByRef dAB As Double, ByRef dAC As Double, ByRef dBC As Double) As Boolean
-    Dim bs As Variant, i As Long, n As Long
-    Dim bv As Double, c(0 To 2, 0 To 2) As Double
-    IdentifyBodies = False
-    Err.Clear
-    bs = PartDocBodies()
-    If Err.Number <> 0 Or Not IsArray(bs) Then Exit Function
-    n = UBound(bs) - LBound(bs) + 1
-    If n <> 3 Then
-        gFailures = gFailures & tag & ": fixture built " & Trim(Str(n)) & " bodies, expected 3; "
-        Exit Function
-    End If
-    For i = LBound(bs) To UBound(bs)
-        bv = BodyVolume(bs(i))
-        If Abs(bv - 0.000006) <= 0.000006 * 0.000001 Then
-            Set bodyA = bs(i): vA = bv: Call BodyCentroid(bs(i), c(0, 0), c(0, 1), c(0, 2))
-        ElseIf Abs(bv - 0.000004) <= 0.000004 * 0.000001 Then
-            Set bodyB = bs(i): vB = bv: Call BodyCentroid(bs(i), c(1, 0), c(1, 1), c(1, 2))
-        ElseIf Abs(bv - 0.000001) <= 0.000001 * 0.000001 Then
-            Set bodyC = bs(i): vC = bv: Call BodyCentroid(bs(i), c(2, 0), c(2, 1), c(2, 2))
-        Else
-            gFailures = gFailures & tag & ": fixture body volume " & SafeNum(bv) & " is not a fixture fingerprint; "
-            Exit Function
-        End If
-    Next
-    If bodyA Is Nothing Or bodyB Is Nothing Or bodyC Is Nothing Then
-        gFailures = gFailures & tag & ": fixture fingerprints incomplete; "
-        Exit Function
-    End If
-    dAB = PtDist(c(0, 0), c(0, 1), c(0, 2), c(1, 0), c(1, 1), c(1, 2))
-    dAC = PtDist(c(0, 0), c(0, 1), c(0, 2), c(2, 0), c(2, 1), c(2, 2))
-    dBC = PtDist(c(1, 0), c(1, 1), c(1, 2), c(2, 0), c(2, 1), c(2, 2))
-    IdentifyBodies = True
-End Function
 
 ' The join-case fixture: target (6e-6), control (1e-6), optional second
 ' candidate (1e-6 - the 10x10x10 box). The second candidate's volume
