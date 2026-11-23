@@ -290,7 +290,7 @@ End Function
 ' and ends at the rect corner (shared by coincidence).
 Function BuildDrivenBox(ByRef posIdx As Long, ByRef widIdx As Long) As Boolean
     Dim sk As Object, nm As String, feat As Object, ok As Boolean
-    Dim seg As Object, corner As Object, endp As Object, sk As Object
+    Dim seg As Object, corner As Object, endp As Object
     Dim rectSegs As Variant
     Dim dd As Object, dm As Object
     Dim eqMgr As SldWorks.EquationMgr
