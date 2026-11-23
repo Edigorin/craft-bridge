@@ -494,3 +494,20 @@ u->+y, v->+z, extrude blind ->+x (the first plane is the YZ/Right
 plane). Every model-space query must follow the MEASURED frame; fixture
 gates pin individual centroids on NON-SQUARE sections so this class of
 ambiguity fails loudly at the gate.
+
+### API correction (2026-11-23): InsertMoveCopyBody2 parameter order
+
+The research-12 reconstructed signature put `TransDist` FIRST. The
+official parameter descriptions ("TransZ: Value for delta Z; applies to
+translation"), the documented parameter list of the older
+`InsertMoveCopyBody` (TransX: TransY: TransZ: TransDist: ...), and real
+VBA call sites all establish the actual order:
+
+    (TransX, TransY, TransZ, TransDist, RotPointX/Y/Z, RotAngleX/Y/Z,
+     BCopy, NumCopies)
+
+Seat evidence: a call with the delta vector in the TransDist slot
+(created-but-rebuild-error) vs the corrected order (exact displacement
+verified against the analytic oracle). The probe records the confirmed
+order as the emitter's input contract; the research output stands as
+filed, with this correction living in the evidence record.

@@ -204,6 +204,7 @@ Function CaseTranslation(ByRef idx As Long) As Boolean
     If Not VerifyCount(2, idx, "after-translation") Then Exit Function
     idx = idx + 1
     If Not VerifyControl("after-translation") Then Exit Function
+    gFindings = gFindings & "InsertMoveCopyBody2 input order CONFIRMED by exact displacement: (TransX, TransY, TransZ, TransDist, RotPoint*, RotAngle*, BCopy, NumCopies); "
     CaseTranslation = True
 End Function
 
@@ -539,7 +540,13 @@ Function MoveFeatureOnBody(ByVal b As Object, ByVal td As Double, ByVal tx As Do
         Exit Function
     End If
     Err.Clear
-    Set MoveFeatureOnBody = swFeatMgr.InsertMoveCopyBody2(td, tx, ty, tz, rx, ry, rz, ra, rb, rc, bcopy, ncopies)
+    ' the MEASURED input order: (TransX, TransY, TransZ, TransDist,
+    ' RotPointX/Y/Z, RotAngleX/Y/Z, BCopy, NumCopies) - TransX/Y/Z are
+    ' the translation deltas (official parameter docs); TransDist is
+    ' the separate distance field. The research-12 reconstruction put
+    ' TransDist first - the translation case confirms the order by
+    ' exact displacement and records it as the emitter's contract.
+    Set MoveFeatureOnBody = swFeatMgr.InsertMoveCopyBody2(tx, ty, tz, td, rx, ry, rz, ra, rb, rc, bcopy, ncopies)
     If Err.Number <> 0 Then
         gFindings = gFindings & "InsertMoveCopyBody2 raised " & Trim(Str(Err.Number)) & " (" & tag & "); "
         Set MoveFeatureOnBody = Nothing
@@ -556,7 +563,7 @@ Function FeatureOk(ByVal f As Object, ByVal idx As Long, ByVal tag As String) As
     Err.Clear
     ok = swDoc.EditRebuild3()
     If Err.Number <> 0 Or Not ok Then
-        gFailures = gFailures & tag & ": the rebuild after feature creation failed; "
+        gFailures = gFailures & tag & ": the rebuild after feature creation failed (rebuild " & CStr(ok) & " err " & Trim(Str(Err.Number)) & "); "
         Exit Function
     End If
     Err.Clear
