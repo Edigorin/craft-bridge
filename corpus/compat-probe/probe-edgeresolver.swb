@@ -239,6 +239,9 @@ Function CountEdgeMatches(ByVal dx As Double, ByVal dy As Double, ByVal dz As Do
             gFindings = gFindings & "edge element is Nothing; "
         ElseIf EdgeSeg(e, p1(0), p1(1), p1(2), p2(0), p2(1), p2(2)) Then
             elen = PtDist(p1(0), p1(1), p1(2), p2(0), p2(1), p2(2))
+            If j = LBound(edges) Then
+                gFindings = gFindings & "diag edge0 " & SafeNum(p1(0)) & "/" & SafeNum(p1(1)) & "/" & SafeNum(p1(2)) & " -> " & SafeNum(p2(0)) & "/" & SafeNum(p2(1)) & "/" & SafeNum(p2(2)) & " len " & SafeNum(elen) & " want " & SafeNum(wantLen) & "; "
+            End If
             dprod = (p2(0) - p1(0)) * dx + (p2(1) - p1(1)) * dy + (p2(2) - p1(2)) * dz
             If elen > 0 Then dprod = dprod / (elen * Sqr(dx * dx + dy * dy + dz * dz))
             pd = PtSegDist(pickX, pickY, pickZ, p1(0), p1(1), p1(2), p2(0), p2(1), p2(2))
