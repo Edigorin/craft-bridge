@@ -78,6 +78,7 @@ Sub main()
         GoTo Finish
     End If
 
+    WriteStep 0, "doccount.after-fixture", "ok", DocWalkText()
     ' ---- EP1: edit the PLACEMENT parameter alone ----
     stepIdx = 1
     If Not SetGlobal("myPos", "25mm", posIdx) Then GoTo Finish
@@ -110,6 +111,7 @@ Sub main()
         GoTo Finish
     End If
     WriteStep stepIdx, "save", "ok", "status " & Trim(Str(saveStatus)) & " path=" & tempPath
+    WriteStep stepIdx, "doccount.after-save", "ok", DocWalkText()
     stepIdx = 6
     CloseOwnedDoc closedOk
     If Not closedOk Then
@@ -131,6 +133,7 @@ Sub main()
     Set swFeatMgr = swDoc.FeatureManager
     Set swSketchMgr = swDoc.SketchManager
     WriteStep stepIdx, "reopen", "ok", "errors " & Trim(Str(err1)) & "/" & Trim(Str(err2))
+    WriteStep stepIdx, "doccount.after-reopen", "ok", DocWalkText()
 
     stepIdx = 8
     If Not SetGlobal("myPos", "20mm", posIdx) Then GoTo Finish
@@ -517,6 +520,22 @@ End Sub
 
 Function PtDist(ByVal x1 As Double, ByVal y1 As Double, ByVal z1 As Double, ByVal x2 As Double, ByVal y2 As Double, ByVal z2 As Double) As Double
     PtDist = Sqr((x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2) + (z1 - z2) * (z1 - z2))
+End Function
+
+Function DocWalkText() As String
+    Dim d As Object, titles As String
+    On Error Resume Next
+    DocWalkText = "?"
+    titles = ""
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Function
+    Do While Not d Is Nothing
+        titles = titles & "[" & TypeName(d) & " " & d.GetTitle & "] "
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Function
+    Loop
+    DocWalkText = Trim(titles)
 End Function
 
 Function CountOpenDocuments() As Long
