@@ -561,15 +561,23 @@ Function FeatureOk(ByVal f As Object, ByVal idx As Long, ByVal tag As String) As
     Dim o1 As Boolean
     Dim e1 As Long
     Dim tn As String
+    Dim bad As Boolean
     On Error Resume Next
     FeatureOk = False
+    bad = False
     Err.Clear
     o1 = swDoc.EditRebuild3()
     e1 = Err.Number
     Err.Clear
     tn = f.GetTypeName2
     If Err.Number <> 0 Then tn = "?"
-    If e1 <> 0 Or Not o1 Then
+    ' dialect-proof evaluation: the COMPOUND form (e1 <> 0 Or Not o1)
+    ' mis-evaluated on this seat (branch taken while both parts are
+    ' false) - stepwise booleans only, and the raw evaluations recorded
+    gFindings = gFindings & "eval: [e1<>0]=" & CStr(e1 <> 0) & " [Not o1]=" & CStr(Not o1) & " [compound]=" & CStr(e1 <> 0 Or Not o1) & "; "
+    If e1 <> 0 Then bad = True
+    If o1 = False Then bad = True
+    If bad Then
         WriteStep idx, "feature." & tag, "failed", "created (" & tn & ") but rebuild " & CStr(o1) & " err " & Trim(Str(e1))
         gFailures = gFailures & tag & ": the rebuild after feature creation failed (rebuild " & CStr(o1) & " err " & Trim(Str(e1)) & "); "
         Exit Function

@@ -1,0 +1,1014 @@
+' craft-bridge probe - probe-fillet.swb (Phase B P1: D06 constant-
+' radius fillet on the resolved edge)
+' Hand-written on the proven probe skeleton. Plan-review fold-ins are
+' in force (APPROVE WITH CHANGES 2026-11-23):
+'   - positive feature cases require a successful rebuild and a
+'     feature-error check (dialect-proof stepwise booleans - the
+'     compound Or/Not form mis-evaluates on this seat);
+'   - the fillet inputs are verified UNDER selection access (input edge
+'     count, edge geometry, owning body), and access is released
+'     UNCONDITIONALLY (failure and success paths) before any rebuild or
+'     enumeration;
+'   - acceptance includes the blend's material change (the analytic
+'     (1-pi/4)*r^2*L removal) and unchanged controls - definition
+'     inputs and radius readback alone do not prove a valid fillet;
+'   - the ambiguous twin-edge case must REFUSE BEFORE feature creation
+'     (EDGE_AMBIGUOUS) with unchanged feature/body inventories.
+'
+' Evidence questions (research 12 P1 rows + T2):
+'   FL1: does the builder (CreateDefinition(swFmFillet),
+'        Initialize(swConstRadiusFillet), mark-1 edge selection,
+'        DefaultRadius in metres, CreateFeature) consume EXACTLY the
+'        uniquely resolved edge? (FILLET_EDGE_MISMATCH)
+'   FL2: does the definition readback (GetDefinition + AccessSelections
+'        + Edges + DefaultRadius + ReleaseSelectionAccess) return the
+'        one input edge at the requested radius?
+'        (FILLET_ACCESS_FAILED / FILLET_RADIUS_MISMATCH)
+'   FL3: is the material change exactly the analytic blend volume and
+'        are the controls untouched?
+'   FL4: does the ambiguous twin query refuse before creation?
+'        (EDGE_AMBIGUOUS, inventories unchanged)
+'
+' Fixture (independently authored synthetic; model frame MEASURED on
+' this seat: sketch u->+y, v->+z, extrude blind ->+x): body A is a
+' 10x30x20 mm box (6e-6 m3, centroid 0.005/0.015/0.01) whose four
+' y-edges (length 30mm) are near-identical twins; the target is the
+' y-edge at x=0,z=0 (through the origin). Control C is a 10mm cube
+' (1e-6 m3, centroid 0.005/0.055/0.005). Fillet radius 2mm on the
+' 30mm edge: analytic removal (1-pi/4)*r^2*L = 2.5752e-8 m3.
+' Tolerances: pick distance 0.006 m; length 1e-6 m; |dir dot| > 0.999;
+' volumes relative 1e-6; the blend removal 1e-9 m3 absolute.
+
+Option Explicit
+
+Dim swApp As SldWorks.SldWorks
+Dim swDoc As SldWorks.ModelDoc2
+Dim swFeatMgr As Object
+Dim swSketchMgr As SketchManager
+Dim reportPath As String
+Dim gFailures As String
+Dim gAbort As String
+Dim gFindings As String
+Dim gPhase As String
+Dim gMatched As Object
+Dim gSelectForm As String
+
+' working buffers (module-level: no array-parameter minefields)
+Dim gBuf1(0 To 23) As Double
+Dim gBuf1N As Long
+Dim gCtrl(0 To 23) As Double
+Dim gCtrlN As Long
+
+Sub main()
+    Dim stepIdx As Long
+    Dim errNum As Long, errMsg As String
+    Dim closedOk As Boolean
+    Dim openCount As Long
+    On Error GoTo Fail
+
+    reportPath = ReportPathFromHost()
+    If reportPath = "" Then Err.Raise vbObjectError + 513, "probe-fillet.swb", "no report path"
+    StartReport
+    WriteLine "{""type"":""header"",""macro"":""tools/probe-fillet.swb"",""bridge_version"":""0.1.0""}"
+    Set swApp = Application.SldWorks
+    stepIdx = 0
+
+    gPhase = "case: positive fillet"
+    If Not CasePositive(stepIdx) Then GoTo Finish
+    stepIdx = stepIdx + 1
+    CloseCaseDoc closedOk
+    If Not closedOk Then
+        gAbort = "uncertain cleanup after the positive case; the battery stops"
+        GoTo Finish
+    End If
+
+    gPhase = "case: ambiguous refusal"
+    If Not CaseAmbiguous(stepIdx) Then GoTo Finish
+    stepIdx = stepIdx + 1
+    CloseCaseDoc closedOk
+    If Not closedOk Then
+        gAbort = "uncertain cleanup after the ambiguous case; the battery stops"
+        GoTo Finish
+    End If
+
+    openCount = CountOpenDocuments()
+    If openCount <> 0 Then
+        gAbort = "uncertain cleanup: " & Trim(Str(openCount)) & " document(s) remain open"
+        WriteStep stepIdx, "cleanup", "failed", gAbort
+    Else
+        WriteStep stepIdx, "cleanup", "ok", "zero open documents"
+    End If
+
+Finish:
+    If Not swDoc Is Nothing Then
+        CloseOwnedDoc closedOk
+        If Not closedOk Then
+            gAbort = "uncertain cleanup at the finish path; the battery stops"
+        End If
+    End If
+    stepIdx = stepIdx + 1
+    If gAbort <> "" Then
+        WriteStep stepIdx, "probe-verdict", "failed", gAbort & " findings: " & gFindings
+    ElseIf gFailures = "" Then
+        WriteStep stepIdx, "probe-verdict", "ok", "the builder consumes exactly the uniquely resolved edge at the requested radius (definition readback under selection access, released unconditionally), the material change is the analytic blend volume, the controls are untouched, and the ambiguous twin query refuses before creation with unchanged inventories. findings: " & gFindings
+    Else
+        WriteStep stepIdx, "probe-verdict", "failed", gFailures & " findings: " & gFindings
+    End If
+    WriteLine "{""type"":""summary"",""status"":""ok""}"
+    Exit Sub
+
+Fail:
+    errNum = Err.Number
+    errMsg = Err.Description
+    On Error Resume Next
+    If reportPath = "" Then reportPath = ReportPathFromHost()
+    If reportPath <> "" Then
+        WriteStep stepIdx, "macro", "failed", "at phase [" & gPhase & "] err " & Trim(Str(errNum)) & ": " & errMsg
+        CloseOwnedDoc closedOk
+        WriteStep stepIdx, "probe-verdict", "failed", "the macro raised before its verdict; the battery is inconclusive"
+        WriteLine "{""type"":""summary"",""status"":""failed""}"
+    End If
+End Sub
+
+' ===================== case: the positive fillet =====================
+
+Function CasePositive(ByRef idx As Long) As Boolean
+    Dim f As Object
+    Dim r As Double
+    Dim expVol As Double
+    CasePositive = False
+    r = 0.002
+    If Not BuildFixture(idx) Then Exit Function
+    idx = idx + 1
+    ' resolve the target edge with the proven geometric matcher
+    If Not ResolveTarget(idx) Then Exit Function
+    idx = idx + 1
+    ' FL2: the definition readback under selection access
+    If Not CreateFillet(r, f) Then Exit Function
+    If Not ReadbackFillet(f, r, idx) Then Exit Function
+    idx = idx + 1
+    ' FL1/FL3: feature checks + the analytic blend material change
+    If Not FeatureOk(f, idx, "fillet") Then Exit Function
+    idx = idx + 1
+    expVol = 0.000006 - (1 - (4 * Atn(1)) / 4) * r * r * 0.03
+    If Not VerifyBlend(expVol, idx) Then Exit Function
+    idx = idx + 1
+    If Not VerifyControl("after-fillet") Then Exit Function
+    CasePositive = True
+End Function
+
+' FL4: the twin-equidistant query must refuse BEFORE any feature is
+' created, and every inventory must be unchanged afterwards
+Function CaseAmbiguous(ByRef idx As Long) As Boolean
+    Dim n As Long
+    Dim f0 As Long
+    CaseAmbiguous = False
+    If Not BuildFixture(idx) Then Exit Function
+    idx = idx + 1
+    f0 = CountFeatures("")
+    n = CountEdgeMatches(0#, 1#, 0#, 0.03, 0.005, 0.015, 0#, 0.006, 0.000006)
+    If n = 2 Then
+        WriteStep idx, "resolve.ambiguous-twin", "ok", "EDGE_AMBIGUOUS enforced: 2 twin candidates matched; NO feature created"
+        idx = idx + 1
+    ElseIf n = 1 Then
+        gFailures = gFailures & "the ambiguous twin query resolved to ONE edge (EDGE_AMBIGUOUS not enforced - an index guess); "
+        Exit Function
+    Else
+        gFailures = gFailures & "the ambiguous twin query matched " & Trim(Str(n)) & " candidates (expected 2); "
+        Exit Function
+    End If
+    ' the inventories must be untouched by the refusal
+    If Not VerifyInventory(f0, idx) Then Exit Function
+    CaseAmbiguous = True
+End Function
+
+Function VerifyInventory(ByVal f0 As Long, ByVal idx As Long) As Boolean
+    Dim bs As Variant
+    Dim n As Long
+    Dim f1 As Long
+    VerifyInventory = False
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    n = UBound(bs) - LBound(bs) + 1
+    f1 = CountFeatures("")
+    If n <> 2 Then
+        gFailures = gFailures & "the refusal changed the body count (" & Trim(Str(n)) & "); "
+        Exit Function
+    End If
+    If f1 <> f0 Then
+        gFailures = gFailures & "the refusal changed the feature inventory (" & Trim(Str(f1)) & " vs " & Trim(Str(f0)) & "); "
+        Exit Function
+    End If
+    If CountFeatures("Fillet") <> 0 Then
+        gFailures = gFailures & "a fillet feature exists after the refusal; "
+        Exit Function
+    End If
+    If Not BodyByVol(0.000006) Then
+        gFailures = gFailures & "the refusal changed body A; "
+        Exit Function
+    End If
+    WriteStep idx, "inventory.after-refusal", "ok", "2 bodies, " & Trim(Str(f1)) & " features, no fillet - the refusal touched nothing"
+    VerifyInventory = True
+End Function
+
+' ===================== the builder + readback =====================
+
+Function CreateFillet(ByVal r As Double, ByRef f As Object) As Boolean
+    Dim sd As Object
+    Dim mgr As Object
+    Dim fData As Object
+    On Error Resume Next
+    CreateFillet = False
+    Set f = Nothing
+    If gMatched Is Nothing Then
+        gFailures = gFailures & "FILLET_EDGE_MISMATCH (no resolved edge to fillet); "
+        Exit Function
+    End If
+    swDoc.ClearSelection2 True
+    Set sd = swDoc.SelectionManager.CreateSelectData
+    If Not SelectEdge(gMatched, False, 1, sd) Then
+        gFailures = gFailures & "FILLET_EDGE_MISMATCH (edge selection failed); "
+        Exit Function
+    End If
+    Err.Clear
+    Set mgr = swFeatMgr
+    Set fData = mgr.CreateDefinition(swFmFillet)
+    If Err.Number <> 0 Or fData Is Nothing Then
+        gFailures = gFailures & "FILLET_EDGE_MISMATCH (CreateDefinition(swFmFillet) failed, err " & Trim(Str(Err.Number)) & "); "
+        Exit Function
+    End If
+    Err.Clear
+    fData.Initialize swConstRadiusFillet
+    If Err.Number <> 0 Then
+        gFindings = gFindings & "Initialize(swConstRadiusFillet) raised " & Trim(Str(Err.Number)) & "; "
+    End If
+    Err.Clear
+    fData.ConicTypeForCrossSectionProfile = swFeatureFilletCircular
+    If Err.Number <> 0 Then
+        gFindings = gFindings & "ConicTypeForCrossSectionProfile raised " & Trim(Str(Err.Number)) & "; "
+    End If
+    Err.Clear
+    fData.DefaultRadius = r
+    If Err.Number <> 0 Then
+        gFailures = gFailures & "FILLET_RADIUS_MISMATCH (DefaultRadius assignment raised); "
+        Exit Function
+    End If
+    Err.Clear
+    Set f = mgr.CreateFeature(fData)
+    If Err.Number <> 0 Or f Is Nothing Then
+        gFailures = gFailures & "FILLET_EDGE_MISMATCH (CreateFeature failed, err " & Trim(Str(Err.Number)) & "); "
+        Exit Function
+    End If
+    CreateFillet = True
+End Function
+
+' the definition readback under selection access - inputs verified
+' (count, geometry, owning body) and access released UNCONDITIONALLY
+' before anything else happens
+Function ReadbackFillet(ByVal f As Object, ByVal r As Double, ByVal idx As Long) As Boolean
+    Dim data As Object
+    Dim edges As Variant
+    Dim n As Long
+    Dim e As Object
+    Dim p1(0 To 2) As Double
+    Dim p2(0 To 2) As Double
+    Dim ok As Boolean
+    Dim dr As Double
+    Dim ownVol As Double
+    Dim eb As Object
+    Dim ylo As Double, yhi As Double
+    On Error Resume Next
+    ReadbackFillet = False
+    Err.Clear
+    Set data = f.GetDefinition
+    If Err.Number <> 0 Or data Is Nothing Then
+        gFailures = gFailures & "FILLET_ACCESS_FAILED (GetDefinition failed); "
+        Exit Function
+    End If
+    Err.Clear
+    ok = data.AccessSelections(swDoc, Nothing)
+    If Err.Number <> 0 Or Not ok Then
+        Err.Clear
+        data.ReleaseSelectionAccess
+        gFailures = gFailures & "FILLET_ACCESS_FAILED (AccessSelections failed); "
+        Exit Function
+    End If
+    ' ---- read everything while access is held ----
+    Err.Clear
+    edges = data.Edges
+    If Err.Number <> 0 Then edges = Empty
+    Err.Clear
+    dr = data.DefaultRadius
+    If Err.Number <> 0 Then dr = -1
+    n = 0
+    If IsArray(edges) Then
+        n = UBound(edges) - LBound(edges) + 1
+        If n >= 1 Then
+            Err.Clear
+            Set e = edges(LBound(edges))
+            If Err.Number = 0 Then
+                If EdgeSeg(e, p1(0), p1(1), p1(2), p2(0), p2(1), p2(2)) Then
+                    Err.Clear
+                    Set eb = e.GetBody
+                    If Err.Number = 0 And Not eb Is Nothing Then ownVol = BodyVolume(eb)
+                End If
+            End If
+        End If
+    End If
+    ' ---- release UNCONDITIONALLY before any evaluation/rebuild ----
+    Err.Clear
+    data.ReleaseSelectionAccess
+    If Err.Number <> 0 Then
+        gFindings = gFindings & "ReleaseSelectionAccess raised " & Trim(Str(Err.Number)) & "; "
+    End If
+    ' ---- evaluate the captured values ----
+    If n <> 1 Then
+        gFailures = gFailures & "FILLET_EDGE_MISMATCH (definition holds " & Trim(Str(n)) & " input edges, expected 1); "
+        Exit Function
+    End If
+    ' orientation-safe: the endpoint PAIR must be the target y-edge at
+    ' x=0,z=0 (an edge's traversal can flip p1/p2)
+    ylo = p1(1): yhi = p2(1)
+    If yhi < ylo Then
+        ylo = p2(1): yhi = p1(1)
+    End If
+    If Abs(p1(0) - 0#) > 0.000001 Or Abs(p2(0) - 0#) > 0.000001 Or Abs(p1(2) - 0#) > 0.000001 Or Abs(p2(2) - 0#) > 0.000001 Or Abs(ylo - 0#) > 0.000001 Or Abs(yhi - 0.03) > 0.000001 Then
+        gFailures = gFailures & "FILLET_EDGE_MISMATCH (input edge " & SafeNum(p1(0)) & "/" & SafeNum(p1(1)) & "/" & SafeNum(p1(2)) & " -> " & SafeNum(p2(0)) & "/" & SafeNum(p2(1)) & "/" & SafeNum(p2(2)) & " is not the target y-edge); "
+        Exit Function
+    End If
+    If Abs(ownVol - 0.000006) > 0.000006 * 0.000001 Then
+        gFailures = gFailures & "FILLET_EDGE_MISMATCH (the input edge's body is volume " & SafeNum(ownVol) & ", expected 6e-6); "
+        Exit Function
+    End If
+    If Abs(dr - r) > 0.00000001 Then
+        gFailures = gFailures & "FILLET_RADIUS_MISMATCH (DefaultRadius " & SafeNum(dr) & " expected " & SafeNum(r) & "); "
+        Exit Function
+    End If
+    WriteStep idx, "readback.fillet", "ok", "1 input edge (target y-edge on 6e-6 body), DefaultRadius " & SafeNum(dr) & ", access released"
+    ReadbackFillet = True
+End Function
+
+' FL3: the blend material change - the analytic (1-pi/4)*r^2*L removal -
+' plus the face count and the untouched control
+Function VerifyBlend(ByVal expVol As Double, ByVal idx As Long) As Boolean
+    Dim b As Object
+    Dim v As Double
+    Dim faces As Variant
+    Dim nf As Long
+    On Error Resume Next
+    VerifyBlend = False
+    ' the filleted body is "the body bigger than the control" - the
+    ' pre-fillet 6e-6 fingerprint is exactly what the blend removes
+    Set b = FindMainBody()
+    If b Is Nothing Then
+        gFailures = gFailures & "the filleted body is missing; "
+        Exit Function
+    End If
+    v = BodyVolume(b)
+    If Abs(v - expVol) > 0.000000001 Then
+        gFailures = gFailures & "FILLET_EDGE_MISMATCH (blend volume " & SafeNum(v) & " expected " & SafeNum(expVol) & " - the analytic (1-pi/4)r^2L removal disagrees); "
+        Exit Function
+    End If
+    Err.Clear
+    faces = b.GetFaces
+    If Err.Number = 0 And IsArray(faces) Then nf = UBound(faces) - LBound(faces) + 1
+    If nf <> 7 Then
+        gFailures = gFailures & "FILLET_EDGE_MISMATCH (the filleted body has " & Trim(Str(nf)) & " faces, expected 7 - one blend face added); "
+        Exit Function
+    End If
+    WriteStep idx, "verify.blend", "ok", "volume " & SafeNum(v) & " = analytic removal, 7 faces (blend face added)"
+    VerifyBlend = True
+End Function
+
+' ===================== the geometric matcher =====================
+' (the proven edge-resolver contract: length 1e-6, |dir dot| > 0.999,
+' pick-point-to-segment distance; candidates restricted to the target
+' body's edges; exactly-one rule)
+
+Function ResolveTarget(ByVal idx As Long) As Boolean
+    Dim n As Long
+    ResolveTarget = False
+    n = CountEdgeMatches(0#, 1#, 0#, 0.03, 0.002, 0.015, 0.002, 0.006, 0.000006)
+    If n = 1 Then
+        WriteStep idx, "resolve.target", "ok", "exactly one match (the target y-edge at x=0,z=0)"
+        ResolveTarget = True
+    ElseIf n = 0 Then
+        gFailures = gFailures & "FILLET_EDGE_MISMATCH (EDGE_NOT_FOUND: no candidate matched); "
+    Else
+        gFailures = gFailures & "FILLET_EDGE_MISMATCH (EDGE_AMBIGUOUS: " & Trim(Str(n)) & " candidates); "
+    End If
+End Function
+
+Function CountEdgeMatches(ByVal dx As Double, ByVal dy As Double, ByVal dz As Double, ByVal wantLen As Double, ByVal pickX As Double, ByVal pickY As Double, ByVal pickZ As Double, ByVal tol As Double, ByVal expVol As Double) As Long
+    Dim bs As Variant
+    Dim i As Long, bv As Double
+    Dim target As Object
+    Dim edges As Variant
+    Dim j As Long
+    Dim e As Object
+    Dim p1(0 To 2) As Double
+    Dim p2(0 To 2) As Double
+    Dim elen As Double, dprod As Double
+    Dim pd As Double
+    Dim n As Long
+    On Error Resume Next
+    CountEdgeMatches = -1
+    n = 0
+    Set gMatched = Nothing
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    Set target = Nothing
+    For i = LBound(bs) To UBound(bs)
+        bv = BodyVolume(bs(i))
+        If Abs(bv - expVol) <= expVol * 0.000001 Then Set target = bs(i)
+    Next
+    If target Is Nothing Then Exit Function
+    Err.Clear
+    edges = target.GetEdges
+    If Err.Number <> 0 Then Exit Function
+    If Not IsArray(edges) Then Exit Function
+    For j = LBound(edges) To UBound(edges)
+        Err.Clear
+        Set e = edges(j)
+        If Err.Number <> 0 Then Exit Function
+        If Not e Is Nothing Then
+            If EdgeSeg(e, p1(0), p1(1), p1(2), p2(0), p2(1), p2(2)) Then
+                elen = PtDist(p1(0), p1(1), p1(2), p2(0), p2(1), p2(2))
+                dprod = (p2(0) - p1(0)) * dx + (p2(1) - p1(1)) * dy + (p2(2) - p1(2)) * dz
+                If elen > 0 Then dprod = dprod / (elen * Sqr(dx * dx + dy * dy + dz * dz))
+                pd = PtSegDist(pickX, pickY, pickZ, p1(0), p1(1), p1(2), p2(0), p2(1), p2(2))
+                If Abs(elen - wantLen) <= 0.000001 And Abs(dprod) > 0.999 And pd < tol Then
+                    n = n + 1
+                    If n = 1 Then Set gMatched = e
+                End If
+            End If
+        End If
+    Next
+    CountEdgeMatches = n
+End Function
+
+' ===================== fixture construction =====================
+
+Function BuildFixture(ByVal idx As Long) As Boolean
+    BuildFixture = False
+    If Not NewFixturePart() Then
+        gFailures = gFailures & "no new part; "
+        Exit Function
+    End If
+    ' body A: sketch (0,0)-(0.03,0.02) extrude 0.01
+    If Not DrawAndExtrudeBox(0#, 0#, 0.03, 0.02, 0.01) Then
+        gFailures = gFailures & "fixture: body A failed; "
+        Exit Function
+    End If
+    ' control C: sketch (0.05,0)-(0.06,0.01) extrude 0.01
+    If Not DrawAndExtrudeBox(0.05, 0#, 0.06, 0.01, 0.01) Then
+        gFailures = gFailures & "fixture: control failed; "
+        Exit Function
+    End If
+    If Not FixtureGate(idx) Then Exit Function
+    BuildFixture = True
+End Function
+
+Function FixtureGate(ByVal idx As Long) As Boolean
+    Dim bs As Variant
+    Dim i As Long, n As Long, bv As Double
+    Dim seenA As Boolean, seenC As Boolean
+    FixtureGate = False
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    n = UBound(bs) - LBound(bs) + 1
+    If n <> 2 Then
+        gFailures = gFailures & "fixture: " & Trim(Str(n)) & " bodies, expected 2; "
+        Exit Function
+    End If
+    For i = LBound(bs) To UBound(bs)
+        bv = BodyVolume(bs(i))
+        If Abs(bv - 0.000006) <= 0.000006 * 0.000001 Then
+            seenA = True
+            Call BodyCentroid(bs(i), gBuf1(0), gBuf1(1), gBuf1(2))
+            If Abs(gBuf1(0) - 0.005) > 0.000001 Or Abs(gBuf1(1) - 0.015) > 0.000001 Or Abs(gBuf1(2) - 0.01) > 0.000001 Then
+                gFailures = gFailures & "fixture: A centroid " & SafeNum(gBuf1(0)) & "/" & SafeNum(gBuf1(1)) & "/" & SafeNum(gBuf1(2)) & " - the template frame changed; "
+                Exit Function
+            End If
+        ElseIf Abs(bv - 0.000001) <= 0.000001 * 0.000001 Then
+            seenC = True
+            Call BodyCentroid(bs(i), gBuf1(0), gBuf1(1), gBuf1(2))
+            If Abs(gBuf1(0) - 0.005) > 0.000001 Or Abs(gBuf1(1) - 0.055) > 0.000001 Or Abs(gBuf1(2) - 0.005) > 0.000001 Then
+                gFailures = gFailures & "fixture: control centroid " & SafeNum(gBuf1(0)) & "/" & SafeNum(gBuf1(1)) & "/" & SafeNum(gBuf1(2)) & " - the template frame changed; "
+                Exit Function
+            End If
+            If Not BodyPoints(bs(i)) Then
+                gFailures = gFailures & "fixture: control point set unreadable; "
+                Exit Function
+            End If
+            gCtrlN = gBuf1N
+            For n = 0 To gBuf1N - 1
+                gCtrl(n * 3) = gBuf1(n * 3)
+                gCtrl(n * 3 + 1) = gBuf1(n * 3 + 1)
+                gCtrl(n * 3 + 2) = gBuf1(n * 3 + 2)
+            Next
+        Else
+            gFailures = gFailures & "fixture: body volume " & SafeNum(bv) & " is not a fingerprint; "
+            Exit Function
+        End If
+    Next
+    If Not seenA Or Not seenC Then
+        gFailures = gFailures & "fixture: a fixture body is missing; "
+        Exit Function
+    End If
+    WriteStep idx, "fixture", "ok", "A 6e-6 + control 1e-6, centroids pinned (frame)"
+    FixtureGate = True
+End Function
+
+Function NewFixturePart() As Boolean
+    Dim template As String
+    On Error Resume Next
+    NewFixturePart = False
+    Err.Clear
+    template = swApp.GetUserPreferenceStringValue(swUserPreferenceStringValue_e.swDefaultTemplatePart)
+    If Err.Number <> 0 Or template = "" Then Exit Function
+    Set swDoc = swApp.NewDocument(template, 0, 0, 0)
+    If swDoc Is Nothing Then Exit Function
+    Set swFeatMgr = swDoc.FeatureManager
+    Set swSketchMgr = swDoc.SketchManager
+    NewFixturePart = True
+End Function
+
+Function DrawAndExtrudeBox(ByVal x1 As Double, ByVal y1 As Double, ByVal x2 As Double, ByVal y2 As Double, ByVal h As Double) As Boolean
+    Dim sk As Object, nm As String, feat As Object, ok As Boolean
+    On Error Resume Next
+    DrawAndExtrudeBox = False
+    If Not OpenSketchOnFirstPlane() Then Exit Function
+    swSketchMgr.CreateCornerRectangle x1, y1, 0#, x2, y2, 0#
+    Set sk = swSketchMgr.ActiveSketch
+    If sk Is Nothing Then Exit Function
+    nm = sk.Name
+    If Not swSketchMgr.ActiveSketch Is Nothing Then swSketchMgr.InsertSketch True
+    ok = False
+    If Not sk Is Nothing Then ok = sk.Select(False)
+    If ok = False Then ok = swDoc.Extension.SelectByID2(nm, "SKETCH", 0#, 0#, 0#, False, 0, Nothing, swSelectOption_e.swSelectOptionDefault)
+    If ok = False Then Exit Function
+    Err.Clear
+    Set feat = swFeatMgr.FeatureExtrusion2(True, False, False, swEndConditions_e.swEndCondBlind, swEndConditions_e.swEndCondBlind, h, 0#, False, False, False, False, 0#, 0#, False, False, False, False, False, False, True, 0, 0#, False)
+    DrawAndExtrudeBox = (Not feat Is Nothing)
+End Function
+
+Function OpenSketchOnFirstPlane() As Boolean
+    Dim feat As SldWorks.Feature, ok As Boolean
+    OpenSketchOnFirstPlane = False
+    Set feat = swDoc.FirstFeature
+    Do While Not feat Is Nothing
+        If InStr(1, feat.GetTypeName2(), "Plane", vbTextCompare) > 0 Then
+            swDoc.ClearSelection2 True
+            ok = feat.Select(False)
+            If ok Then
+                swSketchMgr.InsertSketch True
+                If Not swSketchMgr.ActiveSketch Is Nothing Then
+                    OpenSketchOnFirstPlane = True
+                    Exit Function
+                End If
+            End If
+        End If
+        Set feat = feat.GetNextFeature
+    Loop
+End Function
+
+' ===================== verification helpers =====================
+
+Function FeatureOk(ByVal f As Object, ByVal idx As Long, ByVal tag As String) As Boolean
+    Dim o1 As Boolean
+    Dim e1 As Long
+    Dim tn As String
+    Dim bad As Boolean
+    On Error Resume Next
+    FeatureOk = False
+    bad = False
+    Err.Clear
+    o1 = swDoc.EditRebuild3()
+    e1 = Err.Number
+    Err.Clear
+    tn = f.GetTypeName2
+    If Err.Number <> 0 Then tn = "?"
+    ' dialect-proof: stepwise booleans only
+    If e1 <> 0 Then bad = True
+    If o1 = False Then bad = True
+    If bad Then
+        WriteStep idx, "feature." & tag, "failed", "created (" & tn & ") but rebuild " & CStr(o1) & " err " & Trim(Str(e1))
+        gFailures = gFailures & tag & ": the rebuild after feature creation failed (rebuild " & CStr(o1) & " err " & Trim(Str(e1)) & "); "
+        Exit Function
+    End If
+    WriteStep idx, "feature." & tag, "ok", "created (" & tn & "), rebuild True"
+    FeatureOk = True
+End Function
+
+Function VerifyControl(ByVal tag As String) As Boolean
+    Dim bs As Variant
+    Dim i As Long, j As Long
+    Dim b As Object
+    Dim ok As Boolean
+    On Error Resume Next
+    VerifyControl = False
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    Set b = Nothing
+    For i = LBound(bs) To UBound(bs)
+        If Abs(BodyVolume(bs(i)) - 0.000001) <= 0.000001 * 0.000001 Then Set b = bs(i)
+    Next
+    If b Is Nothing Then
+        gFailures = gFailures & tag & ": REMOVE_COLLATERAL (the control body is gone); "
+        Exit Function
+    End If
+    If Not BodyPoints(b) Then
+        gFailures = gFailures & tag & ": control point set unreadable; "
+        Exit Function
+    End If
+    If gBuf1N <> gCtrlN Then
+        gFailures = gFailures & tag & ": REMOVE_COLLATERAL (the control geometry changed); "
+        Exit Function
+    End If
+    For i = 0 To gCtrlN - 1
+        ok = False
+        For j = 0 To gBuf1N - 1
+            If Abs(gCtrl(i * 3) - gBuf1(j * 3)) <= 0.000001 And Abs(gCtrl(i * 3 + 1) - gBuf1(j * 3 + 1)) <= 0.000001 And Abs(gCtrl(i * 3 + 2) - gBuf1(j * 3 + 2)) <= 0.000001 Then
+                ok = True
+                Exit For
+            End If
+        Next
+        If Not ok Then
+            gFailures = gFailures & tag & ": REMOVE_COLLATERAL (the control geometry changed); "
+            Exit Function
+        End If
+    Next
+    VerifyControl = True
+End Function
+
+Function FindMainBody() As Object
+    Dim bs As Variant
+    Dim i As Long
+    On Error Resume Next
+    Set FindMainBody = Nothing
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    For i = LBound(bs) To UBound(bs)
+        If BodyVolume(bs(i)) > 0.000002 Then
+            Set FindMainBody = bs(i)
+            Exit Function
+        End If
+    Next
+End Function
+
+Function BodyByVol(ByVal vol As Double) As Boolean
+    Dim b As Object
+    Set b = BodyByVolObj(vol)
+    BodyByVol = (Not b Is Nothing)
+End Function
+
+Function BodyByVolObj(ByVal vol As Double) As Object
+    Dim bs As Variant
+    Dim i As Long
+    On Error Resume Next
+    Set BodyByVolObj = Nothing
+    bs = PartDocBodies()
+    If Not IsArray(bs) Then Exit Function
+    For i = LBound(bs) To UBound(bs)
+        If Abs(BodyVolume(bs(i)) - vol) <= vol * 0.000001 Then
+            Set BodyByVolObj = bs(i)
+            Exit Function
+        End If
+    Next
+End Function
+
+Function CountFeatures(ByVal contains As String) As Long
+    Dim feat As Object
+    Dim n As Long
+    Dim tn As String
+    On Error Resume Next
+    CountFeatures = -1
+    n = 0
+    Set feat = swDoc.FirstFeature
+    Do While Not feat Is Nothing
+        If contains = "" Then
+            n = n + 1
+        Else
+            Err.Clear
+            tn = feat.GetTypeName2
+            If Err.Number = 0 Then
+                If InStr(1, tn, contains, vbTextCompare) > 0 Then n = n + 1
+            End If
+        End If
+        Err.Clear
+        Set feat = feat.GetNextFeature
+    Loop
+    CountFeatures = n
+End Function
+
+' edge selection with an explicit mark - form comparison (the proven
+' mergescope pattern), the working form recorded
+Function SelectEdge(ByVal e As Object, ByVal append As Boolean, ByVal mark As Long, ByVal sd As Object) As Boolean
+    Dim ok As Boolean
+    On Error Resume Next
+    SelectEdge = False
+    gSelectForm = "none"
+    Err.Clear
+    sd.Mark = mark
+    If Err.Number = 0 Then
+        ok = e.Select2(append, sd)
+        If Err.Number = 0 And ok Then
+            SelectEdge = True
+            gSelectForm = "Select2(append, SelectData)"
+            Exit Function
+        End If
+    End If
+    Err.Clear
+    ok = e.Select4(append, sd)
+    If Err.Number = 0 And ok Then
+        SelectEdge = True
+        gSelectForm = "Select4(append, SelectData)"
+        Exit Function
+    End If
+    Err.Clear
+    ok = e.Select(append, mark)
+    If Err.Number = 0 And ok Then
+        SelectEdge = True
+        gSelectForm = "Select(append, mark)"
+    End If
+End Function
+
+' collect a body's unique vertex points into gBuf1
+Function BodyPoints(ByVal b As Object) As Boolean
+    Dim edges As Variant
+    Dim j As Long
+    Dim e As Object
+    Dim p1(0 To 2) As Double
+    Dim p2(0 To 2) As Double
+    On Error Resume Next
+    BodyPoints = False
+    gBuf1N = 0
+    Err.Clear
+    edges = b.GetEdges
+    If Err.Number <> 0 Then Exit Function
+    If Not IsArray(edges) Then Exit Function
+    For j = LBound(edges) To UBound(edges)
+        Err.Clear
+        Set e = edges(j)
+        If Err.Number <> 0 Then Exit Function
+        If Not e Is Nothing Then
+            If EdgeSeg(e, p1(0), p1(1), p1(2), p2(0), p2(1), p2(2)) Then
+                If Not AddPoint(p1(0), p1(1), p1(2)) Then Exit Function
+                If Not AddPoint(p2(0), p2(1), p2(2)) Then Exit Function
+            End If
+        End If
+    Next
+    If gBuf1N < 8 Then Exit Function
+    BodyPoints = True
+End Function
+
+Function AddPoint(ByVal x As Double, ByVal y As Double, ByVal z As Double) As Boolean
+    Dim i As Long
+    AddPoint = False
+    For i = 0 To gBuf1N - 1
+        If Abs(gBuf1(i * 3) - x) < 0.000000001 And Abs(gBuf1(i * 3 + 1) - y) < 0.000000001 And Abs(gBuf1(i * 3 + 2) - z) < 0.000000001 Then
+            AddPoint = True
+            Exit Function
+        End If
+    Next
+    If gBuf1N >= 8 Then Exit Function
+    gBuf1(gBuf1N * 3) = x
+    gBuf1(gBuf1N * 3 + 1) = y
+    gBuf1(gBuf1N * 3 + 2) = z
+    gBuf1N = gBuf1N + 1
+    AddPoint = True
+End Function
+
+Function EdgeSeg(ByVal e As Object, ByRef x1 As Double, ByRef y1 As Double, ByRef z1 As Double, ByRef x2 As Double, ByRef y2 As Double, ByRef z2 As Double) As Boolean
+    Dim v1 As Object, v2 As Object
+    Dim a As Variant, b As Variant
+    On Error Resume Next
+    EdgeSeg = False
+    Err.Clear
+    Set v1 = e.GetStartVertex
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    Set v2 = e.GetEndVertex
+    If Err.Number <> 0 Then Exit Function
+    If v1 Is Nothing Or v2 Is Nothing Then Exit Function
+    Err.Clear
+    a = v1.GetPoint
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    b = v2.GetPoint
+    If Err.Number <> 0 Then Exit Function
+    If Not IsArray(a) Or Not IsArray(b) Then Exit Function
+    If UBound(a) < 2 Or UBound(b) < 2 Then Exit Function
+    x1 = a(0): y1 = a(1): z1 = a(2)
+    x2 = b(0): y2 = b(1): z2 = b(2)
+    EdgeSeg = True
+End Function
+
+Function PtDist(ByVal x1 As Double, ByVal y1 As Double, ByVal z1 As Double, ByVal x2 As Double, ByVal y2 As Double, ByVal z2 As Double) As Double
+    PtDist = Sqr((x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2) + (z1 - z2) * (z1 - z2))
+End Function
+
+Function PtSegDist(ByVal px As Double, ByVal py As Double, ByVal pz As Double, ByVal x1 As Double, ByVal y1 As Double, ByVal z1 As Double, ByVal x2 As Double, ByVal y2 As Double, ByVal z2 As Double) As Double
+    Dim dx As Double, dy As Double, dz As Double
+    Dim l2 As Double, t As Double
+    dx = x2 - x1
+    dy = y2 - y1
+    dz = z2 - z1
+    l2 = dx * dx + dy * dy + dz * dz
+    If l2 <= 0 Then
+        PtSegDist = PtDist(px, py, pz, x1, y1, z1)
+        Exit Function
+    End If
+    t = ((px - x1) * dx + (py - y1) * dy + (pz - z1) * dz) / l2
+    If t < 0 Then t = 0
+    If t > 1 Then t = 1
+    PtSegDist = PtDist(px, py, pz, x1 + t * dx, y1 + t * dy, z1 + t * dz)
+End Function
+
+' ===================== measured-value helpers =====================
+
+Function PartDocBodies() As Variant
+    Dim pd As Object
+    On Error Resume Next
+    PartDocBodies = Empty
+    Set pd = swDoc
+    If Err.Number <> 0 Then Exit Function
+    Err.Clear
+    PartDocBodies = pd.GetBodies2(0, False)
+End Function
+
+Function BodyVolume(ByVal b As Object) As Double
+    Dim v As Variant
+    On Error Resume Next
+    BodyVolume = -1
+    Err.Clear
+    v = b.GetMassProperties(1000#)
+    If Err.Number <> 0 Then Exit Function
+    If Not IsArray(v) Then Exit Function
+    If UBound(v) < 3 Then Exit Function
+    If v(3) <> v(3) Then Exit Function
+    BodyVolume = v(3)
+End Function
+
+Sub BodyCentroid(ByVal b As Object, ByRef cx As Double, ByRef cy As Double, ByRef cz As Double)
+    Dim v As Variant
+    On Error Resume Next
+    cx = 0
+    cy = 0
+    cz = 0
+    Err.Clear
+    v = b.GetMassProperties(1000#)
+    If Err.Number <> 0 Then Exit Sub
+    If Not IsArray(v) Then Exit Sub
+    If UBound(v) < 2 Then Exit Sub
+    cx = v(0)
+    cy = v(1)
+    cz = v(2)
+End Sub
+
+Function CountOpenDocuments() As Long
+    Dim d As Object, n As Long
+    Dim titles As String
+    On Error Resume Next
+    CountOpenDocuments = -1
+    n = 0
+    titles = ""
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Function
+    Do While Not d Is Nothing
+        n = n + 1
+        Err.Clear
+        titles = titles & "[" & TypeName(d) & " " & d.GetTitle & "] "
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Function
+    Loop
+    gFindings = gFindings & "open-at-count: " & Trim(titles) & "; "
+    CountOpenDocuments = n
+End Function
+
+' ===================== shared skeleton helpers =====================
+' (reused verbatim from the probe skeleton)
+
+Sub StartReport()
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Output As #f
+    Close #f
+End Sub
+
+Sub WriteLine(ByVal text As String)
+    On Error Resume Next
+    Dim f As Integer
+    f = FreeFile
+    Open reportPath For Append As #f
+    Print #f, text
+    Close #f
+End Sub
+
+Sub WriteStep(ByVal idx As Long, ByVal command As String, ByVal status As String, ByVal message As String)
+    WriteLine "{""type"":""step"",""index"":" & Trim(Str(idx)) & ",""command"":""" & JsonStr(command) & """,""status"":""" & JsonStr(status) & """,""message"":""" & JsonStr(message) & """}"
+End Sub
+
+Function ReportPathFromHost() As String
+    Dim p As String, f As Integer, oneLine As String
+    Dim got As Boolean
+    ReportPathFromHost = ""
+    On Error Resume Next
+    p = Environ$("TEMP")
+    If p <> "" Then
+        p = p & "\craft-bridge-report-path.txt"
+        Err.Clear
+        f = FreeFile
+        Open p For Input As #f
+        If Err.Number = 0 Then
+            Err.Clear
+            Line Input #f, oneLine
+            got = (Err.Number = 0)
+            Err.Clear
+            Close #f
+            If got Then
+                oneLine = Trim(oneLine)
+                If oneLine <> "" Then
+                    ReportPathFromHost = oneLine
+                    Exit Function
+                End If
+            End If
+        End If
+        Err.Clear
+    End If
+    ReportPathFromHost = Trim(Environ$("CRAFT_BRIDGE_REPORT"))
+End Function
+
+Sub CloseOwnedDoc(ByRef closedOk As Boolean)
+    Dim exact As String
+    Dim d As Object
+    Dim t2 As String
+    Dim cnt As Long
+    Dim isOurs As Boolean
+    On Error Resume Next
+    closedOk = False
+    If swDoc Is Nothing Then
+        closedOk = True
+        Exit Sub
+    End If
+    Err.Clear
+    exact = swDoc.GetTitle
+    If Err.Number <> 0 Then Exit Sub
+    If Trim(exact) = "" Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then
+            cnt = cnt + 1
+            If d Is swDoc Then isOurs = True
+        End If
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt <> 1 Or Not isOurs Then Exit Sub
+    Err.Clear
+    swApp.CloseDoc exact
+    If Err.Number <> 0 Then Exit Sub
+    Err.Clear
+    Set d = swApp.GetFirstDocument
+    If Err.Number <> 0 Then Exit Sub
+    cnt = 0
+    Do While Not d Is Nothing
+        t2 = d.GetTitle
+        If Err.Number <> 0 Then Exit Sub
+        If t2 = exact Then cnt = cnt + 1
+        Err.Clear
+        Set d = d.GetNext
+        If Err.Number <> 0 Then Exit Sub
+    Loop
+    If cnt = 0 Then closedOk = True
+End Sub
+
+Sub CloseCaseDoc(ByRef closedOk As Boolean)
+    CloseOwnedDoc closedOk
+    If closedOk Then Set swDoc = Nothing
+End Sub
+
+Function JsonStr(ByVal s As String) As String
+    Dim t As String
+    t = Replace(s, "\", "\\")
+    t = Replace(t, """", "\""")
+    t = Replace(t, vbCrLf, "\n")
+    t = Replace(t, vbCr, "\n")
+    t = Replace(t, vbLf, "\n")
+    t = Replace(t, vbTab, "\t")
+    JsonStr = t
+End Function
+
+Function SafeNum(ByVal x As Double) As String
+    If x <> x Then SafeNum = "NaN": Exit Function
+    If Abs(x) > 1E+100 Then SafeNum = "INF": Exit Function
+    SafeNum = Trim(Str(x))
+End Function
